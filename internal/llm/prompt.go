@@ -57,9 +57,16 @@ func BuildPrompt(diagType, message string, repoFiles []File) string {
 	sb.WriteString(fmt.Sprintf("**Message:** %s\n\n", message))
 
 	if len(repoFiles) > 0 {
-		sb.WriteString("## Relevant Source Files\n\n")
-		for _, f := range repoFiles {
-			sb.WriteString(fmt.Sprintf("### %s\n```\n%s\n```\n\n", f.Path, f.Content))
+		hasTree := len(repoFiles) == 1 && repoFiles[0].Path == "REPO_STRUCTURE.txt"
+		if hasTree {
+			sb.WriteString("## Repository File Structure\n\n")
+			sb.WriteString("No specific files matched the keywords. Below is the full file listing of the repository. Use this to identify which files are most likely related to the request.\n\n")
+			sb.WriteString(fmt.Sprintf("```\n%s\n```\n\n", repoFiles[0].Content))
+		} else {
+			sb.WriteString("## Relevant Source Files\n\n")
+			for _, f := range repoFiles {
+				sb.WriteString(fmt.Sprintf("### %s\n```\n%s\n```\n\n", f.Path, f.Content))
+			}
 		}
 	}
 	return sb.String()

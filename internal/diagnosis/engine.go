@@ -42,20 +42,32 @@ func (e *Engine) Diagnose(ctx context.Context, input DiagnoseInput) (llm.Diagnos
 	}
 
 	var repoFiles []llm.File
-	for _, f := range files {
-		fullPath := filepath.Join(input.RepoPath, f)
-		content, err := os.ReadFile(fullPath)
-		if err != nil {
-			continue
-		}
-		lines := strings.Split(string(content), "\n")
-		if len(lines) > 200 {
-			lines = lines[:200]
-		}
+
+	if len(files) == 0 {
+		// Keywords didn't match any files (common with non-English messages).
+		// Provide repo directory structure as context instead.
+		slog.Info("no keyword matches, providing repo tree as context")
+		tree := e.repoTree(input.RepoPath)
 		repoFiles = append(repoFiles, llm.File{
-			Path:    f,
-			Content: strings.Join(lines, "\n"),
+			Path:    "REPO_STRUCTURE.txt",
+			Content: tree,
 		})
+	} else {
+		for _, f := range files {
+			fullPath := filepath.Join(input.RepoPath, f)
+			content, err := os.ReadFile(fullPath)
+			if err != nil {
+				continue
+			}
+			lines := strings.Split(string(content), "\n")
+			if len(lines) > 200 {
+				lines = lines[:200]
+			}
+			repoFiles = append(repoFiles, llm.File{
+				Path:    f,
+				Content: strings.Join(lines, "\n"),
+			})
+		}
 	}
 
 	req := llm.DiagnoseRequest{
@@ -146,6 +158,40 @@ func (e *Engine) findRelevantFiles(repoPath string, keywords []string) ([]string
 		result = append(result, f.path)
 	}
 	return result, nil
+}
+
+// repoTree generates a directory listing of the repo (like `find . -type f`)
+// to give the LLM structural context when keyword grep finds nothing.
+func (e *Engine) repoTree(repoPath string) string {
+	// Try `git ls-files` first (respects .gitignore)
+	cmd := exec.Command("git", "-C", repoPath, "ls-files")
+	out, err := cmd.Output()
+	if err == nil && len(out) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		// Cap at 500 files to stay within LLM context
+		if len(lines) > 500 {
+			lines = append(lines[:500], fmt.Sprintf("... and %d more files", len(lines)-500))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	// Fallback: walk filesystem
+	var lines []string
+	filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(repoPath, path)
+		if err != nil || shouldSkipFile(rel) {
+			return nil
+		}
+		lines = append(lines, rel)
+		if len(lines) >= 500 {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return strings.Join(lines, "\n")
 }
 
 func shouldSkipFile(path string) bool {
