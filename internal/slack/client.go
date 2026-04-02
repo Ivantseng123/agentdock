@@ -72,9 +72,11 @@ func (c *Client) GetChannelName(channelID string) string {
 
 // PostRepoSelector sends a message with buttons for the user to pick a repo.
 // Returns the message timestamp (for later updating the message).
-func (c *Client) PostRepoSelector(channelID string, repos []string, actionID string) (string, error) {
+func (c *Client) PostRepoSelector(channelID string, repos []string, actionPrefix string) (string, error) {
 	var buttons []slack.BlockElement
-	for _, repo := range repos {
+	for i, repo := range repos {
+		// Each button needs a unique action_id
+		actionID := fmt.Sprintf("%s_%d", actionPrefix, i)
 		buttons = append(buttons, slack.NewButtonBlockElement(
 			actionID,
 			repo,
@@ -86,7 +88,7 @@ func (c *Client) PostRepoSelector(channelID string, repos []string, actionID str
 		slack.NewTextBlockObject(slack.MarkdownType, ":point_right: Which repo should this issue go to?", false, false),
 		nil, nil,
 	)
-	actions := slack.NewActionBlock("", buttons...)
+	actions := slack.NewActionBlock("repo_selector", buttons...)
 
 	_, ts, err := c.api.PostMessage(channelID,
 		slack.MsgOptionBlocks(section, actions),

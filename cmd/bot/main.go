@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/slack-go/slack"
@@ -127,7 +128,7 @@ func main() {
 				}
 				if callback.Type == slack.InteractionTypeBlockActions {
 					for _, action := range callback.ActionCallback.BlockActions {
-						if action.ActionID == wf.RepoSelectCallbackID() {
+						if strings.HasPrefix(action.ActionID, wf.RepoSelectCallbackID()) {
 							go wf.HandleRepoSelection(
 								callback.Channel.ID,
 								action.Value,
