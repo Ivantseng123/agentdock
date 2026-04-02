@@ -17,6 +17,9 @@ type IssueInput struct {
 	Message     string
 	Labels      []string
 	Diagnosis   llm.DiagnoseResponse
+	RepoOwner   string // for GitHub file links
+	RepoName    string
+	Branch      string
 }
 
 type IssueClient struct {
@@ -65,81 +68,90 @@ func buildTitle(input IssueInput) string {
 func FormatIssueBody(input IssueInput) string {
 	var sb strings.Builder
 
-	sb.WriteString("### Source\n")
-	sb.WriteString(fmt.Sprintf("- **Slack Channel:** %s\n", input.Channel))
-	sb.WriteString(fmt.Sprintf("- **Reporter:** @%s\n", input.Reporter))
-	sb.WriteString(fmt.Sprintf("- **Original Message:** %s\n\n", input.Message))
+	// Source — reporter as plain text (no @ tag)
+	sb.WriteString(fmt.Sprintf("**Channel:** %s | **Reporter:** %s\n\n", input.Channel, input.Reporter))
+	sb.WriteString(fmt.Sprintf("> %s\n\n", input.Message))
 
 	hasDiagnosis := input.Diagnosis.Summary != ""
 
 	if !hasDiagnosis {
-		// Lite mode: no LLM was called, but we may have file references from grep
+		// Lite mode
 		if len(input.Diagnosis.Files) > 0 {
-			sb.WriteString("### Potentially Related Files\n\n")
+			sb.WriteString("### Related Files\n\n")
 			for _, f := range input.Diagnosis.Files {
-				if f.LineNumber > 0 {
-					sb.WriteString(fmt.Sprintf("- `%s:%d`\n", f.Path, f.LineNumber))
-				} else {
-					sb.WriteString(fmt.Sprintf("- `%s`\n", f.Path))
-				}
+				writeFileRef(&sb, f, input.RepoOwner, input.RepoName, input.Branch)
 			}
 			sb.WriteString("\n")
 		}
-		sb.WriteString("### Handoff Spec\n\n")
-		sb.WriteString("_No centralized AI diagnosis was run. Use the prompt below with your own AI to investigate:_\n\n")
-		sb.WriteString("```\n")
-		if input.Type == "bug" {
-			sb.WriteString(fmt.Sprintf("Investigate this bug report in the codebase:\n\n\"%s\"\n\n", input.Message))
-			sb.WriteString("Check the files listed above. Identify the root cause and suggest a fix.\n")
-		} else {
-			sb.WriteString(fmt.Sprintf("Analyze this feature request against the codebase:\n\n\"%s\"\n\n", input.Message))
-			sb.WriteString("Check the files listed above. Identify where to implement and estimate complexity.\n")
-		}
-		sb.WriteString("```\n")
+		sb.WriteString("---\n\n")
+		sb.WriteString("_No AI diagnosis was run. Use these file paths with your own AI to investigate._\n")
 		return sb.String()
 	}
 
-	if input.Type == "bug" {
-		sb.WriteString("### AI Diagnosis\n\n")
-		sb.WriteString(fmt.Sprintf("**Possible Cause:**\n%s\n\n", input.Diagnosis.Summary))
+	// Full mode — triage card
+	sb.WriteString("### AI Triage\n\n")
+	sb.WriteString(input.Diagnosis.Summary + "\n\n")
 
-		if len(input.Diagnosis.Files) > 0 {
-			sb.WriteString("**Potentially Related Files:**\n")
-			for _, f := range input.Diagnosis.Files {
-				sb.WriteString(fmt.Sprintf("- `%s:%d` — %s\n", f.Path, f.LineNumber, f.Description))
-			}
-			sb.WriteString("\n")
+	if len(input.Diagnosis.Files) > 0 {
+		sb.WriteString("### Related Files\n\n")
+		for _, f := range input.Diagnosis.Files {
+			writeFileRef(&sb, f, input.RepoOwner, input.RepoName, input.Branch)
 		}
+		sb.WriteString("\n")
+	}
 
-		if len(input.Diagnosis.Suggestions) > 0 {
-			sb.WriteString("**Suggested Fix Direction:**\n")
-			for i, s := range input.Diagnosis.Suggestions {
-				sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, s))
-			}
+	if len(input.Diagnosis.Suggestions) > 0 {
+		sb.WriteString("### Direction\n\n")
+		for _, s := range input.Diagnosis.Suggestions {
+			sb.WriteString(fmt.Sprintf("- %s\n", s))
 		}
-	} else {
-		sb.WriteString("### AI Analysis\n\n")
-		sb.WriteString(fmt.Sprintf("**Existing Related Functionality:**\n%s\n\n", input.Diagnosis.Summary))
+		sb.WriteString("\n")
+	}
 
-		if len(input.Diagnosis.Files) > 0 {
-			sb.WriteString("**Suggested Implementation Location:**\n")
-			for _, f := range input.Diagnosis.Files {
-				sb.WriteString(fmt.Sprintf("- `%s:%d` — %s\n", f.Path, f.LineNumber, f.Description))
-			}
-			sb.WriteString("\n")
-		}
-
-		if input.Diagnosis.Complexity != "" {
-			sb.WriteString(fmt.Sprintf("**Complexity Assessment:** %s\n\n", input.Diagnosis.Complexity))
-		}
-
-		if len(input.Diagnosis.Suggestions) > 0 {
-			sb.WriteString("**Suggested Approach:**\n")
-			for i, s := range input.Diagnosis.Suggestions {
-				sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, s))
-			}
+	if len(input.Diagnosis.OpenQuestions) > 0 {
+		sb.WriteString("### Needs Clarification\n\n")
+		for _, q := range input.Diagnosis.OpenQuestions {
+			sb.WriteString(fmt.Sprintf("- %s\n", q))
 		}
 	}
 
 	return sb.String()
+}
+
+// writeFileRef writes a file reference as a GitHub permalink if repo info is available.
+// Shows just the filename as link text for readability.
+func writeFileRef(sb *strings.Builder, f llm.FileRef, owner, repo, branch string) {
+	path := f.Path
+	// Skip context files (README, CLAUDE.md etc. prefixed with [context])
+	if strings.HasPrefix(path, "[context]") {
+		return
+	}
+
+	// Extract just the filename for display
+	fileName := path
+	if idx := strings.LastIndex(path, "/"); idx != -1 {
+		fileName = path[idx+1:]
+	}
+
+	if owner != "" && repo != "" {
+		ref := branch
+		if ref == "" {
+			ref = "main"
+		}
+		url := fmt.Sprintf("https://github.com/%s/%s/blob/%s/%s", owner, repo, ref, path)
+		if f.LineNumber > 0 {
+			url += fmt.Sprintf("#L%d", f.LineNumber)
+		}
+		sb.WriteString(fmt.Sprintf("- [`%s`](%s)", fileName, url))
+	} else {
+		if f.LineNumber > 0 {
+			sb.WriteString(fmt.Sprintf("- `%s:%d`", fileName, f.LineNumber))
+		} else {
+			sb.WriteString(fmt.Sprintf("- `%s`", fileName))
+		}
+	}
+	if f.Description != "" {
+		sb.WriteString(fmt.Sprintf(" — %s", f.Description))
+	}
+	sb.WriteString("\n")
 }

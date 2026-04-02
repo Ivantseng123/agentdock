@@ -6,25 +6,29 @@ slack:
   signing_secret: "your-signing-secret"
   app_token: "xapp-your-app-token"
 
-channels:
-  # Single repo per channel:
-  # C05XXXXXX:
-  #   repo: "org/backend-repo"
-  #   default_labels: ["from-slack"]
+# Auto-bind: bot auto-registers when invited to a channel (no manual channel config needed)
+auto_bind: true
 
-  # Multiple repos per channel (bot shows buttons to pick):
-  # C05YYYYYY:
+# Default settings for auto-bound channels (or channels without explicit config)
+channel_defaults:
+  branch_select: true
+  default_labels: ["from-slack"]
+
+# Optional: override defaults for specific channels
+# If a channel has no config here, it uses channel_defaults + auto-discovery (searchable repo dropdown)
+channels:
+  # Pin specific repos to a channel (shows buttons):
+  # C05XXXXXX:
   #   repos:
   #     - "org/backend"
   #     - "org/frontend"
-  #     - "org/infra"
   #   default_labels: ["from-slack"]
 
-  # With branch selection enabled:
-  # C05ZZZZZZ:
-  #   repo: "org/backend"
-  #   branch_select: true              # Show branch selector after repo
-  #   branches: ["main", "develop"]    # Optional whitelist (empty = auto-detect all remote branches)
+  # Single repo (skips repo selector entirely):
+  # C05YYYYYY:
+  #   repo: "org/backend-repo"
+  #   branch_select: true
+  #   branches: ["main", "develop"]    # Optional whitelist
   #   default_labels: ["from-slack"]
 
 reactions:
@@ -48,7 +52,8 @@ llm:
     ## === Personal use: CLI provider (uses your own subscription) ===
     - name: "cli"
       command: "claude"
-      args: ["--print", "-p", "{prompt}"]  # Short prompts via arg, long prompts auto-fallback to stdin
+      args: ["--print", "{prompt}"]  # Short prompts via arg, long prompts auto-fallback to stdin
+      timeout: 5m                    # CLI needs more time (startup + API round-trip); default 5m
       max_retries: 1
     # - name: "cli"
     #   command: "opencode"
@@ -60,6 +65,7 @@ llm:
     #   api_key: "sk-ant-..."
     #   model: "claude-sonnet-4-20250514"
     #   base_url: "https://api.anthropic.com"
+    #   timeout: 60s       # Optional: override global timeout for this provider
     #   max_retries: 3
     # - name: "openai"
     #   api_key: "sk-..."

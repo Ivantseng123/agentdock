@@ -1,139 +1,160 @@
 # Slack Issue Bot
 
-Slack emoji reaction triggers automatic GitHub issue creation with AI-powered codebase triage.
+[English](README.en.md)
 
-## How It Works
+透過 Slack 表情符號反應，自動建立帶有 AI 程式碼分析的 GitHub Issue。
 
-1. Someone posts a bug report or feature request in a Slack channel
-2. A team member reacts with a configured emoji (e.g., `:bug:` or `:rocket:`)
-3. The bot replies **in the message thread**:
-   - Shows repo selector (if multiple repos configured)
-   - Shows branch selector (if enabled)
-   - Clones/pulls the GitHub repo
-   - Reads repo context docs (README.md, CLAUDE.md, agent.md)
-   - Agent loop diagnosis: LLM drives tool calls (grep, read_file, list_files, etc.) in a multi-turn conversation
-   - **Rejection check** — if the report is too vague, replies asking for clarification instead of creating an issue
-   - Creates a GitHub issue with clickable file links and posts the URL in thread
+## 運作方式
 
-## Features
+1. 有人在 Slack 頻道發佈 bug 回報或功能需求
+2. 團隊成員貼上設定的表情符號（例如 `:bug:` 或 `:rocket:`）
+3. Bot 在**訊息討論串**中回覆：
+   - 顯示 repo 選擇器（支援搜尋或按鈕）
+   - 顯示分支選擇器（若啟用）
+   - Clone/Pull GitHub repo
+   - 執行 AI 診斷引擎分析程式碼
+   - **拒絕機制** — 若描述太模糊，回覆要求補充說明而非建立 issue
+   - 建立 GitHub Issue（含可點擊的檔案連結）並在討論串回覆 URL
 
-- **Thread-based interaction** — all bot messages stay in the original message's thread
-- **Multi-repo support** — one channel can map to multiple repos with button selector
-- **Branch selection** — optionally pick which branch to analyze
-- **Cross-repo awareness** — reads README/CLAUDE.md/agent.md to understand repo context and hint at cross-repo relationships
-- **Rejection mechanism** — refuses to create issues when the report is too vague (no related files, too many unknowns, or low confidence)
-- **GitHub file links** — file references in issues are clickable links to the actual source
-- **LLM fallback chain** — multiple providers with per-provider retry and timeout
-- **CLI provider** — use your own AI subscription (Claude Max, etc.) with zero API cost
-- **Lite mode** — grep-only triage with zero LLM cost
-- **Rate limiting** — per-user and per-channel throttling
+## 功能特色
 
-## Prerequisites
+- **討論串互動** — 所有 bot 訊息都在原始訊息的討論串中
+- **多 Repo 支援** — 單一頻道可對應多個 repo，透過按鈕或搜尋下拉選擇
+- **分支選擇** — 可選擇要分析的分支
+- **跨 Repo 感知** — 讀取 README/CLAUDE.md/agent.md 理解 repo 上下文關係
+- **拒絕機制** — 報告太模糊時拒絕建立 issue（找不到相關檔案、不確定項目太多、信心度低）
+- **GitHub 檔案連結** — Issue 中的檔案參考為可點擊的原始碼連結
+- **LLM 備援鏈** — 多個 provider 支援各自的重試次數和逾時設定
+- **CLI Provider** — 使用自己的 AI 訂閱（Claude Max 等），零 API 成本
+- **Lite 模式** — 僅 grep 分析，零 LLM 成本
+- **頻率限制** — 支援 per-user 和 per-channel 節流
+- **自動綁定** — Bot 加入頻道時自動註冊，無需手動設定
+- **回應快取** — 相同訊息在 TTL 內直接回傳快取結果
 
-| Item | How to Get |
-|------|-----------|
+## 前置需求
+
+| 項目 | 取得方式 |
+|------|---------|
 | Go 1.22+ | [go.dev/dl](https://go.dev/dl/) |
 | Slack App | [api.slack.com/apps](https://api.slack.com/apps) |
 | GitHub PAT | GitHub Settings > Developer settings > Personal access tokens |
-| LLM Provider | CLI (Claude Max) / API key (Anthropic/OpenAI) / Ollama (free) |
+| LLM Provider | CLI (Claude Max) / API key (Anthropic/OpenAI) / Ollama (免費) |
 
-### Slack App Setup
+### Slack App 設定
 
-1. Create a new app at [api.slack.com/apps](https://api.slack.com/apps)
-2. **OAuth & Permissions** — add Bot Token Scopes:
+1. 在 [api.slack.com/apps](https://api.slack.com/apps) 建立新 App
+2. **OAuth & Permissions** — 加入 Bot Token Scopes：
    - `reaction_read`, `channels:history`, `chat:write`, `users:read`, `channels:read`
-3. **Socket Mode** — enable it
-4. **Basic Information** — generate an App-Level Token with scope `connections:write` (gives you the `xapp-` token)
-5. **Event Subscriptions** — subscribe to `reaction_added` bot event
-6. **Install to Workspace** — copy the `xoxb-` Bot Token
+   - 私人頻道需額外：`groups:history`, `groups:read`
+3. **Socket Mode** — 啟用
+4. **Basic Information** — 產生 App-Level Token，scope 選 `connections:write`（取得 `xapp-` token）
+5. **Event Subscriptions** — 訂閱 `reaction_added` bot event
+   - 自動綁定需額外訂閱：`member_joined_channel`, `member_left_channel`
+6. **Install to Workspace** — 複製 `xoxb-` Bot Token
 
-## Quick Start
+## 快速開始
 
 ```bash
 cp config.example.yaml config.yaml
-# Edit config.yaml with your tokens
+# 編輯 config.yaml 填入你的 token
 
-# Run
+# 執行
 go run ./cmd/bot/
-# or
+# 或
 ./run.sh
 ```
 
-## Configuration
+## 設定
 
-See `config.example.yaml` for all options. Key sections:
+完整選項請參考 `config.example.yaml`。主要區段：
 
 ```yaml
-channels:
+auto_bind: true                       # Bot 加入頻道時自動綁定
+
+channel_defaults:                     # 自動綁定頻道的預設值
+  branch_select: true
+  default_labels: ["from-slack"]
+
+channels:                             # 靜態頻道設定（可選）
   C05XXXXXX:
-    repos:                          # Multiple repos → button selector in Slack
+    repos:                            # 多個 repo → Slack 按鈕選擇
       - "org/backend"
       - "org/frontend"
-    branch_select: true             # Show branch picker
+    branch_select: true               # 顯示分支選擇
     default_labels: ["from-slack"]
+
+reactions:                            # 表情符號對應
+  bug:
+    type: "bug"
+    issue_labels: ["bug", "triage"]
+    issue_title_prefix: "[Bug]"
+  rocket:
+    type: "feature"
+    issue_labels: ["enhancement"]
+    issue_title_prefix: "[Feature]"
 
 llm:
   providers:
     - name: "cli"
-      command: "claude"             # Uses Claude Code CLI (Max plan)
+      command: "claude"               # 使用 Claude Code CLI（Max 方案）
       args: ["--print", "{prompt}"]
-      timeout: 5m                   # CLI needs more time than API
+      timeout: 5m                     # CLI 需要較長時間
       max_retries: 3
 
-    - name: "claude"                # API fallback
+    - name: "claude"                  # API 備援
       api_key: "sk-ant-..."
       model: "claude-sonnet-4-20250514"
       base_url: "https://api.anthropic.com"
       max_retries: 3
-  timeout: 60s                      # Global default (per-provider overrides this)
+  timeout: 60s                        # 全域預設（各 provider 可覆蓋）
 
 diagnosis:
-  mode: "full"                      # "full" (uses LLM) or "lite" (grep only)
-  max_turns: 5                      # Max agent loop iterations
-  max_tokens: 100000                # Max tokens per LLM call
-  cache_ttl: 10m                    # Response cache TTL (0 = no caching)
+  mode: "full"                        # "full"（使用 LLM）或 "lite"（僅 grep）
+  max_turns: 5                        # Agent loop 最大回合數
+  max_tokens: 100000                  # Token 預算上限
+  cache_ttl: 10m                      # 回應快取 TTL（0 = 不快取）
   prompt:
     language: "繁體中文"
     extra_rules:
       - "列出所有相關的檔案名稱與完整路徑"
 ```
 
-### Diagnosis Modes
+### 診斷模式
 
-| Mode | LLM Cost | What Happens |
-|------|----------|-------------|
-| `full` | tokens per trigger | Agent loop: LLM calls tools (grep, read_file, etc.) in multi-turn conversation until diagnosis complete |
-| `lite` | **0 tokens** | Grep only, creates issue with file references for engineer's own AI |
+| 模式 | LLM 成本 | 說明 |
+|------|---------|------|
+| `full` | 每次觸發消耗 token | Agent loop：LLM 使用工具（grep、read_file 等）進行多回合對話直到診斷完成 |
+| `lite` | **0 token** | 僅 grep，建立 issue 附上檔案參考，供工程師自行用 AI 分析 |
 
-### Rejection Mechanism
+### 拒絕機制
 
-In `full` mode, the bot will **not** create an issue if any of these conditions are met:
+`full` 模式下，符合以下**任一**條件時 bot 將**不會**建立 issue：
 
-| Condition | Meaning |
-|-----------|---------|
-| `related files = 0` | No relevant code found |
-| `open_questions >= 3` | Too many unknowns — report is too vague |
-| `confidence = low` | LLM judges the report doesn't relate to this repo |
+| 條件 | 意義 |
+|------|------|
+| `相關檔案 = 0` | 找不到相關程式碼 |
+| `待釐清項目 >= 5` | 不確定項目太多，描述太模糊 |
+| `信心度 = low` | LLM 判斷此報告與該 repo 程式碼關聯不足 |
 
-Instead, the bot replies in thread asking the reporter to refine their description.
+Bot 會在討論串回覆，請報告者補充更具體的描述。
 
 ### CLI Provider
 
-Use your own AI subscription instead of API keys:
+使用自己的 AI 訂閱取代 API key：
 
 ```bash
-# Install & login (one time)
+# 安裝 & 登入（一次性）
 npm install -g @anthropic-ai/claude-code
 claude /login
 
-# Configure in config.yaml:
+# 在 config.yaml 設定：
 # - name: "cli"
 #   command: "claude"
 #   args: ["--print", "{prompt}"]
 #   timeout: 5m
 ```
 
-### Environment Variable Overrides
+### 環境變數覆蓋
 
 ```bash
 export SLACK_BOT_TOKEN="xoxb-..."
@@ -142,35 +163,38 @@ export GITHUB_TOKEN="ghp_..."
 export LLM_CLAUDE_API_KEY="sk-ant-..."
 ```
 
-## Issue Output Example
+## Issue 輸出範例
 
 ```markdown
 **Channel:** #backend-bugs | **Reporter:** Ivan Tseng
 
-> 再保系統分保結果畫面，Item資料新增顯示出單單位欄位
+> 再保系統分保結果畫面，Item資料新增顯示出單單位(通訊處)欄位
 
 ### AI Triage
 
-分保結果的 item 視角表格可能需要新增欄位，相關邏輯在 Result.vue。
+分保結果畫面的 Item 視圖需新增「出單單位(通訊處)」欄位，可參考 sectionInfo.vue 的做法
 
 ### Related Files
 
-- [`src/pages/ceding/Result.vue`](https://github.com/org/repo/blob/main/src/pages/ceding/Result.vue) — 分保結果 item 視角表格
-- [`src/pages/ceding/cedingResult.vue`](https://github.com/org/repo/blob/main/src/pages/ceding/cedingResult.vue) — 分保結果父頁面
+- [`cedingResult.vue`](https://github.com/org/repo/blob/main/src/pages/ceding/cedingResult.vue) — 分保結果主頁面，含 Item 視圖表格
+- [`sectionInfo.vue`](https://github.com/org/repo/blob/main/src/pages/contract/section/sectionInfo.vue) — 已有出單單位欄位的範例
+- [`Result.vue`](https://github.com/org/repo/blob/main/src/pages/ceding/Result.vue) — 分保結果元件
 
 ### Direction
 
-- 確認後端 API 是否已回傳該欄位
+- 在 cedingResult.vue 的 Item 視圖表格 headers 新增出單單位欄位，可參考 sectionInfo.vue 的做法
+- 確認後端 API 回傳的 Item 資料是否已包含出單單位欄位
 
 ### Needs Clarification
 
-- 「出單單位(通訊處)」對應的後端欄位名稱未知
+- 出單單位欄位的資料來源為何？
+- 此欄位是否僅在 Item 視圖顯示，還是所有視圖都需要？
 ```
 
-## Testing
+## 測試
 
 ```bash
-go test ./...   # 45 tests
+go test ./...   # 76 tests
 ```
 
 ## Docker
@@ -180,19 +204,56 @@ docker build -t slack-issue-bot .
 docker run -v $(pwd)/config.yaml:/config.yaml slack-issue-bot
 ```
 
-## Architecture
+## 架構
 
 ```
-Slack reaction → Socket Mode → Handler (dedup + rate limit + semaphore)
-  → Workflow (repo/branch selection via thread buttons)
-    → Diagnosis Engine (agent loop):
-        System prompt + tools → LLM calls tools → engine executes → results back
-        Tools: grep, read_file, list_files, read_context, search_code, git_log
-        Loop runs up to max_turns; response cache avoids duplicate work
-    → Rejection check (files=0, questions>=5, confidence=low)
-    → GitHub Issue (clickable file links) → Post URL in thread
+Slack 表情反應 → Socket Mode → Handler（去重 + 頻率限制 + 並發控制）
+  → Workflow（透過討論串按鈕選擇 repo/分支）
+    → 診斷引擎
+    → 拒絕檢查（files=0, questions>=5, confidence=low）
+    → GitHub Issue（可點擊的檔案連結）→ 在討論串回覆 URL
 ```
 
-## License
+### 診斷引擎
+
+引擎使用 **Agent Loop** — 由 LLM 驅動的多回合對話，模型自行決定使用哪些工具、何時已有足夠資訊產出分析卡。
+
+```
+1. Pre-grep（免費，不消耗 LLM）
+   從原始 Slack 訊息擷取關鍵字並執行 git grep。
+   這能捕捉到非英文詞彙（如中文），避免 LLM 翻譯時遺漏。
+
+2. Agent Loop（最多 max_turns 回合，預設 5）
+   LLM 看到 pre-grep 結果 + 可用工具後自行決定：
+   ┌──────────────────────────────────────────────────┐
+   │  LLM：「我要讀取 sectionInfo.vue」                  │
+   │  引擎：執行 read_file，回傳檔案內容               │
+   │  LLM：「我需要搜尋 unitno」                        │
+   │  引擎：執行 grep，回傳匹配檔案清單                │
+   │  LLM：「資訊足夠了 → 產出分析卡」                  │
+   └──────────────────────────────────────────────────┘
+
+3. 輸出：分析卡（JSON）
+   摘要、相關檔案、方向建議、待釐清項目、信心度
+```
+
+**可用工具（6 個）：**
+
+| 工具 | 用途 |
+|------|------|
+| `grep` | 搜尋哪些檔案提及某個詞彙（廣泛探索） |
+| `read_file` | 讀取檔案內容（含行號） |
+| `list_files` | 列出 repo 檔案樹（`git ls-files`） |
+| `read_context` | 讀取 README.md、CLAUDE.md、agent.md 了解 repo 上下文 |
+| `search_code` | 正規表達式搜尋，含前後文行 |
+| `git_log` | 查看最近的 commit 記錄 |
+
+**為什麼用 Agent Loop 而非固定流程：**
+- LLM 依據每份報告調整策略 — 清楚的報告可能只需 2 回合，模糊的會用完 5 回合
+- 非英文訊息自然處理 — LLM 在推理過程中自動翻譯
+- Pre-grep 確保原始語言的關鍵字命中不會被遺漏
+- Repo 的文件越完整（README、CLAUDE.md），分析結果越精準
+
+## 授權
 
 MIT

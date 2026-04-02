@@ -79,6 +79,7 @@ func (e *Engine) Diagnose(ctx context.Context, input DiagnoseInput) (llm.Diagnos
 		Type:      input.Type,
 		Message:   input.Message,
 		RepoPath:  input.RepoPath,
+		Keywords:  input.Keywords,
 		Prompt:    input.Prompt,
 		MaxTurns:  e.maxTurns,
 		MaxTokens: e.maxTokens,

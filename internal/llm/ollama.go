@@ -31,10 +31,15 @@ func (o *OllamaProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 	var msgs []map[string]string
 
 	// System prompt as system role message.
+	// Ollama doesn't support native tool use — embed tool schemas in the system prompt.
 	if req.SystemPrompt != "" {
+		systemContent := req.SystemPrompt
+		if len(req.Tools) > 0 {
+			systemContent += CLIToolPromptSuffix(req.Tools)
+		}
 		msgs = append(msgs, map[string]string{
 			"role":    "system",
-			"content": req.SystemPrompt,
+			"content": systemContent,
 		})
 	}
 

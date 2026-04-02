@@ -51,8 +51,13 @@ func (c *Client) ResolveUser(userID string) string {
 	return user.RealName
 }
 
-func (c *Client) PostMessage(channelID, text string) error {
-	_, _, err := c.api.PostMessage(channelID, slack.MsgOptionText(text, false))
+// PostMessage sends a text message. If threadTS is non-empty, replies in that thread.
+func (c *Client) PostMessage(channelID, text, threadTS string) error {
+	opts := []slack.MsgOption{slack.MsgOptionText(text, false)}
+	if threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+	_, _, err := c.api.PostMessage(channelID, opts...)
 	if err != nil {
 		return fmt.Errorf("post message: %w", err)
 	}
@@ -71,9 +76,9 @@ func (c *Client) GetChannelName(channelID string) string {
 }
 
 // PostSelector sends a message with clickable buttons.
-// actionPrefix differentiates repo vs branch selectors.
+// If threadTS is non-empty, posts in that thread.
 // Returns the message timestamp.
-func (c *Client) PostSelector(channelID, prompt, actionPrefix string, options []string) (string, error) {
+func (c *Client) PostSelector(channelID, prompt, actionPrefix string, options []string, threadTS string) (string, error) {
 	var buttons []slack.BlockElement
 	for i, opt := range options {
 		buttons = append(buttons, slack.NewButtonBlockElement(
@@ -89,11 +94,44 @@ func (c *Client) PostSelector(channelID, prompt, actionPrefix string, options []
 	)
 	actions := slack.NewActionBlock(actionPrefix, buttons...)
 
-	_, ts, err := c.api.PostMessage(channelID,
-		slack.MsgOptionBlocks(section, actions),
-	)
+	opts := []slack.MsgOption{slack.MsgOptionBlocks(section, actions)}
+	if threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+
+	_, ts, err := c.api.PostMessage(channelID, opts...)
 	if err != nil {
 		return "", fmt.Errorf("post selector: %w", err)
+	}
+	return ts, nil
+}
+
+// PostExternalSelector sends a message with a type-ahead searchable dropdown.
+// Returns the message timestamp.
+func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error) {
+	section := slack.NewSectionBlock(
+		slack.NewTextBlockObject(slack.MarkdownType, prompt, false, false),
+		nil, nil,
+	)
+
+	extSelect := slack.NewOptionsSelectBlockElement(
+		slack.OptTypeExternal,
+		slack.NewTextBlockObject(slack.PlainTextType, placeholder, false, false),
+		actionID,
+	)
+	extSelect.MinQueryLength = new(int) // 0 = show options immediately
+	*extSelect.MinQueryLength = 0
+
+	actions := slack.NewActionBlock(actionID+"_block", extSelect)
+
+	opts := []slack.MsgOption{slack.MsgOptionBlocks(section, actions)}
+	if threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+
+	_, ts, err := c.api.PostMessage(channelID, opts...)
+	if err != nil {
+		return "", fmt.Errorf("post external selector: %w", err)
 	}
 	return ts, nil
 }

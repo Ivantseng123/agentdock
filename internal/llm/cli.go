@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"time"
@@ -43,6 +44,10 @@ func (c *CLIProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, 
 	var sb strings.Builder
 	if req.SystemPrompt != "" {
 		sb.WriteString(req.SystemPrompt)
+		// CLI/Ollama don't support native tool use — embed tool schemas in the prompt text
+		if len(req.Tools) > 0 {
+			sb.WriteString(CLIToolPromptSuffix(req.Tools))
+		}
 		sb.WriteString("\n\n")
 	}
 	for _, m := range req.Messages {
@@ -89,6 +94,12 @@ func (c *CLIProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, 
 	if text == "" {
 		return ChatResponse{}, fmt.Errorf("empty response from %s", c.command)
 	}
+
+	head := text
+	if len(head) > 500 {
+		head = head[:500] + "..."
+	}
+	slog.Info("cli raw response", "command", c.command, "response_len", len(text), "response_head", head)
 
 	return parseJSONInTextResponse(text)
 }
@@ -157,7 +168,19 @@ func parseJSONInTextResponse(text string) (ChatResponse, error) {
 	}
 
 	if toolMsg.Tool == "" {
-		// JSON without "tool" field -- treat as plain text.
+		// JSON without "tool" field — might be a raw triage card (LLM skipped the finish wrapper).
+		// Check if it looks like a triage card (has "summary" field).
+		var triageCheck struct {
+			Summary string `json:"summary"`
+		}
+		if json.Unmarshal([]byte(jsonStr), &triageCheck) == nil && triageCheck.Summary != "" {
+			slog.Info("cli: detected raw triage card (no finish wrapper)")
+			return ChatResponse{
+				Content:    jsonStr,
+				StopReason: StopReasonFinish,
+			}, nil
+		}
+		// Not a triage card either — treat as plain text.
 		return ChatResponse{
 			Content:    text,
 			StopReason: StopReasonFinish,

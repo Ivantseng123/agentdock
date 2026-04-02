@@ -142,6 +142,19 @@ func (d *messageDedup) isDuplicate(channelID, messageTS string) bool {
 	return false
 }
 
+// Remove clears the dedup entry so the same message can be re-triggered.
+func (d *messageDedup) Remove(channelID, messageTS string) {
+	key := channelID + ":" + messageTS
+	d.mu.Lock()
+	delete(d.seen, key)
+	d.mu.Unlock()
+}
+
+// MessageDedup exposes the messageDedup for external clearing (e.g. on timeout).
+func (h *Handler) ClearMessageDedup(channelID, messageTS string) {
+	h.messageDedup.Remove(channelID, messageTS)
+}
+
 type Handler struct {
 	dedup        *dedup
 	messageDedup *messageDedup

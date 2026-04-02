@@ -14,6 +14,7 @@ type LoopInput struct {
 	Type      string          // "bug" or "feature"
 	Message   string          // Original Slack message
 	RepoPath  string          // Path to cloned repo
+	Keywords  []string        // Pre-extracted keywords from message (for pre-grep)
 	Prompt    llm.PromptOptions
 	MaxTurns  int             // Default 5
 	MaxTokens int             // Default 100000
@@ -48,8 +49,30 @@ func RunLoop(ctx context.Context, chain llm.ConversationProvider, tools []Tool, 
 
 	baseSystem := llm.AgentSystemPrompt(input.Type, input.Prompt)
 
+	typeLabel := "Bug"
+	if input.Type == "feature" {
+		typeLabel = "Feature"
+	}
+
+	// Pre-grep: run keyword grep before the agent loop starts (free, no LLM call).
+	// This catches Chinese/original-language terms that the LLM might miss when translating.
+	var preGrepSection string
+	if len(input.Keywords) > 0 {
+		preGrepFiles, _ := grepFiles(input.RepoPath, input.Keywords, 10)
+		if len(preGrepFiles) > 0 {
+			slog.Info("agent loop pre-grep hit", "files", len(preGrepFiles), "keywords", len(input.Keywords))
+			var sb strings.Builder
+			sb.WriteString("\n\n## Pre-search Results\n\nThe following files matched keywords from the original message:\n")
+			for _, f := range preGrepFiles {
+				sb.WriteString(fmt.Sprintf("- %s\n", f))
+			}
+			sb.WriteString("\nUse read_file to examine the most relevant ones. You may also search for additional terms.")
+			preGrepSection = sb.String()
+		}
+	}
+
 	messages := []llm.Message{
-		{Role: "user", Content: fmt.Sprintf("## Bug Report\n\n> %s", input.Message)},
+		{Role: "user", Content: fmt.Sprintf("## %s Report\n\nRepository: %s\n\n> %s%s", typeLabel, input.RepoPath, input.Message, preGrepSection)},
 	}
 
 	var discoveredFiles []llm.FileRef
