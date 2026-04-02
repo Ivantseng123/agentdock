@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -91,21 +92,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	// LLM provider API keys: LLM_<NAME>_API_KEY
 	for i, p := range cfg.LLM.Providers {
-		envKey := fmt.Sprintf("LLM_%s_API_KEY", upper(p.Name))
+		envKey := fmt.Sprintf("LLM_%s_API_KEY", strings.ToUpper(p.Name))
 		if v := os.Getenv(envKey); v != "" {
 			cfg.LLM.Providers[i].APIKey = v
 		}
 	}
-}
-
-func upper(s string) string {
-	b := make([]byte, len(s))
-	for i := range s {
-		c := s[i]
-		if c >= 'a' && c <= 'z' {
-			c -= 'a' - 'A'
-		}
-		b[i] = c
-	}
-	return string(b)
 }
