@@ -111,7 +111,31 @@ llm:
 repo_cache:
   dir: "/tmp/slack-issue-bot/repos"
   max_age: 1h                  # Re-pull after this duration
+
+rate_limit:
+  per_user: 5                  # Max triggers per user per window
+  per_channel: 20              # Max triggers per channel per window
+  window: 1h                   # Time window
+
+# Diagnosis mode
+diagnosis:
+  mode: "lite"                 # "full" or "lite" (see below)
 ```
+
+### Diagnosis Modes
+
+| Mode | LLM Cost | What Happens |
+|------|----------|-------------|
+| `full` | ~5K tokens/trigger | Bot calls centralized LLM for diagnosis, writes full analysis in issue |
+| `lite` | **0 tokens** | Bot greps repo for related files, writes a **handoff spec** in the issue |
+
+**Lite mode** is the recommended default for shared deployments. The issue includes:
+- Related file paths (found by grepping keywords from the Slack message)
+- A ready-to-paste prompt that the assigned developer can feed to their own AI (Claude Code, Copilot, etc.)
+
+This means the **pod's centralized LLM cost stays at zero**, and each developer uses their own AI budget to investigate.
+
+**Full mode** falls back to lite automatically if all LLM providers fail.
 
 ### Environment Variable Overrides
 
