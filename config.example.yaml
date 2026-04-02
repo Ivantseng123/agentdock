@@ -28,10 +28,16 @@ github:
 llm:
   providers:
     ## === Personal use: CLI provider (uses your own subscription) ===
+    ## Prompt is passed via stdin. Use {prompt} in args to pass inline instead.
     - name: "cli"
-      command: "claude"          # Uses Claude Max plan — requires: claude /login
+      command: "claude"                         # Claude Code CLI (Max plan)
+      args: ["--print", "-p", "{prompt}"]       # requires: claude /login
     # - name: "cli"
-    #   command: "opencode"      # Or any CLI that accepts prompt via stdin/args
+    #   command: "opencode"                     # OpenCode CLI
+    #   args: []                                # reads from stdin
+    # - name: "cli"
+    #   command: "my-ai-tool"
+    #   args: ["--query", "{prompt}"]           # {prompt} gets replaced
 
     ## === Centralized: API key providers ===
     # - name: "claude"           # Anthropic API (also works with compatible APIs)

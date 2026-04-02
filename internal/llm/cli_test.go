@@ -90,6 +90,36 @@ func TestCLIProvider_Diagnose_CommandNotFound(t *testing.T) {
 	}
 }
 
+func TestCLIProvider_BuildArgs_PromptPlaceholder(t *testing.T) {
+	p := NewCLIProvider("test", "tool", []string{"--query", "{prompt}", "--format", "json"}, 10*time.Second)
+	args := p.buildArgs("hello world")
+	expected := []string{"--query", "hello world", "--format", "json"}
+	if len(args) != len(expected) {
+		t.Fatalf("expected %d args, got %d: %v", len(expected), len(args), args)
+	}
+	for i, e := range expected {
+		if args[i] != e {
+			t.Errorf("args[%d]: expected %q, got %q", i, e, args[i])
+		}
+	}
+}
+
+func TestCLIProvider_BuildArgs_NoArgs(t *testing.T) {
+	p := NewCLIProvider("test", "tool", nil, 10*time.Second)
+	args := p.buildArgs("hello")
+	if args != nil {
+		t.Errorf("expected nil args for stdin mode, got %v", args)
+	}
+}
+
+func TestCLIProvider_BuildArgs_ArgsWithoutPlaceholder(t *testing.T) {
+	p := NewCLIProvider("test", "tool", []string{"--verbose"}, 10*time.Second)
+	args := p.buildArgs("hello")
+	if len(args) != 1 || args[0] != "--verbose" {
+		t.Errorf("expected [--verbose], got %v", args)
+	}
+}
+
 func TestCLIProvider_Diagnose_Timeout(t *testing.T) {
 	if _, err := exec.LookPath("sleep"); err != nil {
 		t.Skip("sleep not found")

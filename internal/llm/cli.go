@@ -64,30 +64,17 @@ func (c *CLIProvider) Diagnose(ctx context.Context, req DiagnoseRequest) (Diagno
 	return ParseLLMTextResponse(text)
 }
 
+// buildArgs constructs CLI arguments by replacing {prompt} placeholders.
+// If no args are configured, prompt is passed via stdin only (cmd.Stdin is set by caller).
+// If args contain {prompt}, it is replaced with the actual prompt text.
+// If args are set but contain no {prompt}, they are used as-is and prompt goes via stdin.
 func (c *CLIProvider) buildArgs(prompt string) []string {
-	// Known CLI tools and their flags for non-interactive single-prompt usage
-	switch c.command {
-	case "claude":
-		// claude --print -p "prompt" sends prompt and prints response to stdout
-		args := []string{"--print", "-p", prompt}
-		return args
-	default:
-		// For unknown CLIs, use the configured args
-		// If args contain "{prompt}", replace it; otherwise append
-		var args []string
-		replaced := false
-		for _, a := range c.args {
-			if strings.Contains(a, "{prompt}") {
-				args = append(args, strings.ReplaceAll(a, "{prompt}", prompt))
-				replaced = true
-			} else {
-				args = append(args, a)
-			}
-		}
-		if !replaced {
-			// Fallback: pipe via stdin (cmd.Stdin is already set)
-			args = c.args
-		}
-		return args
+	if len(c.args) == 0 {
+		return nil
 	}
+	var args []string
+	for _, a := range c.args {
+		args = append(args, strings.ReplaceAll(a, "{prompt}", prompt))
+	}
+	return args
 }
