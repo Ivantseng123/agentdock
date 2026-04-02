@@ -48,7 +48,7 @@ llm:
     ## === Personal use: CLI provider (uses your own subscription) ===
     - name: "cli"
       command: "claude"
-      args: ["--print", "-p", "{prompt}"]
+      args: ["--print", "-p", "{prompt}"]  # Short prompts via arg, long prompts auto-fallback to stdin
       max_retries: 1
     # - name: "cli"
     #   command: "opencode"
