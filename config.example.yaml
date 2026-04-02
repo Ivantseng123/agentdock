@@ -27,34 +27,37 @@ github:
 
 llm:
   providers:
+    ## Providers are tried in order. Each has its own max_retries.
+    ## If a provider exhausts retries, the next one is tried.
+
     ## === Personal use: CLI provider (uses your own subscription) ===
-    ## Prompt is passed via stdin. Use {prompt} in args to pass inline instead.
     - name: "cli"
-      command: "claude"                         # Claude Code CLI (Max plan)
-      args: ["--print", "-p", "{prompt}"]       # requires: claude /login
+      command: "claude"
+      args: ["--print", "-p", "{prompt}"]
+      max_retries: 1
     # - name: "cli"
-    #   command: "opencode"                     # OpenCode CLI
+    #   command: "opencode"
     #   args: []                                # reads from stdin
-    # - name: "cli"
-    #   command: "my-ai-tool"
-    #   args: ["--query", "{prompt}"]           # {prompt} gets replaced
+    #   max_retries: 1
 
     ## === Centralized: API key providers ===
-    # - name: "claude"           # Anthropic API (also works with compatible APIs)
+    # - name: "claude"
     #   api_key: "sk-ant-..."
     #   model: "claude-sonnet-4-20250514"
     #   base_url: "https://api.anthropic.com"
+    #   max_retries: 3
     # - name: "openai"
     #   api_key: "sk-..."
     #   model: "gpt-4o"
     #   base_url: "https://api.openai.com"
+    #   max_retries: 2
 
     ## === Local: Ollama (free, no API key) ===
     # - name: "ollama"
     #   model: "llama3"
     #   base_url: "http://localhost:11434"
+    #   max_retries: 1
   timeout: 60s
-  max_retries: 2
 
 repo_cache:
   dir: "/tmp/slack-issue-bot/repos"

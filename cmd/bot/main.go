@@ -37,26 +37,25 @@ func main() {
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token)
 
-	var providers []llm.Provider
+	var entries []llm.ProviderEntry
 	for _, p := range cfg.LLM.Providers {
+		var provider llm.Provider
 		switch p.Name {
 		case "claude":
-			providers = append(providers, llm.NewClaudeProvider(p.APIKey, p.Model, p.BaseURL, cfg.LLM.Timeout))
+			provider = llm.NewClaudeProvider(p.APIKey, p.Model, p.BaseURL, cfg.LLM.Timeout)
 		case "openai":
-			providers = append(providers, llm.NewOpenAIProvider(p.APIKey, p.Model, p.BaseURL, cfg.LLM.Timeout))
+			provider = llm.NewOpenAIProvider(p.APIKey, p.Model, p.BaseURL, cfg.LLM.Timeout)
 		case "ollama":
-			providers = append(providers, llm.NewOllamaProvider(p.Model, p.BaseURL, cfg.LLM.Timeout))
+			provider = llm.NewOllamaProvider(p.Model, p.BaseURL, cfg.LLM.Timeout)
 		case "cli":
-			cmd := p.Command
-			if cmd == "" {
-				cmd = "claude" // default to claude CLI
-			}
-			providers = append(providers, llm.NewCLIProvider(p.Name, cmd, p.Args, cfg.LLM.Timeout))
+			provider = llm.NewCLIProvider(p.Name, p.Command, p.Args, cfg.LLM.Timeout)
 		default:
 			slog.Warn("unknown LLM provider, skipping", "name", p.Name)
+			continue
 		}
+		entries = append(entries, llm.ProviderEntry{Provider: provider, MaxRetries: p.MaxRetries})
 	}
-	fallbackChain := llm.NewFallbackChain(providers, cfg.LLM.MaxRetries)
+	fallbackChain := llm.NewFallbackChain(entries)
 
 	diagEngine := diagnosis.NewEngine(fallbackChain, 10)
 

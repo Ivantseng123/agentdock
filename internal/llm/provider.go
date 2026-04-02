@@ -36,31 +36,43 @@ type Provider interface {
 	Diagnose(ctx context.Context, req DiagnoseRequest) (DiagnoseResponse, error)
 }
 
-type FallbackChain struct {
-	providers  []Provider
-	maxRetries int
+// ProviderEntry wraps a Provider with its per-provider retry count.
+type ProviderEntry struct {
+	Provider   Provider
+	MaxRetries int
 }
 
-func NewFallbackChain(providers []Provider, maxRetries int) *FallbackChain {
-	if maxRetries <= 0 {
-		maxRetries = 1
+type FallbackChain struct {
+	entries []ProviderEntry
+}
+
+func NewFallbackChain(entries []ProviderEntry) *FallbackChain {
+	for i := range entries {
+		if entries[i].MaxRetries <= 0 {
+			entries[i].MaxRetries = 1
+		}
 	}
-	return &FallbackChain{providers: providers, maxRetries: maxRetries}
+	return &FallbackChain{entries: entries}
 }
 
 func (fc *FallbackChain) Name() string { return "fallback-chain" }
 
 func (fc *FallbackChain) Diagnose(ctx context.Context, req DiagnoseRequest) (DiagnoseResponse, error) {
 	var errs []string
-	for _, p := range fc.providers {
-		for attempt := 1; attempt <= fc.maxRetries; attempt++ {
-			resp, err := p.Diagnose(ctx, req)
+	for _, e := range fc.entries {
+		for attempt := 1; attempt <= e.MaxRetries; attempt++ {
+			resp, err := e.Provider.Diagnose(ctx, req)
 			if err == nil {
 				return resp, nil
 			}
-			slog.Warn("LLM provider failed", "provider", p.Name(), "attempt", attempt, "error", err)
-			errs = append(errs, fmt.Sprintf("%s (attempt %d): %s", p.Name(), attempt, err))
+			slog.Warn("LLM provider failed",
+				"provider", e.Provider.Name(),
+				"attempt", fmt.Sprintf("%d/%d", attempt, e.MaxRetries),
+				"error", err,
+			)
+			errs = append(errs, fmt.Sprintf("%s (attempt %d/%d): %s", e.Provider.Name(), attempt, e.MaxRetries, err))
 		}
+		slog.Warn("provider exhausted retries, moving to next", "provider", e.Provider.Name())
 	}
 	return DiagnoseResponse{}, fmt.Errorf("all LLM providers failed: %s", strings.Join(errs, "; "))
 }

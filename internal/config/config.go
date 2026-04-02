@@ -49,16 +49,16 @@ type GitHubConfig struct {
 type LLMConfig struct {
 	Providers  []LLMProvider `yaml:"providers"`
 	Timeout    time.Duration `yaml:"timeout"`
-	MaxRetries int           `yaml:"max_retries"`
 }
 
 type LLMProvider struct {
-	Name    string   `yaml:"name"`
-	APIKey  string   `yaml:"api_key"`
-	Model   string   `yaml:"model"`
-	BaseURL string   `yaml:"base_url"`
-	Command string   `yaml:"command"` // CLI provider: command to exec (e.g. "claude")
-	Args    []string `yaml:"args"`    // CLI provider: extra args
+	Name       string   `yaml:"name"`
+	APIKey     string   `yaml:"api_key"`
+	Model      string   `yaml:"model"`
+	BaseURL    string   `yaml:"base_url"`
+	Command    string   `yaml:"command"`     // CLI provider: command to exec
+	Args       []string `yaml:"args"`        // CLI provider: extra args
+	MaxRetries int      `yaml:"max_retries"` // Per-provider retry count (default 1)
 }
 
 type RepoCacheConfig struct {
