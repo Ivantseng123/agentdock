@@ -25,7 +25,7 @@ Slack emoji reactions trigger automatic GitHub issue creation with AI-powered co
 - **Rejection mechanism** — refuses to create issues when the report is too vague (no related files, too many unknowns, or low confidence)
 - **GitHub file links** — file references in issues are clickable links to the actual source
 - **LLM fallback chain** — multiple providers with per-provider retry and timeout
-- **CLI provider** — use your own AI subscription (Claude Max, etc.) with zero API cost
+- **CLI provider** — integrate any CLI tool (claude, opencode, etc.) with your own subscription, zero API cost
 - **Lite mode** — grep-only triage with zero LLM cost
 - **Rate limiting** — per-user and per-channel throttling
 - **Auto-bind** — bot auto-registers when joining a channel, no manual config needed
@@ -38,7 +38,7 @@ Slack emoji reactions trigger automatic GitHub issue creation with AI-powered co
 | Go 1.22+ | [go.dev/dl](https://go.dev/dl/) |
 | Slack App | [api.slack.com/apps](https://api.slack.com/apps) |
 | GitHub PAT | GitHub Settings > Developer settings > Personal access tokens |
-| LLM Provider | CLI (Claude Max) / API key (Anthropic/OpenAI) / Ollama (free) |
+| LLM Provider | CLI tool / API key (Anthropic/OpenAI) / Ollama (free) |
 
 ### Slack App Setup
 
@@ -96,7 +96,7 @@ reactions:                            # Emoji mappings
 llm:
   providers:
     - name: "cli"
-      command: "claude"               # Uses Claude Code CLI (Max plan)
+      command: "claude"               # Any CLI tool with --print support
       args: ["--print", "{prompt}"]
       timeout: 5m                     # CLI needs more time than API
       max_retries: 3
@@ -139,19 +139,23 @@ When rejected, the bot replies in thread asking the reporter to verify the repo 
 
 ### CLI Provider
 
-Use your own AI subscription instead of API keys:
+Integrate any CLI tool that supports stdin or `--print` mode, using your own subscription at zero API cost:
 
-```bash
-# Install & login (one time)
-npm install -g @anthropic-ai/claude-code
-claude /login
+```yaml
+# Example: Claude Code CLI
+- name: "cli"
+  command: "claude"
+  args: ["--print", "{prompt}"]
+  timeout: 5m
 
-# Configure in config.yaml:
-# - name: "cli"
-#   command: "claude"
-#   args: ["--print", "{prompt}"]
-#   timeout: 5m
+# Example: other CLI tools (prompt via stdin)
+- name: "cli"
+  command: "my-ai-tool"
+  args: []
+  timeout: 3m
 ```
+
+`{prompt}` is a placeholder — when prompt < 32KB it's embedded in args, otherwise sent via stdin. If args contain no `{prompt}`, stdin is always used.
 
 ### Environment Variable Overrides
 

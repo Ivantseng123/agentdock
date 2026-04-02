@@ -25,7 +25,7 @@
 - **拒絕機制** — 報告太模糊時拒絕建立 issue（找不到相關檔案、不確定項目太多、信心度低）
 - **GitHub 檔案連結** — Issue 中的檔案參考為可點擊的原始碼連結
 - **LLM 備援鏈** — 多個 provider 支援各自的重試次數和逾時設定
-- **CLI Provider** — 使用自己的 AI 訂閱（Claude Max 等），零 API 成本
+- **CLI Provider** — 串接任何 CLI 工具（claude、opencode 等），使用自己的訂閱，零 API 成本
 - **Lite 模式** — 僅 grep 分析，零 LLM 成本
 - **頻率限制** — 支援 per-user 和 per-channel 節流
 - **自動綁定** — Bot 加入頻道時自動註冊，無需手動設定
@@ -38,7 +38,7 @@
 | Go 1.22+ | [go.dev/dl](https://go.dev/dl/) |
 | Slack App | [api.slack.com/apps](https://api.slack.com/apps) |
 | GitHub PAT | GitHub Settings > Developer settings > Personal access tokens |
-| LLM Provider | CLI (Claude Max) / API key (Anthropic/OpenAI) / Ollama (免費) |
+| LLM Provider | CLI 工具 / API key (Anthropic/OpenAI) / Ollama (免費) |
 
 ### Slack App 設定
 
@@ -96,7 +96,7 @@ reactions:                            # 表情符號對應
 llm:
   providers:
     - name: "cli"
-      command: "claude"               # 使用 Claude Code CLI（Max 方案）
+      command: "claude"               # 任何支援 --print 的 CLI 工具皆可
       args: ["--print", "{prompt}"]
       timeout: 5m                     # CLI 需要較長時間
       max_retries: 3
@@ -140,19 +140,23 @@ diagnosis:
 
 ### CLI Provider
 
-使用自己的 AI 訂閱取代 API key：
+串接任何支援 stdin 或 `--print` 模式的 CLI 工具，使用你自己的訂閱，零 API 成本：
 
-```bash
-# 安裝 & 登入（一次性）
-npm install -g @anthropic-ai/claude-code
-claude /login
+```yaml
+# 範例：Claude Code CLI
+- name: "cli"
+  command: "claude"
+  args: ["--print", "{prompt}"]
+  timeout: 5m
 
-# 在 config.yaml 設定：
-# - name: "cli"
-#   command: "claude"
-#   args: ["--print", "{prompt}"]
-#   timeout: 5m
+# 範例：其他 CLI 工具（透過 stdin 傳入 prompt）
+- name: "cli"
+  command: "my-ai-tool"
+  args: []
+  timeout: 3m
 ```
+
+`{prompt}` 為 placeholder，prompt < 32KB 時嵌入 args，超過時改走 stdin。若 args 中無 `{prompt}`，一律走 stdin。
 
 ### 環境變數覆蓋
 
