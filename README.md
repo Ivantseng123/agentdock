@@ -50,11 +50,11 @@ git clone https://github.com/your-org/slack-issue-bot.git
 cd slack-issue-bot
 
 # Copy and edit config
-cp config.yaml config.local.yaml
-# Edit config.local.yaml with your tokens (see Configuration below)
+cp config.example.yaml config.yaml
+# Edit config.yaml with your tokens (see Configuration below)
 
 # Run
-go run ./cmd/bot/ -config config.local.yaml
+go run ./cmd/bot/
 ```
 
 ## Configuration
@@ -94,18 +94,27 @@ github:
 # LLM providers (tried in order, falls back on failure)
 llm:
   providers:
-    - name: "claude"
-      api_key: "sk-ant-..."
-      model: "claude-sonnet-4-20250514"
-      base_url: "https://api.anthropic.com"
-    - name: "openai"
-      api_key: "sk-..."
-      model: "gpt-4o"
-      base_url: "https://api.openai.com"
-    - name: "ollama"            # Free, local, no API key needed
-      model: "llama3"
-      base_url: "http://localhost:11434"
-  timeout: 30s
+    # Personal use: CLI provider (uses your own AI subscription, no API key)
+    - name: "cli"
+      command: "claude"         # Claude Code CLI (Max plan) — run: claude /login
+    # - name: "cli"
+    #   command: "opencode"     # Or any CLI tool
+
+    # Centralized: API key providers
+    # - name: "claude"
+    #   api_key: "sk-ant-..."
+    #   model: "claude-sonnet-4-20250514"
+    #   base_url: "https://api.anthropic.com"
+    # - name: "openai"
+    #   api_key: "sk-..."
+    #   model: "gpt-4o"
+    #   base_url: "https://api.openai.com"
+
+    # Local: Ollama (free, no API key)
+    # - name: "ollama"
+    #   model: "llama3"
+    #   base_url: "http://localhost:11434"
+  timeout: 60s
   max_retries: 2
 
 repo_cache:
@@ -136,6 +145,42 @@ diagnosis:
 This means the **pod's centralized LLM cost stays at zero**, and each developer uses their own AI budget to investigate.
 
 **Full mode** falls back to lite automatically if all LLM providers fail.
+
+### CLI Provider (Personal Use)
+
+Use your own AI subscription (Claude Max, etc.) instead of API keys:
+
+```yaml
+llm:
+  providers:
+    - name: "cli"
+      command: "claude"    # Uses Claude Code CLI with your Max plan
+```
+
+**Setup:**
+```bash
+# 1. Install Claude Code
+npm install -g @anthropic-ai/claude-code
+
+# 2. Login (one time)
+claude /login
+
+# 3. Run the bot — it will use your subscription
+go run ./cmd/bot/
+```
+
+Supported CLIs:
+| CLI | Command | Subscription |
+|-----|---------|-------------|
+| Claude Code | `claude` | Claude Max ($100/mo) |
+| Any CLI that accepts prompt via stdin | custom `command` + `args` | varies |
+
+For custom CLIs, use `{prompt}` placeholder in args:
+```yaml
+- name: "cli"
+  command: "my-ai-tool"
+  args: ["--input", "{prompt}"]
+```
 
 ### Environment Variable Overrides
 

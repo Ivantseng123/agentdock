@@ -1,7 +1,8 @@
 # Binary
 /bot
 
-# Config with secrets
+# Config with secrets (use config.example.yaml as template)
+config.yaml
 config.local.yaml
 
 # IDE

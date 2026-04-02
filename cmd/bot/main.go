@@ -46,6 +46,12 @@ func main() {
 			providers = append(providers, llm.NewOpenAIProvider(p.APIKey, p.Model, p.BaseURL, cfg.LLM.Timeout))
 		case "ollama":
 			providers = append(providers, llm.NewOllamaProvider(p.Model, p.BaseURL, cfg.LLM.Timeout))
+		case "cli":
+			cmd := p.Command
+			if cmd == "" {
+				cmd = "claude" // default to claude CLI
+			}
+			providers = append(providers, llm.NewCLIProvider(p.Name, cmd, p.Args, cfg.LLM.Timeout))
 		default:
 			slog.Warn("unknown LLM provider, skipping", "name", p.Name)
 		}

@@ -27,15 +27,27 @@ github:
 
 llm:
   providers:
-    - name: "claude"
-      api_key: "sk-ant-your-key"
-      model: "claude-sonnet-4-20250514"
-      base_url: "https://api.anthropic.com"
+    ## === Personal use: CLI provider (uses your own subscription) ===
+    - name: "cli"
+      command: "claude"          # Uses Claude Max plan — requires: claude /login
+    # - name: "cli"
+    #   command: "opencode"      # Or any CLI that accepts prompt via stdin/args
+
+    ## === Centralized: API key providers ===
+    # - name: "claude"           # Anthropic API (also works with compatible APIs)
+    #   api_key: "sk-ant-..."
+    #   model: "claude-sonnet-4-20250514"
+    #   base_url: "https://api.anthropic.com"
     # - name: "openai"
-    #   api_key: "sk-your-key"
+    #   api_key: "sk-..."
     #   model: "gpt-4o"
     #   base_url: "https://api.openai.com"
-  timeout: 30s
+
+    ## === Local: Ollama (free, no API key) ===
+    # - name: "ollama"
+    #   model: "llama3"
+    #   base_url: "http://localhost:11434"
+  timeout: 60s
   max_retries: 2
 
 repo_cache:
@@ -47,7 +59,7 @@ rate_limit:
   per_channel: 20     # Max triggers per channel per window
   window: 1h          # Time window
 
-# "full" = use centralized LLM for diagnosis (costs tokens)
-# "lite" = grep only + handoff spec (zero token cost, user runs own AI)
+# "full" = use LLM for diagnosis (costs tokens or uses your subscription)
+# "lite" = grep only + handoff spec (zero cost, user runs own AI)
 diagnosis:
-  mode: "lite"
+  mode: "full"

@@ -53,10 +53,12 @@ type LLMConfig struct {
 }
 
 type LLMProvider struct {
-	Name    string `yaml:"name"`
-	APIKey  string `yaml:"api_key"`
-	Model   string `yaml:"model"`
-	BaseURL string `yaml:"base_url"`
+	Name    string   `yaml:"name"`
+	APIKey  string   `yaml:"api_key"`
+	Model   string   `yaml:"model"`
+	BaseURL string   `yaml:"base_url"`
+	Command string   `yaml:"command"` // CLI provider: command to exec (e.g. "claude")
+	Args    []string `yaml:"args"`    // CLI provider: extra args
 }
 
 type RepoCacheConfig struct {
