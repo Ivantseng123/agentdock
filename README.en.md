@@ -114,8 +114,20 @@ diagnosis:
   max_tokens: 100000                  # Token budget limit
   cache_ttl: 10m                      # Response cache TTL (0 = no caching)
   prompt:
-    language: "English"
-    extra_rules: []
+    language: "English"               # AI output language (empty = English)
+    extra_rules: []                   # Extra rules appended to the system prompt
+```
+
+### extra_rules
+
+`extra_rules` is a string array. Each entry is appended verbatim to the end of the AI system prompt. Use it to customize AI behavior for your team or project:
+
+```yaml
+extra_rules:
+  - "List all related file names with full paths"
+  - "If the change involves database updates, mention migration in Direction"
+  - "If related unit test files are found, include them"
+  - "Always mention if the change requires a config update"
 ```
 
 ### Diagnosis Modes

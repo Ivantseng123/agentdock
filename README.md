@@ -114,9 +114,21 @@ diagnosis:
   max_tokens: 100000                  # Token 預算上限
   cache_ttl: 10m                      # 回應快取 TTL（0 = 不快取）
   prompt:
-    language: "繁體中文"
-    extra_rules:
+    language: "繁體中文"              # AI 輸出語言（留空 = English）
+    extra_rules:                      # 額外規則，會直接附加到 system prompt 尾端
       - "列出所有相關的檔案名稱與完整路徑"
+```
+
+### extra_rules
+
+`extra_rules` 是一個字串陣列，每一條會原封不動地附加到 AI 的 system prompt 結尾。用來針對團隊或專案的需求客製化 AI 行為，例如：
+
+```yaml
+extra_rules:
+  - "列出所有相關的檔案名稱與完整路徑"
+  - "如果涉及資料庫變更，請在 Direction 中提醒需要 migration"
+  - "若找到相關的單元測試檔案，也要列出"
+  - "Always mention if the change requires a config update"
 ```
 
 ### 診斷模式
