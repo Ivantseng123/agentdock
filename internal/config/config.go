@@ -10,15 +10,17 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig              `yaml:"server"`
-	Slack     SlackConfig               `yaml:"slack"`
-	Channels  map[string]ChannelConfig  `yaml:"channels"`
-	Reactions map[string]ReactionConfig `yaml:"reactions"`
-	GitHub    GitHubConfig              `yaml:"github"`
-	LLM       LLMConfig                `yaml:"llm"`
-	RepoCache RepoCacheConfig           `yaml:"repo_cache"`
-	RateLimit RateLimitConfig           `yaml:"rate_limit"`
-	Diagnosis DiagnosisConfig           `yaml:"diagnosis"`
+	Server          ServerConfig              `yaml:"server"`
+	Slack           SlackConfig               `yaml:"slack"`
+	Channels        map[string]ChannelConfig  `yaml:"channels"`
+	ChannelDefaults ChannelConfig             `yaml:"channel_defaults"` // defaults for auto-bound channels
+	AutoBind        bool                      `yaml:"auto_bind"`       // auto-register when bot joins a channel
+	Reactions       map[string]ReactionConfig `yaml:"reactions"`
+	GitHub          GitHubConfig              `yaml:"github"`
+	LLM             LLMConfig                 `yaml:"llm"`
+	RepoCache       RepoCacheConfig           `yaml:"repo_cache"`
+	RateLimit       RateLimitConfig           `yaml:"rate_limit"`
+	Diagnosis       DiagnosisConfig           `yaml:"diagnosis"`
 }
 
 type ServerConfig struct {
@@ -71,13 +73,14 @@ type LLMConfig struct {
 }
 
 type LLMProvider struct {
-	Name       string   `yaml:"name"`
-	APIKey     string   `yaml:"api_key"`
-	Model      string   `yaml:"model"`
-	BaseURL    string   `yaml:"base_url"`
-	Command    string   `yaml:"command"`     // CLI provider: command to exec
-	Args       []string `yaml:"args"`        // CLI provider: extra args
-	MaxRetries int      `yaml:"max_retries"` // Per-provider retry count (default 1)
+	Name       string        `yaml:"name"`
+	APIKey     string        `yaml:"api_key"`
+	Model      string        `yaml:"model"`
+	BaseURL    string        `yaml:"base_url"`
+	Command    string        `yaml:"command"`     // CLI provider: command to exec
+	Args       []string      `yaml:"args"`        // CLI provider: extra args
+	MaxRetries int           `yaml:"max_retries"` // Per-provider retry count (default 1)
+	Timeout    time.Duration `yaml:"timeout"`     // Per-provider timeout (overrides global)
 }
 
 type RepoCacheConfig struct {
@@ -92,8 +95,11 @@ type RateLimitConfig struct {
 }
 
 type DiagnosisConfig struct {
-	Mode   string `yaml:"mode"`   // "full" = use LLM, "lite" = grep only + handoff spec
-	Prompt PromptConfig `yaml:"prompt"`
+	Mode      string        `yaml:"mode"`       // "full" = use LLM, "lite" = grep only + handoff spec
+	MaxTurns  int           `yaml:"max_turns"`  // Max agent loop iterations (default decided by engine)
+	MaxTokens int           `yaml:"max_tokens"` // Max tokens per LLM call
+	CacheTTL  time.Duration `yaml:"cache_ttl"`  // Response cache TTL (0 = no caching)
+	Prompt    PromptConfig  `yaml:"prompt"`
 }
 
 type PromptConfig struct {
