@@ -20,6 +20,13 @@ channels:
   #     - "org/infra"
   #   default_labels: ["from-slack"]
 
+  # With branch selection enabled:
+  # C05ZZZZZZ:
+  #   repo: "org/backend"
+  #   branch_select: true              # Show branch selector after repo
+  #   branches: ["main", "develop"]    # Optional whitelist (empty = auto-detect all remote branches)
+  #   default_labels: ["from-slack"]
+
 reactions:
   bug:
     type: "bug"

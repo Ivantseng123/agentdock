@@ -70,29 +70,30 @@ func (c *Client) GetChannelName(channelID string) string {
 	return "#" + info.Name
 }
 
-// PostRepoSelector sends a message with clickable buttons for the user to pick a repo.
+// PostSelector sends a message with clickable buttons.
+// actionPrefix differentiates repo vs branch selectors.
 // Returns the message timestamp.
-func (c *Client) PostRepoSelector(channelID string, repos []string) (string, error) {
+func (c *Client) PostSelector(channelID, prompt, actionPrefix string, options []string) (string, error) {
 	var buttons []slack.BlockElement
-	for i, repo := range repos {
+	for i, opt := range options {
 		buttons = append(buttons, slack.NewButtonBlockElement(
-			fmt.Sprintf("repo_select_%d", i),
-			repo,
-			slack.NewTextBlockObject(slack.PlainTextType, repo, false, false),
+			fmt.Sprintf("%s_%d", actionPrefix, i),
+			opt,
+			slack.NewTextBlockObject(slack.PlainTextType, opt, false, false),
 		))
 	}
 
 	section := slack.NewSectionBlock(
-		slack.NewTextBlockObject(slack.MarkdownType, ":point_right: Which repo should this issue go to?", false, false),
+		slack.NewTextBlockObject(slack.MarkdownType, prompt, false, false),
 		nil, nil,
 	)
-	actions := slack.NewActionBlock("repo_selector", buttons...)
+	actions := slack.NewActionBlock(actionPrefix, buttons...)
 
 	_, ts, err := c.api.PostMessage(channelID,
 		slack.MsgOptionBlocks(section, actions),
 	)
 	if err != nil {
-		return "", fmt.Errorf("post repo selector: %w", err)
+		return "", fmt.Errorf("post selector: %w", err)
 	}
 	return ts, nil
 }

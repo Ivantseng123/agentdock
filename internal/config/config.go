@@ -32,9 +32,16 @@ type SlackConfig struct {
 }
 
 type ChannelConfig struct {
-	Repo          string   `yaml:"repo"`          // Single repo (backward compatible)
-	Repos         []string `yaml:"repos"`         // Multiple repos
+	Repo          string   `yaml:"repo"`            // Single repo (backward compatible)
+	Repos         []string `yaml:"repos"`           // Multiple repos
 	DefaultLabels []string `yaml:"default_labels"`
+	Branches      []string `yaml:"branches"`        // Whitelist of branches to show (empty = auto-detect)
+	BranchSelect  *bool    `yaml:"branch_select"`   // Enable branch selection (default: false)
+}
+
+// IsBranchSelectEnabled returns whether branch selection is enabled.
+func (c ChannelConfig) IsBranchSelectEnabled() bool {
+	return c.BranchSelect != nil && *c.BranchSelect
 }
 
 // GetRepos returns the list of repos, handling both single and multi config.

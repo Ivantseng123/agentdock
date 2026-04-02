@@ -128,9 +128,11 @@ func main() {
 				}
 				if callback.Type == slack.InteractionTypeBlockActions {
 					for _, action := range callback.ActionCallback.BlockActions {
-						if strings.HasPrefix(action.ActionID, "repo_select_") {
-							go wf.HandleRepoSelection(
+						if strings.HasPrefix(action.ActionID, "repo_select_") ||
+							strings.HasPrefix(action.ActionID, "branch_select_") {
+							go wf.HandleSelection(
 								callback.Channel.ID,
+								action.ActionID,
 								action.Value,
 								callback.Message.Timestamp,
 							)

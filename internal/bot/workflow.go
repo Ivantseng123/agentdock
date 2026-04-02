@@ -14,7 +14,7 @@ import (
 	slackclient "slack-issue-bot/internal/slack"
 )
 
-// pendingIssue stores context between the reaction event and the repo selection callback.
+// pendingIssue stores context between the reaction event and user selections.
 type pendingIssue struct {
 	Event       slackclient.ReactionEvent
 	ReactionCfg config.ReactionConfig
@@ -22,7 +22,9 @@ type pendingIssue struct {
 	Message     string
 	Reporter    string
 	ChannelName string
-	SelectorTS  string // timestamp of the repo selector message
+	SelectorTS  string // timestamp of the current selector message
+	SelectedRepo string // set after repo selection
+	Phase       string // "repo" or "branch"
 }
 
 type Workflow struct {
@@ -33,7 +35,7 @@ type Workflow struct {
 	diagEngine  *diagnosis.Engine
 
 	mu      sync.Mutex
-	pending map[string]*pendingIssue // key: channelID:messageTS
+	pending map[string]*pendingIssue // keyed by selectorTS
 }
 
 func NewWorkflow(
@@ -88,14 +90,6 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		"repos", repos,
 	)
 
-	// Single repo: proceed directly
-	if len(repos) == 1 {
-		w.createIssue(event, reactionCfg, channelCfg, repos[0], message, reporter, channelName)
-		return
-	}
-
-	// Multiple repos: store context and send selector buttons
-	key := event.ChannelID + ":" + event.MessageTS
 	pi := &pendingIssue{
 		Event:       event,
 		ReactionCfg: reactionCfg,
@@ -105,67 +99,138 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		ChannelName: channelName,
 	}
 
-	selectorTS, err := w.slack.PostRepoSelector(event.ChannelID, repos)
+	if len(repos) == 1 {
+		pi.SelectedRepo = repos[0]
+		w.afterRepoSelected(pi)
+		return
+	}
+
+	// Multiple repos: show repo selector
+	pi.Phase = "repo"
+	selectorTS, err := w.slack.PostSelector(event.ChannelID,
+		":point_right: Which repo should this issue go to?",
+		"repo_select", repos)
 	if err != nil {
 		w.notifyError(event.ChannelID, "Failed to show repo selector: %v", err)
 		return
 	}
 
 	pi.SelectorTS = selectorTS
-
 	w.mu.Lock()
-	w.pending[key] = pi
+	w.pending[selectorTS] = pi
 	w.mu.Unlock()
 }
 
-// HandleRepoSelection is called when a user clicks a repo button.
-func (w *Workflow) HandleRepoSelection(channelID, selectedRepo, selectorMsgTS string) {
+// HandleSelection is called when a user clicks any selector button.
+func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS string) {
 	w.mu.Lock()
-	var pi *pendingIssue
-	var foundKey string
-	for key, p := range w.pending {
-		if p.SelectorTS == selectorMsgTS && p.Event.ChannelID == channelID {
-			pi = p
-			foundKey = key
-			break
+	pi, ok := w.pending[selectorMsgTS]
+	if ok {
+		delete(w.pending, selectorMsgTS)
+	}
+	w.mu.Unlock()
+
+	if !ok {
+		slog.Debug("no pending issue for selector", "ts", selectorMsgTS)
+		return
+	}
+
+	switch pi.Phase {
+	case "repo":
+		w.slack.UpdateMessage(channelID, selectorMsgTS,
+			fmt.Sprintf(":white_check_mark: Repo: `%s`", value))
+		pi.SelectedRepo = value
+		slog.Info("repo selected", "repo", value)
+		w.afterRepoSelected(pi)
+
+	case "branch":
+		w.slack.UpdateMessage(channelID, selectorMsgTS,
+			fmt.Sprintf(":white_check_mark: Branch: `%s`", value))
+		slog.Info("branch selected", "branch", value)
+		w.afterBranchSelected(pi, value)
+	}
+}
+
+// afterRepoSelected is called once a repo is determined. Shows branch selector if enabled.
+func (w *Workflow) afterRepoSelected(pi *pendingIssue) {
+	if !pi.ChannelCfg.IsBranchSelectEnabled() {
+		// No branch selection, proceed with default branch
+		w.createIssue(pi, "")
+		return
+	}
+
+	// Clone/fetch the repo first to get branch list
+	repoPath, err := w.repoCache.EnsureRepo(pi.SelectedRepo)
+	if err != nil {
+		w.notifyError(pi.Event.ChannelID, "Failed to access repo %s: %v", pi.SelectedRepo, err)
+		return
+	}
+
+	// Get branches: use whitelist from config, or auto-detect
+	var branches []string
+	if len(pi.ChannelCfg.Branches) > 0 {
+		branches = pi.ChannelCfg.Branches
+	} else {
+		branches, err = w.repoCache.ListBranches(repoPath)
+		if err != nil {
+			slog.Warn("failed to list branches, skipping selection", "error", err)
+			w.createIssue(pi, "")
+			return
 		}
 	}
-	if foundKey != "" {
-		delete(w.pending, foundKey)
-	}
-	w.mu.Unlock()
 
-	if pi == nil {
-		slog.Warn("no pending issue found for repo selection", "selectorTS", selectorMsgTS)
+	if len(branches) <= 1 {
+		// Only one branch, skip selection
+		branch := ""
+		if len(branches) == 1 {
+			branch = branches[0]
+		}
+		w.createIssue(pi, branch)
 		return
 	}
 
-	w.slack.UpdateMessage(channelID, selectorMsgTS,
-		fmt.Sprintf(":white_check_mark: Selected repo: `%s`", selectedRepo))
+	// Show branch selector
+	pi.Phase = "branch"
+	selectorTS, err := w.slack.PostSelector(pi.Event.ChannelID,
+		fmt.Sprintf(":point_right: Which branch of `%s`?", pi.SelectedRepo),
+		"branch_select", branches)
+	if err != nil {
+		slog.Warn("failed to show branch selector, using default", "error", err)
+		w.createIssue(pi, "")
+		return
+	}
 
-	slog.Info("repo selected", "repo", selectedRepo)
-	w.createIssue(pi.Event, pi.ReactionCfg, pi.ChannelCfg, selectedRepo, pi.Message, pi.Reporter, pi.ChannelName)
+	pi.SelectorTS = selectorTS
+	w.mu.Lock()
+	w.pending[selectorTS] = pi
+	w.mu.Unlock()
 }
 
-func (w *Workflow) createIssue(
-	event slackclient.ReactionEvent,
-	reactionCfg config.ReactionConfig,
-	channelCfg config.ChannelConfig,
-	repoRef string,
-	message, reporter, channelName string,
-) {
+// afterBranchSelected checkouts the branch and proceeds to issue creation.
+func (w *Workflow) afterBranchSelected(pi *pendingIssue, branch string) {
+	w.createIssue(pi, branch)
+}
+
+func (w *Workflow) createIssue(pi *pendingIssue, branch string) {
 	ctx := context.Background()
 
-	repoPath, err := w.repoCache.EnsureRepo(repoRef)
+	repoPath, err := w.repoCache.EnsureRepo(pi.SelectedRepo)
 	if err != nil {
-		w.notifyError(event.ChannelID, "Failed to access repo %s: %v", repoRef, err)
+		w.notifyError(pi.Event.ChannelID, "Failed to access repo %s: %v", pi.SelectedRepo, err)
 		return
 	}
 
-	keywords := slackclient.ExtractKeywords(message)
+	if branch != "" {
+		if err := w.repoCache.Checkout(repoPath, branch); err != nil {
+			w.notifyError(pi.Event.ChannelID, "Failed to checkout branch %s: %v", branch, err)
+			return
+		}
+	}
+
+	keywords := slackclient.ExtractKeywords(pi.Message)
 	diagInput := diagnosis.DiagnoseInput{
-		Type:     reactionCfg.Type,
-		Message:  message,
+		Type:     pi.ReactionCfg.Type,
+		Message:  pi.Message,
 		RepoPath: repoPath,
 		Keywords: keywords,
 		Prompt: llm.PromptOptions{
@@ -185,7 +250,7 @@ func (w *Workflow) createIssue(
 		diagResp, diagErr = w.diagEngine.Diagnose(ctx, diagInput)
 		if diagErr != nil {
 			slog.Warn("AI diagnosis failed, falling back to lite mode", "error", diagErr)
-			w.slack.PostMessage(event.ChannelID, ":warning: AI diagnosis unavailable, creating issue with file references only")
+			w.slack.PostMessage(pi.Event.ChannelID, ":warning: AI diagnosis unavailable, creating issue with file references only")
 			mode = "lite"
 		}
 	}
@@ -196,37 +261,41 @@ func (w *Workflow) createIssue(
 		diagResp.Files = relevantFiles
 	}
 
-	parts := strings.SplitN(repoRef, "/", 2)
+	parts := strings.SplitN(pi.SelectedRepo, "/", 2)
 	if len(parts) != 2 {
-		w.notifyError(event.ChannelID, "Invalid repo format: %s (expected owner/repo)", repoRef)
+		w.notifyError(pi.Event.ChannelID, "Invalid repo format: %s (expected owner/repo)", pi.SelectedRepo)
 		return
 	}
 	owner, repo := parts[0], parts[1]
 
-	labels := append(reactionCfg.IssueLabels, channelCfg.DefaultLabels...)
+	labels := append(pi.ReactionCfg.IssueLabels, pi.ChannelCfg.DefaultLabels...)
 
 	issueInput := ghclient.IssueInput{
-		Type:        reactionCfg.Type,
-		TitlePrefix: reactionCfg.IssueTitlePrefix,
-		Channel:     channelName,
-		Reporter:    reporter,
-		Message:     message,
+		Type:        pi.ReactionCfg.Type,
+		TitlePrefix: pi.ReactionCfg.IssueTitlePrefix,
+		Channel:     pi.ChannelName,
+		Reporter:    pi.Reporter,
+		Message:     pi.Message,
 		Labels:      labels,
 		Diagnosis:   diagResp,
 	}
 
 	issueURL, err := w.issueClient.CreateIssue(ctx, owner, repo, issueInput)
 	if err != nil {
-		w.notifyError(event.ChannelID, "Failed to create GitHub issue: %v", err)
+		w.notifyError(pi.Event.ChannelID, "Failed to create GitHub issue: %v", err)
 		return
 	}
 
-	msg := fmt.Sprintf(":white_check_mark: Issue created: %s", issueURL)
-	if err := w.slack.PostMessage(event.ChannelID, msg); err != nil {
+	branchInfo := ""
+	if branch != "" {
+		branchInfo = fmt.Sprintf(" (branch: `%s`)", branch)
+	}
+	msg := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, issueURL)
+	if err := w.slack.PostMessage(pi.Event.ChannelID, msg); err != nil {
 		slog.Error("failed to post issue URL to slack", "error", err)
 	}
 
-	slog.Info("workflow completed", "issueURL", issueURL, "repo", repoRef)
+	slog.Info("workflow completed", "issueURL", issueURL, "repo", pi.SelectedRepo, "branch", branch)
 }
 
 func (w *Workflow) notifyError(channelID string, format string, args ...any) {
