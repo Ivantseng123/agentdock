@@ -1,0 +1,13 @@
+# Binary
+/bot
+
+# Config with secrets
+config.local.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
