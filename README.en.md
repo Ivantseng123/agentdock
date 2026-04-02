@@ -125,17 +125,17 @@ diagnosis:
 | `full` | tokens per trigger | Agent loop: LLM uses tools (grep, read_file, etc.) in multi-turn conversation until diagnosis complete |
 | `lite` | **0 tokens** | Grep only, creates issue with file references for engineer's own AI |
 
-### Rejection Mechanism
+### Rejection & Graceful Degradation
 
-In `full` mode, the bot will **not** create an issue if **any** of these conditions are met:
+The core value of this tool is **structuring Slack conversations into issues**, lowering the barrier for non-engineers to create useful issues. AI triage is a bonus, not a requirement.
 
-| Condition | Meaning |
-|-----------|---------|
-| `related files = 0` | No relevant code found |
-| `open_questions >= 5` | Too many unknowns — report is too vague |
-| `confidence = low` | LLM judges the report doesn't relate to this repo |
+| Situation | Behavior |
+|-----------|----------|
+| AI analysis succeeds (files found, confidence OK) | Create issue with full AI Triage section |
+| AI finds no files / too many open questions, but confidence is not low | Create issue, **skip AI Triage section** (keep original message + Channel + Reporter only) |
+| `confidence = low` | **Reject** (likely wrong repo or completely irrelevant) |
 
-The bot replies in thread asking the reporter to refine their description.
+When rejected, the bot replies in thread asking the reporter to verify the repo or refine their description.
 
 ### CLI Provider
 
