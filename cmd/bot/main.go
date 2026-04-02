@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -54,8 +53,10 @@ func main() {
 			slog.Warn("unknown LLM provider, skipping", "name", p.Name)
 			continue
 		}
+		slog.Info("loaded LLM provider", "name", p.Name, "max_retries", p.MaxRetries)
 		entries = append(entries, llm.ProviderEntry{Provider: provider, MaxRetries: p.MaxRetries})
 	}
+	slog.Info("LLM fallback chain ready", "providers", len(entries))
 	fallbackChain := llm.NewFallbackChain(entries)
 
 	diagEngine := diagnosis.NewEngine(fallbackChain, 10)
@@ -127,25 +128,8 @@ func main() {
 				if callback.Type == slack.InteractionTypeBlockActions {
 					for _, action := range callback.ActionCallback.BlockActions {
 						if action.ActionID == wf.RepoSelectCallbackID() {
-							// action.Value = selected repo
-							// Parse original message TS from the metadata
-							var meta struct {
-								Data string `json:"data"`
-							}
-							if callback.Message.Metadata.EventPayload != nil {
-								if d, ok := callback.Message.Metadata.EventPayload["data"].(string); ok {
-									meta.Data = d
-								}
-							}
-							var payload struct {
-								ChannelID string `json:"channel_id"`
-								MessageTS string `json:"message_ts"`
-							}
-							json.Unmarshal([]byte(meta.Data), &payload)
-
 							go wf.HandleRepoSelection(
-								payload.ChannelID,
-								payload.MessageTS,
+								callback.Channel.ID,
 								action.Value,
 								callback.Message.Timestamp,
 							)

@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,6 +24,7 @@ type pendingIssue struct {
 	Message     string
 	Reporter    string
 	ChannelName string
+	SelectorTS  string // timestamp of the repo selector message
 }
 
 type Workflow struct {
@@ -107,39 +107,43 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		ChannelName: channelName,
 	}
 
+	selectorTS, err := w.slack.PostRepoSelector(event.ChannelID, repos, repoSelectCallbackID)
+	if err != nil {
+		w.notifyError(event.ChannelID, "Failed to show repo selector: %v", err)
+		return
+	}
+
+	pi.SelectorTS = selectorTS
+
 	w.mu.Lock()
 	w.pending[key] = pi
 	w.mu.Unlock()
-
-	metadata, _ := json.Marshal(map[string]string{
-		"channel_id": event.ChannelID,
-		"message_ts": event.MessageTS,
-	})
-
-	if err := w.slack.PostRepoSelector(event.ChannelID, repos, repoSelectCallbackID, string(metadata)); err != nil {
-		w.notifyError(event.ChannelID, "Failed to show repo selector: %v", err)
-	}
 }
 
 // HandleRepoSelection is called when a user clicks a repo button.
-func (w *Workflow) HandleRepoSelection(channelID, messageTS, selectedRepo, selectorMsgTS string) {
-	// Parse the pending key from the action
-	key := channelID + ":" + messageTS
-
+func (w *Workflow) HandleRepoSelection(channelID, selectedRepo, selectorMsgTS string) {
 	w.mu.Lock()
-	pi, ok := w.pending[key]
-	if ok {
-		delete(w.pending, key)
+	var pi *pendingIssue
+	var foundKey string
+	for key, p := range w.pending {
+		if p.SelectorTS == selectorMsgTS && p.Event.ChannelID == channelID {
+			pi = p
+			foundKey = key
+			break
+		}
+	}
+	if foundKey != "" {
+		delete(w.pending, foundKey)
 	}
 	w.mu.Unlock()
 
-	if !ok {
-		slog.Warn("no pending issue found for repo selection", "key", key)
+	if pi == nil {
+		slog.Warn("no pending issue found for repo selection", "selectorTS", selectorMsgTS)
 		return
 	}
 
 	// Replace the button message with a confirmation
-	w.slack.UpdateMessage(pi.Event.ChannelID, selectorMsgTS,
+	w.slack.UpdateMessage(channelID, selectorMsgTS,
 		fmt.Sprintf(":white_check_mark: Selected repo: `%s`", selectedRepo))
 
 	w.createIssue(pi.Event, pi.ReactionCfg, pi.ChannelCfg, selectedRepo, pi.Message, pi.Reporter, pi.ChannelName)
