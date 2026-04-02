@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"slack-issue-bot/internal/llm"
 )
@@ -19,8 +20,12 @@ func initGitRepo(t *testing.T, files map[string]string) string {
 	runGit(t, dir, "config", "user.email", "test@test.com")
 	for path, content := range files {
 		full := filepath.Join(dir, path)
-		os.MkdirAll(filepath.Dir(full), 0755)
-		os.WriteFile(full, []byte(content), 0644)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(full), err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+			t.Fatalf("write %s: %v", full, err)
+		}
 	}
 	runGit(t, dir, "add", ".")
 	runGit(t, dir, "commit", "-m", "init")
@@ -37,116 +42,139 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// --- Step 1 test: keyword grep hits directly ---
+// --- Tests ---
 
-func TestEngine_Diagnose_DirectGrepHit(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not found")
+// TestEngine_Diagnose_AgentLoop verifies that the engine delegates to RunLoop
+// and returns a triage card.
+func TestEngine_Diagnose_AgentLoop(t *testing.T) {
+	mock := &mockConvProvider{
+		responses: []llm.ChatResponse{
+			{
+				Content:    triageJSON("login bug in auth module", "high"),
+				StopReason: llm.StopReasonFinish,
+			},
+		},
 	}
 
-	repoDir := initGitRepo(t, map[string]string{
-		"src/login.go": "package auth\n\nfunc Login() {}",
+	engine := NewEngine(mock, EngineConfig{
+		MaxTurns: 5,
+		CacheTTL: 5 * time.Minute,
 	})
+	defer engine.Stop()
 
-	mock := &sequentialMock{responses: []llm.DiagnoseResponse{
-		{Summary: "login bug", Files: []llm.FileRef{{Path: "src/login.go"}}},
-	}}
-
-	engine := NewEngine(mock, 5)
 	resp, err := engine.Diagnose(context.Background(), DiagnoseInput{
 		Type:     "bug",
 		Message:  "login crashes",
-		RepoPath: repoDir,
-		Keywords: []string{"Login"},
+		RepoPath: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("Diagnose failed: %v", err)
 	}
 	if mock.calls != 1 {
-		t.Errorf("expected 1 LLM call (direct grep hit), got %d", mock.calls)
+		t.Errorf("expected 1 call, got %d", mock.calls)
 	}
-	if resp.Summary != "login bug" {
-		t.Errorf("unexpected summary: %s", resp.Summary)
+	if resp.Summary != "login bug in auth module" {
+		t.Errorf("unexpected summary: %q", resp.Summary)
 	}
-}
-
-// --- Step 2 test: LLM suggests search terms ---
-
-func TestEngine_Diagnose_LLMSuggestsSearchTerms(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not found")
-	}
-
-	repoDir := initGitRepo(t, map[string]string{
-		"src/reinsurance/cession.go": "package reinsurance\n\nfunc CalcCession() {}",
-		"src/models/policy.go":       "package models\n\ntype Policy struct{}",
-	})
-
-	mock := &sequentialMock{responses: []llm.DiagnoseResponse{
-		// Turn 1: suggest search terms
-		{Summary: `["reinsurance", "cession", "CalcCession"]`},
-		// Turn 2: final diagnosis (grep hit with suggested terms)
-		{Summary: "分保功能在 cession.go", Files: []llm.FileRef{{Path: "src/reinsurance/cession.go"}}},
-	}}
-
-	engine := NewEngine(mock, 5)
-	resp, err := engine.Diagnose(context.Background(), DiagnoseInput{
-		Type:     "feature",
-		Message:  "再保系統分保結果畫面，新增出單單位欄位",
-		RepoPath: repoDir,
-		Keywords: []string{"再保系統", "分保結果"},
-	})
-	if err != nil {
-		t.Fatalf("Diagnose failed: %v", err)
-	}
-	if mock.calls != 2 {
-		t.Errorf("expected 2 LLM calls (suggest terms + diagnose), got %d", mock.calls)
-	}
-	if resp.Summary != "分保功能在 cession.go" {
-		t.Errorf("unexpected summary: %s", resp.Summary)
+	if resp.Confidence != "high" {
+		t.Errorf("unexpected confidence: %q", resp.Confidence)
 	}
 }
 
-// --- Step 3 test: all grep fails, LLM picks from tree ---
-
-func TestEngine_Diagnose_LLMPicksFromTree(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not found")
+// TestEngine_Diagnose_CacheHit verifies that two identical calls result
+// in only one actual LLM invocation.
+func TestEngine_Diagnose_CacheHit(t *testing.T) {
+	mock := &mockConvProvider{
+		responses: []llm.ChatResponse{
+			{
+				Content:    triageJSON("cached result", "medium"),
+				StopReason: llm.StopReasonFinish,
+			},
+		},
 	}
 
-	repoDir := initGitRepo(t, map[string]string{
-		"src/module_a/handler.go": "package module_a\n\nfunc Handle() {}",
-		"src/module_b/service.go": "package module_b\n\nfunc Serve() {}",
+	engine := NewEngine(mock, EngineConfig{
+		MaxTurns: 5,
+		CacheTTL: 5 * time.Minute,
 	})
+	defer engine.Stop()
 
-	mock := &sequentialMock{responses: []llm.DiagnoseResponse{
-		// Turn 1: suggest search terms (won't match anything)
-		{Summary: `["xyz_nonexistent"]`},
-		// Turn 2: pick files from tree
-		{Summary: `["src/module_a/handler.go"]`},
-		// Turn 3: final diagnosis
-		{Summary: "found it in handler", Files: []llm.FileRef{{Path: "src/module_a/handler.go"}}},
-	}}
-
-	engine := NewEngine(mock, 5)
-	resp, err := engine.Diagnose(context.Background(), DiagnoseInput{
+	repoDir := t.TempDir()
+	input := DiagnoseInput{
 		Type:     "bug",
-		Message:  "某個完全無法 grep 到的描述",
+		Message:  "something broken",
 		RepoPath: repoDir,
-		Keywords: []string{"完全不會命中"},
-	})
+	}
+
+	// First call -- should hit the LLM.
+	resp1, err := engine.Diagnose(context.Background(), input)
 	if err != nil {
-		t.Fatalf("Diagnose failed: %v", err)
+		t.Fatalf("first Diagnose failed: %v", err)
 	}
-	if mock.calls != 3 {
-		t.Errorf("expected 3 LLM calls (suggest + pick + diagnose), got %d", mock.calls)
+	if mock.calls != 1 {
+		t.Errorf("expected 1 call after first Diagnose, got %d", mock.calls)
 	}
-	if resp.Summary != "found it in handler" {
-		t.Errorf("unexpected summary: %s", resp.Summary)
+
+	// Second call -- should be cached.
+	resp2, err := engine.Diagnose(context.Background(), input)
+	if err != nil {
+		t.Fatalf("second Diagnose failed: %v", err)
+	}
+	if mock.calls != 1 {
+		t.Errorf("expected still 1 call after second Diagnose (cache hit), got %d", mock.calls)
+	}
+
+	if resp1.Summary != resp2.Summary {
+		t.Errorf("cached response differs: %q vs %q", resp1.Summary, resp2.Summary)
 	}
 }
 
-// --- parseStringArray tests ---
+// TestEngine_FindFiles verifies the grep-only lite mode.
+func TestEngine_FindFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	repoDir := initGitRepo(t, map[string]string{
+		"src/auth/login.go":  "package auth\n\nfunc Login() {}",
+		"src/models/user.go": "package models\n\ntype User struct{}",
+	})
+
+	mock := &mockConvProvider{} // Should not be called.
+	engine := NewEngine(mock, EngineConfig{
+		MaxFiles: 10,
+		CacheTTL: 5 * time.Minute,
+	})
+	defer engine.Stop()
+
+	refs := engine.FindFiles(DiagnoseInput{
+		Type:     "bug",
+		Message:  "login issue",
+		RepoPath: repoDir,
+		Keywords: []string{"Login"},
+	})
+
+	if len(refs) == 0 {
+		t.Fatal("expected at least 1 file ref")
+	}
+
+	found := false
+	for _, r := range refs {
+		if r.Path == "src/auth/login.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected src/auth/login.go in results, got: %v", refs)
+	}
+
+	if mock.calls != 0 {
+		t.Errorf("FindFiles should not call LLM, but got %d calls", mock.calls)
+	}
+}
+
+// --- parseStringArray tests (kept from original) ---
 
 func TestParseStringArray(t *testing.T) {
 	tests := []struct {
@@ -177,24 +205,4 @@ func TestParseStringArray(t *testing.T) {
 			}
 		})
 	}
-}
-
-// --- Mock ---
-
-// sequentialMock returns different responses for each successive call.
-type sequentialMock struct {
-	calls     int
-	responses []llm.DiagnoseResponse
-	lastReq   llm.DiagnoseRequest
-}
-
-func (m *sequentialMock) Name() string { return "sequential-mock" }
-func (m *sequentialMock) Diagnose(ctx context.Context, req llm.DiagnoseRequest) (llm.DiagnoseResponse, error) {
-	m.lastReq = req
-	idx := m.calls
-	m.calls++
-	if idx < len(m.responses) {
-		return m.responses[idx], nil
-	}
-	return llm.DiagnoseResponse{Summary: "fallback"}, nil
 }

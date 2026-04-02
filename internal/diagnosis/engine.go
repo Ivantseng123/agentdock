@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
+	"time"
 
 	"slack-issue-bot/internal/llm"
 )
 
+// DiagnoseInput holds the parameters for a diagnosis request.
 type DiagnoseInput struct {
 	Type     string
 	Message  string
@@ -21,162 +21,104 @@ type DiagnoseInput struct {
 	Prompt   llm.PromptOptions
 }
 
+// EngineConfig configures the diagnosis engine.
+type EngineConfig struct {
+	MaxFiles  int
+	MaxTurns  int
+	MaxTokens int
+	CacheTTL  time.Duration
+}
+
+// Engine runs agent-loop diagnosis against a repository.
 type Engine struct {
-	llmProvider llm.Provider
-	maxFiles    int
+	chain     llm.ConversationProvider
+	tools     []Tool
+	cache     *Cache
+	maxFiles  int
+	maxTurns  int
+	maxTokens int
 }
 
-func NewEngine(provider llm.Provider, maxFiles int) *Engine {
-	if maxFiles <= 0 {
-		maxFiles = 10
+// NewEngine creates a diagnosis engine with the given conversation provider
+// and configuration.
+func NewEngine(chain llm.ConversationProvider, cfg EngineConfig) *Engine {
+	if cfg.MaxFiles <= 0 {
+		cfg.MaxFiles = 10
 	}
+	if cfg.MaxTurns <= 0 {
+		cfg.MaxTurns = 5
+	}
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = 100000
+	}
+	if cfg.CacheTTL <= 0 {
+		cfg.CacheTTL = 30 * time.Minute
+	}
+
 	return &Engine{
-		llmProvider: provider,
-		maxFiles:    maxFiles,
+		chain:     chain,
+		tools:     AllTools(),
+		cache:     NewCache(cfg.CacheTTL),
+		maxFiles:  cfg.MaxFiles,
+		maxTurns:  cfg.MaxTurns,
+		maxTokens: cfg.MaxTokens,
 	}
 }
 
-// Diagnose runs an agent-style loop to explore the repo and produce a diagnosis.
-//
-// Flow:
-//  1. Try keyword grep (free, no LLM call)
-//  2. If grep misses → ask LLM to suggest search terms → grep those
-//  3. If still no files → ask LLM to pick from repo file tree
-//  4. Read selected files → ask LLM for final diagnosis
+// Diagnose runs the agent-loop diagnosis. Results are cached by message + prompt.
 func (e *Engine) Diagnose(ctx context.Context, input DiagnoseInput) (llm.DiagnoseResponse, error) {
-	// --- Step 1: keyword grep (free) ---
-	files, _ := e.grepFiles(input.RepoPath, input.Keywords)
-	if len(files) > 0 {
-		slog.Info("agent: keyword grep hit", "files", len(files))
-		return e.diagnoseWithFiles(ctx, input, files)
+	cacheKey := e.cache.Key(input.RepoPath, "", input.Message,
+		input.Prompt.Language, input.Prompt.ExtraRules)
+
+	if cached, ok := e.cache.Get(cacheKey); ok {
+		slog.Info("diagnosis cache hit", "repo", input.RepoPath)
+		return cached, nil
 	}
 
-	// --- Step 2: ask LLM for search terms → grep those ---
-	slog.Info("agent: keyword grep miss, asking LLM for search terms")
-	searchTerms, err := e.llmSuggestSearchTerms(ctx, input)
-	if err != nil {
-		slog.Warn("agent: LLM search term suggestion failed", "error", err)
-	} else if len(searchTerms) > 0 {
-		slog.Info("agent: LLM suggested search terms", "terms", searchTerms)
-		files, _ = e.grepFiles(input.RepoPath, searchTerms)
-		if len(files) > 0 {
-			slog.Info("agent: LLM-suggested grep hit", "files", len(files))
-			return e.diagnoseWithFiles(ctx, input, files)
-		}
-	}
-
-	// --- Step 3: no grep hits at all → LLM picks from file tree ---
-	slog.Info("agent: grep still empty, asking LLM to pick from file tree")
-	tree := e.repoTree(input.RepoPath)
-	picked, err := e.llmPickFiles(ctx, input, tree)
-	if err != nil {
-		slog.Warn("agent: LLM file picker failed", "error", err)
-		// Last resort: diagnose with tree as context
-		return e.diagnoseWithTree(ctx, input, tree)
-	}
-
-	slog.Info("agent: LLM picked files", "files", picked)
-	return e.diagnoseWithFiles(ctx, input, picked)
-}
-
-// --- Agent turns ---
-
-// llmSuggestSearchTerms asks the LLM to translate/extract code-searchable keywords from the message.
-func (e *Engine) llmSuggestSearchTerms(ctx context.Context, input DiagnoseInput) ([]string, error) {
-	prompt := fmt.Sprintf(`A user reported the following in a Slack channel:
-
-"%s"
-
-This is a %s report for a software codebase. The message may be in a non-English language.
-Your job: suggest 5-10 English keywords or code identifiers that are likely to appear in the source code related to this report.
-
-Think about: class names, function names, variable names, file names, module names, database table names, API endpoints, etc.
-
-Return ONLY a JSON array of strings. Example: ["reinsurance", "cession", "PolicyResult", "calculatePremium"]`, input.Message, input.Type)
-
-	req := llm.DiagnoseRequest{
-		Type:    input.Type,
-		Message: prompt,
-		Prompt:  input.Prompt,
-	}
-
-	resp, err := e.llmProvider.Diagnose(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return parseStringArray(resp.Summary)
-}
-
-// llmPickFiles asks the LLM to select relevant files from the repo tree.
-func (e *Engine) llmPickFiles(ctx context.Context, input DiagnoseInput, tree string) ([]string, error) {
-	prompt := fmt.Sprintf(`A user reported the following:
-
-"%s"
-
-Below is the file listing of the repository. Select the files most likely related to this %s report.
-
-Return ONLY a JSON array of file paths. Pick at most %d files. Focus on source code files.
-
-Repository files:
-%s`, input.Message, input.Type, e.maxFiles, tree)
-
-	req := llm.DiagnoseRequest{
-		Type:    input.Type,
-		Message: prompt,
-		Prompt:  input.Prompt,
-	}
-
-	resp, err := e.llmProvider.Diagnose(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return parseStringArray(resp.Summary)
-}
-
-// diagnoseWithFiles reads the given files and sends them to the LLM for final diagnosis.
-func (e *Engine) diagnoseWithFiles(ctx context.Context, input DiagnoseInput, files []string) (llm.DiagnoseResponse, error) {
-	repoFiles := e.readFiles(input.RepoPath, files)
-	req := llm.DiagnoseRequest{
+	resp, err := RunLoop(ctx, e.chain, e.tools, LoopInput{
 		Type:      input.Type,
 		Message:   input.Message,
-		RepoFiles: repoFiles,
+		RepoPath:  input.RepoPath,
 		Prompt:    input.Prompt,
-	}
-	resp, err := e.llmProvider.Diagnose(ctx, req)
+		MaxTurns:  e.maxTurns,
+		MaxTokens: e.maxTokens,
+	})
 	if err != nil {
 		return llm.DiagnoseResponse{}, fmt.Errorf("diagnosis: %w", err)
 	}
+
+	e.cache.Set(cacheKey, resp)
 	return resp, nil
 }
 
-// diagnoseWithTree sends the file tree (not contents) as last-resort context.
-func (e *Engine) diagnoseWithTree(ctx context.Context, input DiagnoseInput, tree string) (llm.DiagnoseResponse, error) {
-	repoFiles := []llm.File{{
-		Path:    "REPO_FILE_LIST.txt",
-		Content: "This is the repository file listing (not file contents). Use file names and paths to infer which files are related.\n\n" + tree,
-	}}
-	req := llm.DiagnoseRequest{
-		Type:      input.Type,
-		Message:   input.Message,
-		RepoFiles: repoFiles,
-		Prompt:    input.Prompt,
+// FindFiles returns relevant file references without calling the LLM.
+// Used in lite mode to produce a handoff spec (grep-only).
+func (e *Engine) FindFiles(input DiagnoseInput) []llm.FileRef {
+	files, _ := grepFiles(input.RepoPath, input.Keywords, e.maxFiles)
+	var refs []llm.FileRef
+	for _, f := range files {
+		refs = append(refs, llm.FileRef{Path: f, Description: "matched keywords from Slack message"})
 	}
-	resp, err := e.llmProvider.Diagnose(ctx, req)
-	if err != nil {
-		return llm.DiagnoseResponse{}, fmt.Errorf("diagnosis with tree: %w", err)
-	}
-	return resp, nil
+	return refs
 }
 
-// --- Tool implementations (executed by the engine, not the LLM) ---
+// Stop terminates the cache cleanup goroutine.
+func (e *Engine) Stop() {
+	if e.cache != nil {
+		e.cache.Stop()
+	}
+}
+
+// --- Helpers ---
 
 // grepFiles searches the repo for files matching any of the given terms.
-func (e *Engine) grepFiles(repoPath string, terms []string) ([]string, error) {
+func grepFiles(repoPath string, terms []string, maxFiles int) ([]string, error) {
+	if maxFiles <= 0 {
+		maxFiles = 10
+	}
+
 	seen := make(map[string]int)
 	for _, term := range terms {
-		// Case-insensitive grep
 		cmd := exec.Command("git", "-C", repoPath, "grep", "-rli", "--no-color", term)
 		out, err := cmd.Output()
 		if err != nil {
@@ -207,7 +149,7 @@ func (e *Engine) grepFiles(repoPath string, terms []string) ([]string, error) {
 
 	var result []string
 	for i, f := range files {
-		if i >= e.maxFiles {
+		if i >= maxFiles {
 			break
 		}
 		result = append(result, f.path)
@@ -215,82 +157,17 @@ func (e *Engine) grepFiles(repoPath string, terms []string) ([]string, error) {
 	return result, nil
 }
 
-// readFiles reads file contents from disk.
-func (e *Engine) readFiles(repoPath string, files []string) []llm.File {
-	var result []llm.File
-	for _, f := range files {
-		fullPath := filepath.Join(repoPath, f)
-		content, err := os.ReadFile(fullPath)
-		if err != nil {
-			slog.Debug("skipping unreadable file", "path", f, "error", err)
-			continue
-		}
-		lines := strings.Split(string(content), "\n")
-		if len(lines) > 200 {
-			lines = lines[:200]
-		}
-		result = append(result, llm.File{
-			Path:    f,
-			Content: strings.Join(lines, "\n"),
-		})
-	}
-	return result
-}
-
-// repoTree generates a file listing via `git ls-files`.
-func (e *Engine) repoTree(repoPath string) string {
-	cmd := exec.Command("git", "-C", repoPath, "ls-files")
-	out, err := cmd.Output()
-	if err == nil && len(out) > 0 {
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		if len(lines) > 500 {
-			lines = append(lines[:500], fmt.Sprintf("... and %d more files", len(lines)-500))
-		}
-		return strings.Join(lines, "\n")
-	}
-
-	var lines []string
-	filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		rel, _ := filepath.Rel(repoPath, path)
-		if shouldSkipFile(rel) {
-			return nil
-		}
-		lines = append(lines, rel)
-		if len(lines) >= 500 {
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	return strings.Join(lines, "\n")
-}
-
-// FindFiles returns relevant file references without calling the LLM.
-// Used in lite mode to produce a handoff spec.
-func (e *Engine) FindFiles(input DiagnoseInput) []llm.FileRef {
-	files, _ := e.grepFiles(input.RepoPath, input.Keywords)
-	var refs []llm.FileRef
-	for _, f := range files {
-		refs = append(refs, llm.FileRef{Path: f, Description: "matched keywords from Slack message"})
-	}
-	return refs
-}
-
-// --- Helpers ---
-
 // parseStringArray extracts a JSON string array from LLM text output.
 func parseStringArray(text string) ([]string, error) {
 	text = strings.TrimSpace(text)
 	var arr []string
 
-	// Direct parse
+	// Direct parse.
 	if err := json.Unmarshal([]byte(text), &arr); err == nil && len(arr) > 0 {
 		return arr, nil
 	}
 
-	// Extract from code block
+	// Extract from code block.
 	if idx := strings.Index(text, "```"); idx != -1 {
 		start := idx + 3
 		if nl := strings.Index(text[start:], "\n"); nl != -1 {
@@ -303,7 +180,7 @@ func parseStringArray(text string) ([]string, error) {
 		}
 	}
 
-	// Find array anywhere
+	// Find array anywhere.
 	if idx := strings.Index(text, "["); idx != -1 {
 		if end := strings.LastIndex(text, "]"); end > idx {
 			if err := json.Unmarshal([]byte(text[idx:end+1]), &arr); err == nil && len(arr) > 0 {
