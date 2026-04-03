@@ -20,16 +20,17 @@ const pendingTimeout = 1 * time.Minute
 
 // pendingIssue stores context between the reaction event and user selections.
 type pendingIssue struct {
-	Event        slackclient.ReactionEvent
-	ReactionCfg  config.ReactionConfig
-	ChannelCfg   config.ChannelConfig
-	Message      string
-	Reporter     string
-	ChannelName  string
-	ThreadTS     string // thread parent = the original reacted message
-	SelectorTS   string // timestamp of the current selector message
-	SelectedRepo string // set after repo selection
-	Phase        string // "repo", "branch", or "repo_search"
+	Event          slackclient.ReactionEvent
+	ReactionCfg    config.ReactionConfig
+	ChannelCfg     config.ChannelConfig
+	Message        string
+	Reporter       string
+	ChannelName    string
+	ThreadTS       string // thread parent = the original reacted message
+	SelectorTS     string // timestamp of the current selector message
+	SelectedRepo   string // set after repo selection
+	SelectedBranch string // set after branch selection
+	Phase          string // "repo", "branch", "repo_search", or "description"
 }
 
 type Workflow struct {
@@ -225,7 +226,7 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS str
 // afterRepoSelected is called once a repo is determined. Shows branch selector if enabled.
 func (w *Workflow) afterRepoSelected(pi *pendingIssue) {
 	if !pi.ChannelCfg.IsBranchSelectEnabled() {
-		w.createIssue(pi, "")
+		w.showDescriptionPrompt(pi)
 		return
 	}
 
@@ -242,17 +243,16 @@ func (w *Workflow) afterRepoSelected(pi *pendingIssue) {
 		branches, err = w.repoCache.ListBranches(repoPath)
 		if err != nil {
 			slog.Warn("failed to list branches, skipping selection", "error", err)
-			w.createIssue(pi, "")
+			w.showDescriptionPrompt(pi)
 			return
 		}
 	}
 
 	if len(branches) <= 1 {
-		branch := ""
 		if len(branches) == 1 {
-			branch = branches[0]
+			pi.SelectedBranch = branches[0]
 		}
-		w.createIssue(pi, branch)
+		w.showDescriptionPrompt(pi)
 		return
 	}
 
@@ -262,7 +262,7 @@ func (w *Workflow) afterRepoSelected(pi *pendingIssue) {
 		"branch_select", branches, pi.ThreadTS)
 	if err != nil {
 		slog.Warn("failed to show branch selector, using default", "error", err)
-		w.createIssue(pi, "")
+		w.showDescriptionPrompt(pi)
 		return
 	}
 
@@ -271,7 +271,88 @@ func (w *Workflow) afterRepoSelected(pi *pendingIssue) {
 }
 
 func (w *Workflow) afterBranchSelected(pi *pendingIssue, branch string) {
-	w.createIssue(pi, branch)
+	pi.SelectedBranch = branch
+	w.showDescriptionPrompt(pi)
+}
+
+// showDescriptionPrompt posts buttons to let the reporter add extra context or skip.
+func (w *Workflow) showDescriptionPrompt(pi *pendingIssue) {
+	pi.Phase = "description"
+	selectorTS, err := w.slack.PostSelector(pi.Event.ChannelID,
+		":memo: 需要補充說明嗎？（補充後可讓分析更精準）",
+		"description_action", []string{"補充說明", "跳過"}, pi.ThreadTS)
+	if err != nil {
+		slog.Warn("failed to show description prompt, proceeding", "error", err)
+		w.createIssue(pi, pi.SelectedBranch)
+		return
+	}
+	pi.SelectorTS = selectorTS
+	w.storePending(selectorTS, pi)
+}
+
+// HandleDescriptionAction is called when the user clicks "補充說明" or "跳過".
+func (w *Workflow) HandleDescriptionAction(channelID, value, selectorMsgTS, triggerID string) {
+	w.mu.Lock()
+	pi, ok := w.pending[selectorMsgTS]
+	if !ok {
+		w.mu.Unlock()
+		slog.Warn("no pending issue for description action", "ts", selectorMsgTS)
+		return
+	}
+
+	if value == "跳過" {
+		delete(w.pending, selectorMsgTS)
+		w.mu.Unlock()
+		w.slack.UpdateMessage(channelID, selectorMsgTS, ":fast_forward: 跳過補充說明")
+		w.createIssue(pi, pi.SelectedBranch)
+		return
+	}
+
+	// "補充說明" — open modal. Keep pending for modal submission.
+	w.mu.Unlock()
+
+	if triggerID == "" {
+		slog.Warn("no trigger_id for modal, skipping description")
+		w.mu.Lock()
+		delete(w.pending, selectorMsgTS)
+		w.mu.Unlock()
+		w.createIssue(pi, pi.SelectedBranch)
+		return
+	}
+
+	err := w.slack.OpenDescriptionModal(triggerID, selectorMsgTS)
+	if err != nil {
+		slog.Warn("failed to open description modal", "error", err)
+		w.mu.Lock()
+		delete(w.pending, selectorMsgTS)
+		w.mu.Unlock()
+		w.createIssue(pi, pi.SelectedBranch)
+	}
+}
+
+// HandleDescriptionSubmit is called when the modal is submitted.
+func (w *Workflow) HandleDescriptionSubmit(selectorMsgTS, extraText string) {
+	w.mu.Lock()
+	pi, ok := w.pending[selectorMsgTS]
+	if ok {
+		delete(w.pending, selectorMsgTS)
+	}
+	w.mu.Unlock()
+
+	if !ok {
+		slog.Warn("no pending issue for modal submit", "ts", selectorMsgTS)
+		return
+	}
+
+	w.slack.UpdateMessage(pi.Event.ChannelID, selectorMsgTS,
+		fmt.Sprintf(":memo: 補充說明: %s", extraText))
+
+	if extraText != "" {
+		pi.Message += "\n\n補充說明：" + extraText
+		slog.Info("description added", "length", len(extraText))
+	}
+
+	w.createIssue(pi, pi.SelectedBranch)
 }
 
 const (

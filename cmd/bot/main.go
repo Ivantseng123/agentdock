@@ -220,7 +220,31 @@ func main() {
 							action.ActionID == "repo_search" {
 							go wf.HandleSelection(channelID, action.ActionID, value, msgTS)
 						}
+
+						if strings.HasPrefix(action.ActionID, "description_action_") {
+							go wf.HandleDescriptionAction(channelID, value, msgTS, callback.TriggerID)
+						}
 					}
+
+				case slack.InteractionTypeViewSubmission:
+					socketClient.Ack(*evt.Request)
+					// Modal submitted — extract text from description input
+					selectorMsgTS := callback.View.PrivateMetadata
+					extraText := ""
+					if block, ok := callback.View.State.Values["description_block"]; ok {
+						if input, ok := block["description_input"]; ok {
+							extraText = strings.TrimSpace(input.Value)
+						}
+					}
+					slog.Info("modal submitted", "selectorTS", selectorMsgTS, "text_len", len(extraText))
+					go wf.HandleDescriptionSubmit(selectorMsgTS, extraText)
+
+				case slack.InteractionTypeViewClosed:
+					socketClient.Ack(*evt.Request)
+					// Modal closed (user clicked "跳過" / X) — treat as skip
+					selectorMsgTS := callback.View.PrivateMetadata
+					slog.Info("modal closed", "selectorTS", selectorMsgTS)
+					go wf.HandleDescriptionSubmit(selectorMsgTS, "")
 
 				default:
 					socketClient.Ack(*evt.Request)

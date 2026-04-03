@@ -194,6 +194,39 @@ func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, 
 	return ts, nil
 }
 
+// OpenDescriptionModal opens a modal with a text input for extra description.
+// selectorMsgTS is stored as private_metadata so we can find the pending issue on submit.
+func (c *Client) OpenDescriptionModal(triggerID, selectorMsgTS string) error {
+	textInput := slack.NewPlainTextInputBlockElement(
+		slack.NewTextBlockObject(slack.PlainTextType, "輸入補充說明...", false, false),
+		"description_input",
+	)
+	textInput.Multiline = true
+
+	inputBlock := slack.NewInputBlock(
+		"description_block",
+		slack.NewTextBlockObject(slack.PlainTextType, "補充說明", false, false),
+		nil,
+		textInput,
+	)
+	inputBlock.Optional = true
+
+	modalView := slack.ModalViewRequest{
+		Type:            slack.VTModal,
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, "補充說明", false, false),
+		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "送出", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "跳過", false, false),
+		Blocks:          slack.Blocks{BlockSet: []slack.Block{inputBlock}},
+		PrivateMetadata: selectorMsgTS,
+	}
+
+	_, err := c.api.OpenView(triggerID, modalView)
+	if err != nil {
+		return fmt.Errorf("open modal: %w", err)
+	}
+	return nil
+}
+
 // UpdateMessage replaces an existing message (used to clear buttons after selection).
 func (c *Client) UpdateMessage(channelID, messageTS, text string) error {
 	_, _, _, err := c.api.UpdateMessage(channelID, messageTS,
