@@ -232,3 +232,91 @@ func TestEstimateTokens(t *testing.T) {
 		t.Errorf("expected 2, got %d", got)
 	}
 }
+
+// capturingProvider wraps another ConversationProvider to record all ChatRequests it receives.
+type capturingProvider struct {
+	inner    llm.ConversationProvider
+	requests *[]llm.ChatRequest
+}
+
+func (c *capturingProvider) Name() string { return c.inner.Name() }
+func (c *capturingProvider) Chat(ctx context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
+	*c.requests = append(*c.requests, req)
+	return c.inner.Chat(ctx, req)
+}
+
+// TestRunLoop_ImagesOnlyInFirstMessage verifies that images attached to the
+// initial user message flow through the agent loop correctly: the first user
+// message carries the images in every request (conversation history grows),
+// but no other messages (tool_result, subsequent turns) ever have images.
+func TestRunLoop_ImagesOnlyInFirstMessage(t *testing.T) {
+	grepArgs, _ := json.Marshal(map[string]string{"pattern": "Login"})
+
+	var receivedRequests []llm.ChatRequest
+	mock := &mockConvProvider{
+		responses: []llm.ChatResponse{
+			// Turn 1: tool call.
+			{
+				ToolCalls:  []llm.ToolCall{{ID: "tc_1", Name: "grep", Args: grepArgs}},
+				StopReason: llm.StopReasonToolUse,
+			},
+			// Turn 2: triage card.
+			{
+				Content:    triageJSON("found it", "high"),
+				StopReason: llm.StopReasonFinish,
+			},
+		},
+	}
+
+	capturing := &capturingProvider{inner: mock, requests: &receivedRequests}
+
+	images := []llm.ImageContent{
+		{Name: "err.png", MimeType: "image/png", Data: []byte("fakepng")},
+	}
+
+	_, err := RunLoop(context.Background(), capturing, AllTools(), LoopInput{
+		Type:     "bug",
+		Message:  "login crashes",
+		Images:   images,
+		RepoPath: t.TempDir(),
+		MaxTurns: 5,
+	})
+	if err != nil {
+		t.Fatalf("RunLoop failed: %v", err)
+	}
+
+	if len(receivedRequests) != 2 {
+		t.Fatalf("expected 2 Chat calls, got %d", len(receivedRequests))
+	}
+
+	// Count messages with images across all requests.
+	// Only the original first user message should have images.
+	imgCount := 0
+	for _, req := range receivedRequests {
+		for _, m := range req.Messages {
+			if len(m.Images) > 0 {
+				imgCount++
+			}
+		}
+	}
+	// The first user message appears in both requests (conversation history grows),
+	// so we expect it to show up with images in both. But NO other messages should have images.
+	// The first user message has images, and it's the same message in both request[0].Messages[0] and request[1].Messages[0].
+	// So imgCount should be 2 (same message seen in 2 requests).
+	if imgCount != 2 {
+		t.Errorf("expected 2 message-with-images occurrences (same first msg in 2 requests), got %d", imgCount)
+	}
+
+	// Verify that only user messages at index 0 have images (not tool_result or later messages).
+	for i, req := range receivedRequests {
+		for j, m := range req.Messages {
+			if j == 0 && m.Role == "user" {
+				if len(m.Images) == 0 {
+					t.Errorf("request %d: first user message should have images", i)
+				}
+			} else if len(m.Images) > 0 {
+				t.Errorf("request %d, message %d (role=%s): should NOT have images", i, j, m.Role)
+			}
+		}
+	}
+}
