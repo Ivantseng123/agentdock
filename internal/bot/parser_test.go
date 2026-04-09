@@ -94,7 +94,7 @@ func TestParseAgentOutput_Empty(t *testing.T) {
 func TestParseAgentOutput_TooShort(t *testing.T) {
 	_, err := ParseAgentOutput("short")
 	if err == nil {
-		t.Error("expected error on output under 50 chars")
+		t.Error("expected error on output under 10 chars")
 	}
 }
 

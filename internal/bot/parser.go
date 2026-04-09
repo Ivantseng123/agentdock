@@ -7,7 +7,7 @@ import (
 
 const (
 	resultSeparator = "===TRIAGE_RESULT==="
-	minOutputLength = 50
+	minOutputLength = 10
 )
 
 // TriageResult is the parsed result from agent output.

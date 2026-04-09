@@ -118,6 +118,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyDefaults(&cfg)
+	applyEnvOverrides(&cfg)
 	return &cfg, nil
 }
 
@@ -139,5 +140,20 @@ func applyDefaults(cfg *Config) {
 			agent.Timeout = 5 * time.Minute
 			cfg.Agents[name] = agent
 		}
+	}
+}
+
+func applyEnvOverrides(cfg *Config) {
+	if v := os.Getenv("SLACK_BOT_TOKEN"); v != "" {
+		cfg.Slack.BotToken = v
+	}
+	if v := os.Getenv("SLACK_APP_TOKEN"); v != "" {
+		cfg.Slack.AppToken = v
+	}
+	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
+		cfg.GitHub.Token = v
+	}
+	if v := os.Getenv("MANTIS_API_TOKEN"); v != "" {
+		cfg.Mantis.APIToken = v
 	}
 }

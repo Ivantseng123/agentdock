@@ -66,13 +66,9 @@ func (r *AgentRunner) runOne(ctx context.Context, agent config.AgentConfig, work
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := substitutePrompt(agent.Args, prompt)
-	cmd := exec.CommandContext(ctx, agent.Command, args...)
-	cmd.Dir = workDir
+	const maxArgLen = 32 * 1024 // 32KB safe limit for command args
 
-	// Pass GH_TOKEN so agent can use `gh issue create`
-	cmd.Env = append(os.Environ(), fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
-
+	// Check if prompt fits in args or needs stdin fallback.
 	hasPlaceholder := false
 	for _, a := range agent.Args {
 		if strings.Contains(a, "{prompt}") {
@@ -80,7 +76,28 @@ func (r *AgentRunner) runOne(ctx context.Context, agent config.AgentConfig, work
 			break
 		}
 	}
-	if !hasPlaceholder {
+
+	useStdin := !hasPlaceholder || len(prompt) >= maxArgLen
+	var args []string
+	if useStdin && hasPlaceholder {
+		// Prompt too large for args — drop the placeholder arg, use stdin instead.
+		for _, a := range agent.Args {
+			if !strings.Contains(a, "{prompt}") {
+				args = append(args, a)
+			}
+		}
+		slog.Info("prompt too large for args, using stdin", "prompt_len", len(prompt))
+	} else {
+		args = substitutePrompt(agent.Args, prompt)
+	}
+
+	cmd := exec.CommandContext(ctx, agent.Command, args...)
+	cmd.Dir = workDir
+
+	// Pass GH_TOKEN so agent can use `gh issue create`
+	cmd.Env = append(os.Environ(), fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
+
+	if useStdin {
 		cmd.Stdin = strings.NewReader(prompt)
 	}
 

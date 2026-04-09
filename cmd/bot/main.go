@@ -96,6 +96,15 @@ func main() {
 	)
 	sm := socketmode.New(api)
 
+	// Resolve bot's own user ID for auto-bind filtering.
+	botUserID := ""
+	if authResp, err := api.AuthTest(); err == nil {
+		botUserID = authResp.UserID
+		slog.Info("bot identity resolved", "userID", botUserID)
+	} else {
+		slog.Warn("failed to resolve bot identity, auto-bind may not filter correctly", "error", err)
+	}
+
 	slog.Info("starting bot v2 (agent architecture)")
 
 	go func() {
@@ -117,11 +126,11 @@ func main() {
 						Text:      inner.Text,
 					})
 				case *slackevents.MemberJoinedChannelEvent:
-					if cfg.AutoBind {
+					if cfg.AutoBind && inner.User == botUserID {
 						wf.RegisterChannel(inner.Channel)
 					}
 				case *slackevents.MemberLeftChannelEvent:
-					if cfg.AutoBind {
+					if cfg.AutoBind && inner.User == botUserID {
 						wf.UnregisterChannel(inner.Channel)
 					}
 				}
@@ -132,13 +141,15 @@ func main() {
 				if !ok || cmd.Command != "/triage" {
 					continue
 				}
-				handler.HandleTrigger(slackclient.TriggerEvent{
-					ChannelID: cmd.ChannelID,
-					ThreadTS:  cmd.ChannelID,
-					TriggerTS: "",
-					UserID:    cmd.UserID,
-					Text:      cmd.Text,
-				})
+				// Slash commands don't reliably carry thread_ts.
+				// If no thread context, tell user to use @mention instead.
+				if cmd.ChannelID == "" {
+					continue
+				}
+				// Use @bot mention for thread-based triage.
+				// /triage without thread context posts a help message.
+				slackClient.PostMessage(cmd.ChannelID,
+					":point_right: 請在對話串中使用 `@bot` 來觸發 triage，或直接在 thread 中 mention bot。\n`/triage` 指令目前不支援 thread 偵測。", "")
 
 			case socketmode.EventTypeInteractive:
 				cb, ok := evt.Data.(slack.InteractionCallback)
