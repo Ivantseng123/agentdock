@@ -74,8 +74,9 @@ func TestCacheDifferentKeys(t *testing.T) {
 	k3 := c.Key("org/repo", "dev", "bug in login", "en", nil, 0)
 	k4 := c.Key("org/repo", "main", "bug in login", "zh-TW", nil, 0)
 	k5 := c.Key("org/repo", "main", "bug in login", "en", []string{"rule1"}, 0)
+	k6 := c.Key("org/repo", "main", "bug in login", "en", nil, 3) // different image count
 
-	keys := []string{k1, k2, k3, k4, k5}
+	keys := []string{k1, k2, k3, k4, k5, k6}
 	seen := make(map[string]bool)
 	for _, k := range keys {
 		if seen[k] {
