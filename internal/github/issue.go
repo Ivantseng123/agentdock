@@ -52,9 +52,13 @@ func (ic *IssueClient) CreateIssue(ctx context.Context, owner, repo string, inpu
 }
 
 func buildTitle(input IssueInput) string {
-	title := input.Message
-	if idx := strings.IndexAny(title, "\n\r"); idx != -1 {
-		title = title[:idx]
+	title := input.Diagnosis.Summary
+	if title == "" {
+		// Fallback: first line of the original message
+		title = input.Message
+		if idx := strings.IndexAny(title, "\n\r"); idx != -1 {
+			title = title[:idx]
+		}
 	}
 	if len(title) > 80 {
 		title = title[:77] + "..."
@@ -127,10 +131,17 @@ func writeFileRef(sb *strings.Builder, f llm.FileRef, owner, repo, branch string
 		return
 	}
 
-	// Extract just the filename for display
+	// Strip trailing slash, then extract display name.
+	// Directory paths (e.g. "src/config/") get a "/" suffix so readers know it's a dir.
+	isDir := strings.HasSuffix(path, "/")
+	path = strings.TrimRight(path, "/")
+
 	fileName := path
 	if idx := strings.LastIndex(path, "/"); idx != -1 {
 		fileName = path[idx+1:]
+	}
+	if isDir {
+		fileName += "/"
 	}
 
 	if owner != "" && repo != "" {
@@ -138,7 +149,11 @@ func writeFileRef(sb *strings.Builder, f llm.FileRef, owner, repo, branch string
 		if ref == "" {
 			ref = "main"
 		}
-		url := fmt.Sprintf("https://github.com/%s/%s/blob/%s/%s", owner, repo, ref, path)
+		urlType := "blob"
+		if isDir {
+			urlType = "tree"
+		}
+		url := fmt.Sprintf("https://github.com/%s/%s/%s/%s/%s", owner, repo, urlType, ref, path)
 		if f.LineNumber > 0 {
 			url += fmt.Sprintf("#L%d", f.LineNumber)
 		}
