@@ -1,20 +1,21 @@
-# react2issue
+# react2issue v2
 
-Go service that turns chat reactions into structured GitHub issues with AI-powered codebase triage. Core value: lowering the barrier for non-engineers to create useful issues from Slack conversations.
+Go service that turns Slack conversations into structured GitHub issues with AI-powered codebase triage. Triggered by `@bot` mentions or `/triage` slash commands in threads. Core value: lowering the barrier for non-engineers to create useful issues from Slack conversations.
 
 ## Architecture
 
 ```
-Slack reaction → Socket Mode → Handler (dedup + rate limit + semaphore)
-  → Workflow (repo/branch selection via thread buttons)
-    → Diagnosis Engine:
-        Pre-grep (original keywords) → Agent Loop (LLM picks tools) → Triage Card
-        Tools: grep, read_file, list_files, read_context, search_code, git_log
+@bot or /triage in thread → Socket Mode → Handler (dedup + rate limit + semaphore)
+  → Workflow (thread context read → repo/branch selection via buttons)
+    → CLI Agent (claude/opencode/codex/gemini):
+        Spawn agent with prompt (thread context + repo path)
+        Agent explores codebase using its own tools
+        Returns markdown issue body + JSON metadata
     → Rejection/Degradation:
         confidence=low → reject (wrong repo)
         files=0 or questions>=5 → create issue WITHOUT triage section
         otherwise → create issue WITH full triage
-    → GitHub Issue (clickable file links) → Post URL in thread
+    → GitHub Issue (Go-injected header + agent markdown) → Post URL in thread
 ```
 
 ## Project Structure
@@ -22,68 +23,50 @@ Slack reaction → Socket Mode → Handler (dedup + rate limit + semaphore)
 ```
 cmd/bot/main.go              # Entry point, wires deps, Socket Mode event loop
 internal/
-  config/config.go           # YAML config with env overrides, per-provider timeout
-  bot/workflow.go            # Orchestrator: reaction → thread interaction → rejection/degradation → issue
-  diagnosis/
-    engine.go                # Engine wrapper: agent loop + cache + lite mode (FindFiles)
-    loop.go                  # Agent loop: pre-grep → LLM tool calls → forced finish → triage card
-    tools.go                 # 6 tools: grep, read_file, list_files, read_context, search_code, git_log
-    cache.go                 # In-memory response cache with TTL
-  llm/
-    provider.go              # ConversationProvider interface, ChatFallbackChain, DiagnoseResponse
-    cli.go                   # CLI provider (claude --print, etc.), JSON-in-text tool simulation
-    claude.go                # Anthropic Messages API with native tool use
-    openai.go                # OpenAI-compatible API with function calling
-    ollama.go                # Ollama local LLM with JSON-in-text tool simulation
-    prompt.go                # Agent system prompt, tool descriptions, CLI tool suffix
+  config/config.go           # YAML config: agents, channels, prompt, rate limits
+  bot/
+    workflow.go              # Orchestrator: trigger → interact → spawn agent → parse → issue
+    agent.go                 # AgentRunner: spawn CLI agent with fallback chain
+    parser.go                # Parse agent output (markdown + ===TRIAGE_METADATA=== + JSON)
+    prompt.go                # Build minimal user prompt for CLI agent
+    enrich.go                # Expand Mantis URLs in messages
   slack/
-    client.go                # PostMessage/PostSelector/PostExternalSelector with thread_ts
-    handler.go               # Dedup, rate limiting, bounded concurrency, messageDedup
+    client.go                # PostMessage/PostSelector/FetchThreadContext/DownloadAttachments
+    handler.go               # TriggerEvent dedup, rate limiting, bounded concurrency
   github/
-    issue.go                 # FormatIssueBody with GitHub file permalinks
+    issue.go                 # CreateIssue(ctx, owner, repo, title, body, labels)
     repo.go                  # RepoCache: full clone, fetch, branch list, checkout
     discovery.go             # GitHub API repo discovery with cache (auto-bind)
+  mantis/                    # Mantis bug tracker URL enrichment
 ```
 
 ## Key Design Decisions
 
 ### Tool positioning
-This is a **structuring tool**, not a diagnosis tool. The core value is turning Slack conversations into formatted issues — AI triage is a bonus. Even when AI can't find related files, the issue (message + channel + reporter + repo) still has value.
+This is a **structuring tool**, not a diagnosis tool. The core value is turning Slack conversations into formatted issues — AI triage is a bonus.
+
+### CLI Agent Delegation (v2)
+Instead of implementing a custom agent loop with tools, the bot spawns external CLI agents (claude, opencode, codex, gemini) that use their own built-in tools to explore the codebase. The bot sends a minimal prompt with thread context and repo path, and parses the structured output.
+
+### Multi-Agent Fallback
+Agents are configured in YAML. If the active agent fails (timeout, not found, error), the bot tries the next agent in the fallback chain.
+
+### Output Format
+Agent output is split by `===TRIAGE_METADATA===`: markdown body (used as issue content) + JSON metadata (issue_type, confidence, files, suggested_title). The parser uses the last occurrence of the separator.
 
 ### Rejection vs Degradation
-- `confidence=low` → reject (likely wrong repo or completely irrelevant)
-- `files=0` or `open_questions>=5` but confidence not low → create issue, skip AI triage section
-- Normal results → create issue with full AI triage
+- `confidence=low` → reject (likely wrong repo)
+- `files=0` or `open_questions>=5` → create issue, skip triage
+- Normal → create issue with full triage
 
-### Agent Loop Diagnosis
-Pre-grep with original keywords (catches non-English terms), then LLM-driven multi-turn loop:
-1. LLM sees pre-grep results + available tools
-2. LLM calls tools (grep, read_file, search_code, etc.)
-3. Engine executes tools locally, returns results
-4. Loop until LLM finishes or max_turns reached
-5. Forced finish if turn limit hit
-
-### Triage Card Output
-LLM is instructed to NOT guess field names, variable names, or UI positions. Output:
-- Each file listed once (no duplicates), with relevance description
-- Direction gives high-level guidance, not specific code
-- Existing implementations mentioned as "reference" not "instructions"
-- Confidence level (low/medium/high)
-
-### CLI Provider (JSON-in-text simulation)
-Claude/OpenAI use native tool use APIs. CLI/Ollama providers embed tool schemas in the system prompt and parse `{"tool": "...", "args": {...}}` JSON from text responses. Safety net: if LLM outputs raw triage card JSON (no finish wrapper), parser detects `"summary"` field and treats it as finish.
-
-### Thread-Based Interaction
-All bot messages reply in the original message's thread via `thread_ts`.
+### Thread-Only, Thread-Context
+Bot only operates in threads. Reads all thread messages before the trigger to build context. Agent decides issue type (bug/feature/improvement/question) from context.
 
 ### Auto-bind
 Bot auto-registers when joining a channel. No static channel config needed.
 
 ## Lessons Learned
 
-- **CLI timeout**: `claude --print` takes 1-3 min. Per-provider `timeout: 5m` required.
-- **CLI ignores tool format**: Must strongly enforce JSON-only output in prompt with negative examples.
-- **Pre-grep is essential**: LLM tends to translate to English before searching, missing non-English keyword hits. Pre-grep with original terms solves this.
 - **Slack `invalid_blocks`**: Don't combine `MsgOptionMetadata` with `MsgOptionBlocks`.
 - **Full clone required**: Shallow clone can't list branches. Use `fetch --all --prune`.
 - **Reporter tag**: Don't use `@username` — Slack/GitHub names differ. Plain text only.
@@ -91,7 +74,7 @@ Bot auto-registers when joining a channel. No static channel config needed.
 ## Testing
 
 ```bash
-go test ./...   # 76 tests
+go test ./...   # 69 tests
 ```
 
 ## Build & Run
