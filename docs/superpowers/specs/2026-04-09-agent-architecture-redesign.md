@@ -495,12 +495,13 @@ max_thread_messages: 50
 
 # Rate limiting
 rate_limit:
-  per_user: 5         # max triggers per user per minute
-  per_channel: 10     # max triggers per channel per minute
+  per_user: 5         # max triggers per user per window
+  per_channel: 10     # max triggers per channel per window
+  window: 1m          # rate limit window duration
 
 semaphore_timeout: 30s
 
-# Mantis (optional, same structure as v1)
+# Mantis (optional, moved from integrations.mantis to top-level)
 mantis:
   base_url: https://mantis.example.com
   api_token: mantis-local-token
@@ -516,7 +517,7 @@ repo_cache:
 
 ### Config Migration
 
-When loading config, if the `reactions` key is present, log a warning: "v1 config detected — reactions, llm, and diagnosis sections are no longer used in v2. See migration guide." This provides a helpful error for users upgrading from v1.
+When loading config, if the `reactions` or `integrations` key is present, log a warning: "v1 config detected — reactions, llm, diagnosis, and integrations sections are no longer used in v2. Note: integrations.mantis has moved to top-level mantis." This provides a helpful error for users upgrading from v1.
 
 Default values in YAML for local testing. In production, ConfigMap overrides.
 
