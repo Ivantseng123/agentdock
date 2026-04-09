@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -12,7 +13,8 @@ import (
 )
 
 type AgentRunner struct {
-	agents []config.AgentConfig
+	agents      []config.AgentConfig
+	githubToken string
 }
 
 func NewAgentRunner(agents []config.AgentConfig) *AgentRunner {
@@ -34,7 +36,9 @@ func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 			chain = append(chain, agent)
 		}
 	}
-	return NewAgentRunner(chain)
+	runner := NewAgentRunner(chain)
+	runner.githubToken = cfg.GitHub.Token
+	return runner
 }
 
 func (r *AgentRunner) Run(ctx context.Context, workDir, prompt string) (string, error) {
@@ -63,6 +67,9 @@ func (r *AgentRunner) runOne(ctx context.Context, agent config.AgentConfig, work
 	args := substitutePrompt(agent.Args, prompt)
 	cmd := exec.CommandContext(ctx, agent.Command, args...)
 	cmd.Dir = workDir
+
+	// Pass GH_TOKEN so agent can use `gh issue create`
+	cmd.Env = append(os.Environ(), fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
 
 	hasPlaceholder := false
 	for _, a := range agent.Args {

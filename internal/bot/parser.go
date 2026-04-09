@@ -1,138 +1,74 @@
 package bot
 
 import (
-	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
 const (
-	metadataSeparator = "===TRIAGE_METADATA==="
-	maxBodyLength     = 65000
-	minOutputLength   = 50
-	maxTitleLength    = 80
+	resultSeparator = "===TRIAGE_RESULT==="
+	minOutputLength = 50
 )
 
-type AgentMetadata struct {
-	IssueType      string    `json:"issue_type"`
-	Confidence     string    `json:"confidence"`
-	Files          []FileRef `json:"files"`
-	OpenQuestions  []string  `json:"open_questions"`
-	SuggestedTitle string    `json:"suggested_title"`
+// TriageResult is the parsed result from agent output.
+type TriageResult struct {
+	Status   string // "CREATED", "REJECTED", "ERROR"
+	IssueURL string // only set when Status == "CREATED"
+	Message  string // rejection reason or error message
 }
 
-type FileRef struct {
-	Path      string `json:"path"`
-	Line      int    `json:"line"`
-	Relevance string `json:"relevance"`
-}
-
-type ParsedOutput struct {
-	MarkdownBody string
-	Metadata     AgentMetadata
-	Degraded     bool
-}
-
-func ParseAgentOutput(output string) (ParsedOutput, error) {
+// ParseAgentOutput extracts the triage result from agent stdout.
+// Looks for ===TRIAGE_RESULT=== followed by CREATED:/REJECTED:/ERROR:
+func ParseAgentOutput(output string) (TriageResult, error) {
 	output = strings.TrimSpace(output)
 	if len(output) < minOutputLength {
-		return ParsedOutput{}, fmt.Errorf("agent output too short (%d chars, minimum %d)", len(output), minOutputLength)
+		return TriageResult{}, fmt.Errorf("agent output too short (%d chars)", len(output))
 	}
 
-	idx := strings.LastIndex(output, metadataSeparator)
+	idx := strings.LastIndex(output, resultSeparator)
 	if idx == -1 {
-		return ParsedOutput{
-			MarkdownBody: output,
-			Metadata:     defaultMetadata(),
-			Degraded:     true,
-		}, nil
+		// No result marker — try to find a GitHub issue URL anywhere in the output
+		if url := extractIssueURL(output); url != "" {
+			return TriageResult{Status: "CREATED", IssueURL: url}, nil
+		}
+		return TriageResult{}, fmt.Errorf("no triage result found in agent output")
 	}
 
-	body := strings.TrimSpace(output[:idx])
-	jsonPart := strings.TrimSpace(output[idx+len(metadataSeparator):])
+	result := strings.TrimSpace(output[idx+len(resultSeparator):])
 
-	var meta AgentMetadata
-	if err := json.Unmarshal([]byte(jsonPart), &meta); err != nil {
-		return ParsedOutput{
-			MarkdownBody: body,
-			Metadata:     defaultMetadata(),
-			Degraded:     true,
-		}, nil
+	if strings.HasPrefix(result, "CREATED:") {
+		url := strings.TrimSpace(strings.TrimPrefix(result, "CREATED:"))
+		if url == "" {
+			url = extractIssueURL(output)
+		}
+		return TriageResult{Status: "CREATED", IssueURL: url}, nil
 	}
 
-	return ParsedOutput{
-		MarkdownBody: body,
-		Metadata:     meta,
-		Degraded:     false,
-	}, nil
+	if strings.HasPrefix(result, "REJECTED:") {
+		msg := strings.TrimSpace(strings.TrimPrefix(result, "REJECTED:"))
+		return TriageResult{Status: "REJECTED", Message: msg}, nil
+	}
+
+	if strings.HasPrefix(result, "ERROR:") {
+		msg := strings.TrimSpace(strings.TrimPrefix(result, "ERROR:"))
+		return TriageResult{Status: "ERROR", Message: msg}, nil
+	}
+
+	return TriageResult{}, fmt.Errorf("unknown triage result: %s", result)
 }
 
-func defaultMetadata() AgentMetadata {
-	return AgentMetadata{Confidence: "medium"}
-}
-
-var (
-	scriptStyleRegex = regexp.MustCompile(`(?i)<(script|style)[^>]*>[\s\S]*?</(script|style)>`)
-	htmlTagRegex     = regexp.MustCompile(`<[^>]*>`)
-)
-
-func SanitizeBody(body string) string {
-	body = scriptStyleRegex.ReplaceAllString(body, "")
-	body = htmlTagRegex.ReplaceAllString(body, "")
-	if len(body) > maxBodyLength {
-		body = body[:maxBodyLength]
+// extractIssueURL finds a GitHub issue URL in text.
+func extractIssueURL(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "github.com/") && strings.Contains(line, "/issues/") {
+			// Extract URL from the line
+			for _, word := range strings.Fields(line) {
+				if strings.HasPrefix(word, "https://github.com/") && strings.Contains(word, "/issues/") {
+					return word
+				}
+			}
+		}
 	}
-	return body
-}
-
-func ResolveTitle(suggestedTitle, markdownBody, firstMessage string) string {
-	title := ""
-	switch {
-	case suggestedTitle != "":
-		title = suggestedTitle
-	case markdownBody != "":
-		first := strings.SplitN(markdownBody, "\n", 2)[0]
-		title = strings.TrimLeft(first, "# ")
-	case firstMessage != "":
-		title = strings.SplitN(firstMessage, "\n", 2)[0]
-	default:
-		return "Untitled issue"
-	}
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return "Untitled issue"
-	}
-	if len(title) > maxTitleLength {
-		title = title[:maxTitleLength-3] + "..."
-	}
-	return title
-}
-
-var issueTypeToLabel = map[string]string{
-	"bug":         "bug",
-	"feature":     "enhancement",
-	"improvement": "enhancement",
-	"question":    "question",
-}
-
-func ResolveLabels(issueType string, defaultLabels []string) []string {
-	var labels []string
-	if label, ok := issueTypeToLabel[issueType]; ok {
-		labels = append(labels, label)
-	}
-	labels = append(labels, defaultLabels...)
-	return labels
-}
-
-func FormatIssueBody(channel, reporter, branch, agentBody string) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**Channel**: #%s\n", channel))
-	sb.WriteString(fmt.Sprintf("**Reporter**: %s\n", reporter))
-	if branch != "" {
-		sb.WriteString(fmt.Sprintf("**Branch**: %s\n", branch))
-	}
-	sb.WriteString("\n---\n\n")
-	sb.WriteString(agentBody)
-	return sb.String()
+	return ""
 }

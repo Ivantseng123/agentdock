@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"slack-issue-bot/internal/bot"
@@ -34,7 +35,6 @@ func main() {
 
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken)
 
-	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token)
 	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token)
 
@@ -59,7 +59,7 @@ func main() {
 		slog.Info("mantis integration enabled", "url", cfg.Mantis.BaseURL)
 	}
 
-	wf := bot.NewWorkflow(cfg, slackClient, issueClient, repoCache, repoDiscovery, agentRunner, mantisClient)
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,
@@ -137,42 +137,51 @@ func main() {
 				})
 
 			case socketmode.EventTypeInteractive:
-				sm.Ack(*evt.Request)
 				cb, ok := evt.Data.(slack.InteractionCallback)
 				if !ok {
+					sm.Ack(*evt.Request)
 					continue
 				}
 
-				switch cb.Type {
-				case slack.InteractionTypeBlockSuggestion:
+				// BlockSuggestion must ack WITH options — don't ack early.
+				if cb.Type == slack.InteractionTypeBlockSuggestion {
+					slog.Info("block suggestion received", "actionID", cb.ActionID, "value", cb.Value)
 					if cb.ActionID == "repo_search" {
 						options := wf.HandleRepoSuggestion(cb.Value)
+						slog.Info("repo suggestion results", "query", cb.Value, "count", len(options))
 						var opts []*slack.OptionBlockObject
 						for _, r := range options {
 							opts = append(opts, slack.NewOptionBlockObject(r, slack.NewTextBlockObject("plain_text", r, false, false), nil))
 						}
-						sm.Ack(*evt.Request, opts)
+						sm.Ack(*evt.Request, slack.OptionsResponse{Options: opts})
+					} else {
+						sm.Ack(*evt.Request)
 					}
+					continue
+				}
 
+				sm.Ack(*evt.Request)
+
+				switch cb.Type {
 				case slack.InteractionTypeBlockActions:
 					if len(cb.ActionCallback.BlockActions) == 0 {
 						continue
 					}
 					action := cb.ActionCallback.BlockActions[0]
 					selectorTS := cb.Message.Timestamp
+					slog.Info("block action received", "actionID", action.ActionID, "value", action.Value, "selectorTS", selectorTS)
 
 					switch {
-					case action.ActionID == "repo_select" || action.ActionID == "repo_search":
-						value := action.Value
-						if action.ActionID == "repo_search" && action.SelectedOption.Value != "" {
-							value = action.SelectedOption.Value
-						}
-						wf.HandleSelection(cb.Channel.ID, action.ActionID, value, selectorTS)
+					case action.ActionID == "repo_search" && action.SelectedOption.Value != "":
+						wf.HandleSelection(cb.Channel.ID, action.ActionID, action.SelectedOption.Value, selectorTS)
 
-					case action.ActionID == "branch_select":
+					case strings.HasPrefix(action.ActionID, "repo_select"):
 						wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
 
-					case action.ActionID == "description_action":
+					case strings.HasPrefix(action.ActionID, "branch_select"):
+						wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
+
+					case strings.HasPrefix(action.ActionID, "description_action"):
 						wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
 					}
 

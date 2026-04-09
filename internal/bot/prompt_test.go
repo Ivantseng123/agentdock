@@ -32,8 +32,8 @@ func TestBuildPrompt_Basic(t *testing.T) {
 	if !strings.Contains(result, "main") {
 		t.Error("missing branch")
 	}
-	if !strings.Contains(result, "===TRIAGE_METADATA===") {
-		t.Error("missing metadata separator in format instructions")
+	if !strings.Contains(result, "triage-issue") {
+		t.Error("missing skill reference")
 	}
 	if !strings.Contains(result, "zh-TW") {
 		t.Error("missing language")

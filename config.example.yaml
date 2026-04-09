@@ -3,98 +3,72 @@ server:
 
 slack:
   bot_token: "xoxb-your-token"
-  signing_secret: "your-signing-secret"
   app_token: "xapp-your-app-token"
 
-# Auto-bind: bot auto-registers when invited to a channel (no manual channel config needed)
+# Auto-bind: bot auto-registers when invited to a channel
 auto_bind: true
 
-# Default settings for auto-bound channels (or channels without explicit config)
 channel_defaults:
   branch_select: true
   default_labels: ["from-slack"]
 
 # Optional: override defaults for specific channels
-# If a channel has no config here, it uses channel_defaults + auto-discovery (searchable repo dropdown)
-channels:
-  # Pin specific repos to a channel (shows buttons):
-  # C05XXXXXX:
-  #   repos:
-  #     - "org/backend"
-  #     - "org/frontend"
-  #   default_labels: ["from-slack"]
-
-  # Single repo (skips repo selector entirely):
-  # C05YYYYYY:
-  #   repo: "org/backend-repo"
-  #   branch_select: true
-  #   branches: ["main", "develop"]    # Optional whitelist
-  #   default_labels: ["from-slack"]
-
-reactions:
-  bug:
-    type: "bug"
-    issue_labels: ["bug", "triage"]
-    issue_title_prefix: "[Bug]"
-  rocket:
-    type: "feature"
-    issue_labels: ["enhancement"]
-    issue_title_prefix: "[Feature]"
+# channels:
+#   C05XXXXXX:
+#     repos:
+#       - "org/backend"
+#       - "org/frontend"
+#     default_labels: ["from-slack"]
+#   C05YYYYYY:
+#     repo: "org/backend-repo"
+#     branch_select: true
+#     branches: ["main", "develop"]
 
 github:
   token: "ghp_your-token"
 
-llm:
-  providers:
-    ## Providers are tried in order. Each has its own max_retries.
-    ## If a provider exhausts retries, the next one is tried.
+# === Agents ===
+# CLI agents are spawned as subprocesses. Tried in fallback order.
+agents:
+  claude:
+    command: claude
+    args: ["--print", "-p", "{prompt}"]
+    timeout: 5m
+  opencode:
+    command: opencode
+    args: ["--prompt", "{prompt}"]
+    timeout: 5m
+  # codex:
+  #   command: codex
+  #   args: ["{prompt}"]
+  #   timeout: 5m
+  # gemini:
+  #   command: gemini
+  #   args: ["--prompt", "{prompt}"]
+  #   timeout: 5m
 
-    ## === Personal use: CLI provider (uses your own subscription) ===
-    - name: "cli"
-      command: "claude"
-      args: ["--print", "{prompt}"]  # Short prompts via arg, long prompts auto-fallback to stdin
-      timeout: 5m                    # CLI needs more time (startup + API round-trip); default 5m
-      max_retries: 1
-    # - name: "cli"
-    #   command: "opencode"
-    #   args: []                                # reads from stdin
-    #   max_retries: 1
+active_agent: claude
+fallback: [claude, opencode]
 
-    ## === Centralized: API key providers ===
-    # - name: "claude"
-    #   api_key: "sk-ant-..."
-    #   model: "claude-sonnet-4-20250514"
-    #   base_url: "https://api.anthropic.com"
-    #   timeout: 60s       # Optional: override global timeout for this provider
-    #   max_retries: 3
-    # - name: "openai"
-    #   api_key: "sk-..."
-    #   model: "gpt-4o"
-    #   base_url: "https://api.openai.com"
-    #   max_retries: 2
-
-    ## === Local: Ollama (free, no API key) ===
-    # - name: "ollama"
-    #   model: "llama3"
-    #   base_url: "http://localhost:11434"
-    #   max_retries: 1
-  timeout: 60s
+# === Prompt ===
+prompt:
+  language: "繁體中文"
+  extra_rules:
+    - "列出所有相關的檔案名稱與完整路徑"
 
 repo_cache:
   dir: "/tmp/slack-issue-bot/repos"
   max_age: 1h
 
 rate_limit:
-  per_user: 5         # Max triggers per user per window
-  per_channel: 20     # Max triggers per channel per window
-  window: 1h          # Time window
+  per_user: 5
+  per_channel: 20
+  window: 1h
 
-# "full" = use LLM for diagnosis (costs tokens or uses your subscription)
-# "lite" = grep only + handoff spec (zero cost, user runs own AI)
-diagnosis:
-  mode: "full"
-  prompt:
-    language: "繁體中文"            # LLM response language
-    extra_rules:
-      - "列出所有相關的檔案名稱與完整路徑"
-      - "在 files 欄位中盡量包含所有可能相關的檔案"
+max_concurrent: 3
+max_thread_messages: 50
+
+# Optional: Mantis integration
+# mantis:
+#   base_url: https://mantis.example.com
+#   api_token: your-token

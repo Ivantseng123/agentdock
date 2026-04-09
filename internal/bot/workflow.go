@@ -16,7 +16,6 @@ import (
 )
 
 const pendingTimeout = 1 * time.Minute
-const maxOpenQuestions = 5
 
 type pendingTriage struct {
 	ChannelID      string
@@ -37,7 +36,6 @@ type Workflow struct {
 	cfg           *config.Config
 	slack         *slackclient.Client
 	handler       *slackclient.Handler
-	issueClient   *ghclient.IssueClient
 	repoCache     *ghclient.RepoCache
 	repoDiscovery *ghclient.RepoDiscovery
 	agentRunner   *AgentRunner
@@ -51,7 +49,6 @@ type Workflow struct {
 func NewWorkflow(
 	cfg *config.Config,
 	slack *slackclient.Client,
-	issueClient *ghclient.IssueClient,
 	repoCache *ghclient.RepoCache,
 	repoDiscovery *ghclient.RepoDiscovery,
 	agentRunner *AgentRunner,
@@ -60,7 +57,6 @@ func NewWorkflow(
 	return &Workflow{
 		cfg:           cfg,
 		slack:         slack,
-		issueClient:   issueClient,
 		repoCache:     repoCache,
 		repoDiscovery: repoDiscovery,
 		agentRunner:   agentRunner,
@@ -320,6 +316,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	w.slack.PostMessage(pt.ChannelID, ":mag: 正在分析...", pt.ThreadTS)
 
+	// 1. Ensure repo checked out.
 	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo)
 	if err != nil {
 		w.notifyError(pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
@@ -334,6 +331,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		}
 	}
 
+	// 2. Read thread context.
 	botUserID := ""
 	rawMsgs, err := w.slack.FetchThreadContext(pt.ChannelID, pt.ThreadTS, pt.TriggerTS, botUserID, w.cfg.MaxThreadMessages)
 	if err != nil {
@@ -342,8 +340,10 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		return
 	}
 
+	// 3. Download attachments.
 	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
 
+	// 4. Enrich messages (Mantis URLs).
 	var threadMsgs []ThreadMessage
 	for _, m := range rawMsgs {
 		text := m.Text
@@ -357,6 +357,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		})
 	}
 
+	// 5. Build attachments info.
 	var attachments []AttachmentInfo
 	for _, d := range downloads {
 		if d.Failed {
@@ -373,15 +374,27 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		})
 	}
 
+	// 6. Resolve labels.
+	channelCfg := w.cfg.ChannelDefaults
+	if cc, ok := w.cfg.Channels[pt.ChannelID]; ok {
+		channelCfg = cc
+	}
+
+	// 7. Build prompt.
 	prompt := BuildPrompt(PromptInput{
 		ThreadMessages:   threadMsgs,
 		Attachments:      attachments,
 		ExtraDescription: pt.ExtraDesc,
 		RepoPath:         repoPath,
 		Branch:           pt.SelectedBranch,
+		GitHubRepo:       pt.SelectedRepo,
+		Channel:          pt.ChannelName,
+		Reporter:         pt.Reporter,
+		Labels:           channelCfg.DefaultLabels,
 		Prompt:           w.cfg.Prompt,
 	})
 
+	// 8. Spawn agent — agent explores codebase, creates GitHub issue (or rejects).
 	output, err := w.agentRunner.Run(ctx, repoPath, prompt)
 	if err != nil {
 		w.notifyError(pt.ChannelID, pt.ThreadTS, "分析工具暫時不可用: %v", err)
@@ -389,61 +402,31 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		return
 	}
 
-	parsed, err := ParseAgentOutput(output)
+	// 9. Parse result.
+	result, err := ParseAgentOutput(output)
 	if err != nil {
 		w.notifyError(pt.ChannelID, pt.ThreadTS, "分析工具暫時不可用: %v", err)
 		w.clearDedup(pt)
 		return
 	}
 
-	if strings.EqualFold(parsed.Metadata.Confidence, "low") {
+	// 10. Report to Slack.
+	switch result.Status {
+	case "CREATED":
+		branchInfo := ""
+		if pt.SelectedBranch != "" {
+			branchInfo = fmt.Sprintf(" (branch: `%s`)", pt.SelectedBranch)
+		}
 		w.slack.PostMessage(pt.ChannelID,
-			":warning: 無法建立 issue — 問題與此 repo 的程式碼關聯性不足\n請試著更具體地描述問題。",
+			fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, result.IssueURL),
 			pt.ThreadTS)
-		w.clearDedup(pt)
-		return
+	case "REJECTED":
+		w.slack.PostMessage(pt.ChannelID,
+			fmt.Sprintf(":warning: 無法建立 issue — %s", result.Message),
+			pt.ThreadTS)
+	case "ERROR":
+		w.notifyError(pt.ChannelID, pt.ThreadTS, "Agent error: %s", result.Message)
 	}
-
-	if len(parsed.Metadata.Files) == 0 || len(parsed.Metadata.OpenQuestions) >= maxOpenQuestions {
-		parsed.Degraded = true
-	}
-
-	body := SanitizeBody(parsed.MarkdownBody)
-	fullBody := FormatIssueBody(pt.ChannelName, pt.Reporter, pt.SelectedBranch, body)
-
-	firstMessage := ""
-	if len(threadMsgs) > 0 {
-		firstMessage = threadMsgs[0].Text
-	}
-	title := ResolveTitle(parsed.Metadata.SuggestedTitle, parsed.MarkdownBody, firstMessage)
-
-	channelCfg := w.cfg.ChannelDefaults
-	if cc, ok := w.cfg.Channels[pt.ChannelID]; ok {
-		channelCfg = cc
-	}
-	labels := ResolveLabels(parsed.Metadata.IssueType, channelCfg.DefaultLabels)
-
-	parts := strings.SplitN(pt.SelectedRepo, "/", 2)
-	if len(parts) != 2 {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "Invalid repo format: %s", pt.SelectedRepo)
-		w.clearDedup(pt)
-		return
-	}
-
-	issueURL, err := w.issueClient.CreateIssue(ctx, parts[0], parts[1], title, fullBody, labels)
-	if err != nil {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "Failed to create GitHub issue: %v", err)
-		w.clearDedup(pt)
-		return
-	}
-
-	branchInfo := ""
-	if pt.SelectedBranch != "" {
-		branchInfo = fmt.Sprintf(" (branch: `%s`)", pt.SelectedBranch)
-	}
-	w.slack.PostMessage(pt.ChannelID,
-		fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, issueURL),
-		pt.ThreadTS)
 
 	w.clearDedup(pt)
 }
