@@ -4,6 +4,8 @@
 
 Slack reaction → AI codebase triage → GitHub Issue。Go 單一 binary，Socket Mode（不需公開 URL）。
 
+支援 Slack 附件：xlsx（解析成文字表格）、jpg/png（透過 vision API 讓 AI 看到截圖）。
+
 ## Quick Start
 
 ```bash
@@ -16,9 +18,10 @@ go run ./cmd/bot/
 
 ```
 reaction event → dedup + rate limit → repo/branch 選擇（thread 內）
-  → pre-grep（原文關鍵字）→ agent loop（LLM 呼叫工具）→ triage card
+  → 抓取訊息 + 附件（text/xlsx inline, jpg/png 下載）
+  → pre-grep（原文關鍵字）→ agent loop（LLM 呼叫工具 + 看圖片）→ triage card
   → confidence=low? 拒絕 : files=0? 建 issue 但跳過 triage : 建完整 issue
-  → post issue URL in thread
+  → issue title 取 AI summary → post issue URL in thread
 ```
 
 ## 設定
@@ -130,6 +133,19 @@ Agent loop — LLM 自行決定使用哪些工具：
 
 | 工具 | 說明 |
 |------|------|
+附件支援：
+
+| 附件類型 | 處理方式 |
+|----------|----------|
+| txt, csv, json, xml... | 下載內容 inline（max 500 行） |
+| xlsx | excelize 解析成 TSV inline（max 200 行/sheet） |
+| jpg/png | 下載 bytes → vision API（Claude/OpenAI/CLI），Ollama fallback 文字 |
+| 其他 | 僅顯示 `[附件: name](permalink)` |
+
+限制：單張圖片 max 20MB，每則訊息 max 5 張圖片。
+
+| 工具 | 說明 |
+|------|------|
 | `grep` | `git grep -rli` 搜檔案 |
 | `read_file` | 讀取檔案內容（cap 200 行） |
 | `list_files` | `git ls-files`（cap 500） |
@@ -186,13 +202,14 @@ internal/
     cache.go               # in-memory TTL cache
   llm/
     provider.go            # ConversationProvider, ChatFallbackChain
-    claude.go              # Anthropic native tool use
-    openai.go              # OpenAI function calling
-    cli.go                 # JSON-in-text tool simulation
-    ollama.go              # JSON-in-text tool simulation
+    claude.go              # Anthropic native tool use + vision
+    openai.go              # OpenAI function calling + vision
+    cli.go                 # JSON-in-text tool simulation + --file vision
+    ollama.go              # JSON-in-text tool simulation (vision fallback)
     prompt.go              # system prompt + tool descriptions
   slack/
-    client.go              # PostMessage, PostSelector, PostExternalSelector
+    client.go              # PostMessage, PostSelector, FetchMessage (attachments)
+    xlsx.go                # xlsx → TSV parser
     handler.go             # dedup, rate limit, concurrency
   github/
     issue.go               # issue body formatter + file permalinks
@@ -204,7 +221,7 @@ internal/
 ## 測試
 
 ```bash
-go test ./...   # 76 tests
+go test ./...   # 89 tests
 ```
 
 ## Build
