@@ -24,6 +24,7 @@ type pendingIssue struct {
 	ReactionCfg    config.ReactionConfig
 	ChannelCfg     config.ChannelConfig
 	Message        string
+	Images         []slackclient.ImageData
 	Reporter       string
 	ChannelName    string
 	ThreadTS       string // thread parent = the original reacted message
@@ -114,14 +115,14 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		return
 	}
 
-	message, err := w.slack.FetchMessage(event.ChannelID, event.MessageTS)
+	fetched, err := w.slack.FetchMessage(event.ChannelID, event.MessageTS)
 	if err != nil {
 		w.notifyError(event.ChannelID, event.MessageTS, "Failed to read the original message: %v", err)
 		return
 	}
 
 	// Enrich message: expand Mantis URLs with title + description
-	message = enrichMessage(message, w.mantisClient)
+	fetched.Text = enrichMessage(fetched.Text, w.mantisClient)
 
 	reporter := w.slack.ResolveUser(event.UserID)
 	channelName := w.slack.GetChannelName(event.ChannelID)
@@ -136,7 +137,8 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		Event:       event,
 		ReactionCfg: reactionCfg,
 		ChannelCfg:  channelCfg,
-		Message:     message,
+		Message:     fetched.Text,
+		Images:      fetched.Images,
 		Reporter:    reporter,
 		ChannelName: channelName,
 		ThreadTS:    event.MessageTS,

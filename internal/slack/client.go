@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,25 @@ import (
 type Client struct {
 	api *slack.Client
 }
+
+// ImageData holds a downloaded image for vision processing.
+type ImageData struct {
+	Name      string // original filename
+	MimeType  string // "image/png", "image/jpeg"
+	Data      []byte // raw image bytes
+	Permalink string // Slack permalink for fallback/issue body
+}
+
+// FetchedMessage contains the text and extracted images from a Slack message.
+type FetchedMessage struct {
+	Text   string      // message text + inlined text/xlsx content
+	Images []ImageData // jpg/png image bytes for vision
+}
+
+const (
+	maxImageSize  = 20 * 1024 * 1024 // 20 MB
+	maxImageCount = 5
+)
 
 func NewClient(botToken string) *Client {
 	return &Client{
@@ -23,8 +43,9 @@ func (c *Client) API() *slack.Client {
 }
 
 // FetchMessage retrieves a message and enriches it with file attachment content.
-// Text files are downloaded and inlined. Images are noted with filename + permalink.
-func (c *Client) FetchMessage(channelID, messageTS string) (string, error) {
+// Text files are downloaded and inlined. Vision images are downloaded for LLM use.
+// xlsx files are parsed to TSV. All other files are noted with filename + permalink.
+func (c *Client) FetchMessage(channelID, messageTS string) (FetchedMessage, error) {
 	params := &slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
 		Latest:    messageTS,
@@ -33,16 +54,16 @@ func (c *Client) FetchMessage(channelID, messageTS string) (string, error) {
 	}
 	history, err := c.api.GetConversationHistory(params)
 	if err != nil {
-		return "", fmt.Errorf("fetch message: %w", err)
+		return FetchedMessage{}, fmt.Errorf("fetch message: %w", err)
 	}
 	if len(history.Messages) == 0 {
-		return "", fmt.Errorf("message not found at ts=%s", messageTS)
+		return FetchedMessage{}, fmt.Errorf("message not found at ts=%s", messageTS)
 	}
 
 	msg := history.Messages[0]
 	text := msg.Text
+	var images []ImageData
 
-	// Process file attachments
 	for _, f := range msg.Files {
 		if isTextFile(f.Filetype, f.Mimetype) {
 			content, dlErr := c.downloadFile(f.URLPrivateDownload)
@@ -51,12 +72,44 @@ func (c *Client) FetchMessage(channelID, messageTS string) (string, error) {
 				text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
 				continue
 			}
-			// Cap at 500 lines
 			lines := strings.Split(content, "\n")
 			if len(lines) > 500 {
 				content = strings.Join(lines[:500], "\n") + "\n... [truncated]"
 			}
 			text += fmt.Sprintf("\n\n--- 附件: %s ---\n```\n%s\n```", f.Name, content)
+		} else if f.Filetype == "xlsx" {
+			data, dlErr := c.downloadBytes(f.URLPrivateDownload)
+			if dlErr != nil {
+				slog.Warn("failed to download xlsx", "name", f.Name, "error", dlErr)
+				text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
+				continue
+			}
+			parsed, parseErr := parseXlsx(data, defaultMaxXlsxRows)
+			if parseErr != nil {
+				slog.Warn("failed to parse xlsx", "name", f.Name, "error", parseErr)
+				text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
+				continue
+			}
+			text += fmt.Sprintf("\n\n--- 附件: %s ---\n%s", f.Name, parsed)
+		} else if isVisionImage(f.Filetype) && len(images) < maxImageCount {
+			data, dlErr := c.downloadBytes(f.URLPrivateDownload)
+			if dlErr != nil {
+				slog.Warn("failed to download image", "name", f.Name, "error", dlErr)
+				text += fmt.Sprintf("\n\n[圖片: %s](%s)", f.Name, f.Permalink)
+				continue
+			}
+			if len(data) > maxImageSize {
+				slog.Warn("image too large, skipping", "name", f.Name, "size", len(data))
+				text += fmt.Sprintf("\n\n[圖片: %s](%s)", f.Name, f.Permalink)
+				continue
+			}
+			images = append(images, ImageData{
+				Name:      f.Name,
+				MimeType:  f.Mimetype,
+				Data:      data,
+				Permalink: f.Permalink,
+			})
+			text += fmt.Sprintf("\n\n[圖片: %s](%s)", f.Name, f.Permalink)
 		} else if isImageFile(f.Filetype, f.Mimetype) {
 			text += fmt.Sprintf("\n\n[圖片: %s](%s)", f.Name, f.Permalink)
 		} else {
@@ -64,7 +117,7 @@ func (c *Client) FetchMessage(channelID, messageTS string) (string, error) {
 		}
 	}
 
-	return text, nil
+	return FetchedMessage{Text: text, Images: images}, nil
 }
 
 func (c *Client) downloadFile(url string) (string, error) {
@@ -77,6 +130,18 @@ func (c *Client) downloadFile(url string) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+func (c *Client) downloadBytes(url string) ([]byte, error) {
+	if url == "" {
+		return nil, fmt.Errorf("empty download URL")
+	}
+	var buf bytes.Buffer
+	err := c.api.GetFile(url, &buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func isTextFile(filetype, mimetype string) bool {
@@ -95,6 +160,10 @@ func isImageFile(filetype, mimetype string) bool {
 	return strings.HasPrefix(mimetype, "image/") ||
 		filetype == "png" || filetype == "jpg" || filetype == "jpeg" ||
 		filetype == "gif" || filetype == "webp" || filetype == "svg"
+}
+
+func isVisionImage(filetype string) bool {
+	return filetype == "png" || filetype == "jpg" || filetype == "jpeg"
 }
 
 func (c *Client) ResolveUser(userID string) string {
