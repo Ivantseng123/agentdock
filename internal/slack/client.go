@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -305,6 +307,119 @@ func (c *Client) UpdateMessage(channelID, messageTS, text string) error {
 		return fmt.Errorf("update message: %w", err)
 	}
 	return nil
+}
+
+// ThreadRawMessage is a raw message from a Slack thread.
+type ThreadRawMessage struct {
+	User      string
+	Text      string
+	Timestamp string
+	Files     []slack.File
+}
+
+// FetchThreadContext reads all messages in a thread up to the trigger point.
+func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]ThreadRawMessage, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var allMessages []slack.Message
+	cursor := ""
+
+	for {
+		params := &slack.GetConversationRepliesParameters{
+			ChannelID: channelID,
+			Timestamp: threadTS,
+			Cursor:    cursor,
+			Limit:     200,
+		}
+
+		msgs, hasMore, nextCursor, err := c.api.GetConversationReplies(params)
+		if err != nil {
+			return nil, fmt.Errorf("conversations.replies: %w", err)
+		}
+
+		allMessages = append(allMessages, msgs...)
+
+		if !hasMore || len(allMessages) >= limit {
+			break
+		}
+		cursor = nextCursor
+	}
+
+	return filterThreadMessages(allMessages, triggerTS, botUserID), nil
+}
+
+// filterThreadMessages filters out bot messages and messages at/after the trigger.
+func filterThreadMessages(messages []slack.Message, triggerTS, botUserID string) []ThreadRawMessage {
+	var result []ThreadRawMessage
+	for _, m := range messages {
+		if m.Timestamp >= triggerTS {
+			continue
+		}
+		if m.BotID != "" || m.User == botUserID {
+			continue
+		}
+		result = append(result, ThreadRawMessage{
+			User:      m.User,
+			Text:      m.Text,
+			Timestamp: m.Timestamp,
+			Files:     m.Files,
+		})
+	}
+	return result
+}
+
+// AttachmentDownload is the result of downloading a single attachment.
+type AttachmentDownload struct {
+	Name   string
+	Path   string
+	Type   string // "image", "text", "document"
+	Failed bool
+}
+
+// DownloadAttachments downloads thread attachments to a temp dir.
+func (c *Client) DownloadAttachments(messages []ThreadRawMessage, tempDir string) []AttachmentDownload {
+	var attachments []AttachmentDownload
+
+	for _, msg := range messages {
+		for _, f := range msg.Files {
+			data, err := c.downloadBytes(f.URLPrivateDownload)
+			if err != nil {
+				slog.Warn("attachment download failed", "name", f.Name, "error", err)
+				attachments = append(attachments, AttachmentDownload{
+					Name:   f.Name,
+					Type:   classifyAttachment(f.Filetype, f.Mimetype),
+					Failed: true,
+				})
+				continue
+			}
+
+			path := filepath.Join(tempDir, f.Name)
+			if err := os.WriteFile(path, data, 0644); err != nil {
+				slog.Warn("attachment write failed", "name", f.Name, "error", err)
+				continue
+			}
+
+			attachments = append(attachments, AttachmentDownload{
+				Name: f.Name,
+				Path: path,
+				Type: classifyAttachment(f.Filetype, f.Mimetype),
+			})
+		}
+	}
+	return attachments
+}
+
+// classifyAttachment determines the type of a Slack file.
+func classifyAttachment(filetype, mimetype string) string {
+	if isImageFile(filetype, mimetype) {
+		return "image"
+	}
+	if isTextFile(filetype, mimetype) {
+		return "text"
+	}
+	return "document"
 }
 
 func ExtractKeywords(message string) []string {

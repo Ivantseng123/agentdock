@@ -1,0 +1,6 @@
+labels:
+  - includeSelectors: true
+    pairs:
+      app: react2issue
+resources:
+  - deployment.yaml

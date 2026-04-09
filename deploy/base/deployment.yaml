@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: react2issue
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: react2issue
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            timeoutSeconds: 5
+          resources:
+            limits:
+              cpu: "2"
+              memory: 4Gi
+            requests:
+              cpu: 100m
+              memory: 512Mi
+          envFrom:
+            - secretRef:
+                name: react2issue-secret
+          volumeMounts:
+            - name: repo-cache
+              mountPath: /data/repos
+      volumes:
+        - name: repo-cache
+          emptyDir:
+            sizeLimit: 10Gi
+  revisionHistoryLimit: 3

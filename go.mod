@@ -4,7 +4,6 @@ go 1.25
 
 require (
 	github.com/google/go-github/v60 v60.0.0
-	github.com/google/uuid v1.6.0
 	github.com/slack-go/slack v0.20.0
 	github.com/xuri/excelize/v2 v2.10.1
 	gopkg.in/yaml.v3 v3.0.1

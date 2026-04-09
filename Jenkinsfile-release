@@ -1,0 +1,121 @@
+#!/usr/bin/env groovy
+
+currentBuild.description = "${ref} -> ${tag}"
+def semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
+
+pipeline {
+  agent {
+    kubernetes {
+      cloud 'SLKE'
+      defaultContainer 'golang'
+      yaml """
+kind: Pod
+spec:
+  securityContext:
+    runAsUser: 0
+  containers:
+  - name: golang
+    image: golang:1.25-alpine
+    imagePullPolicy: Always
+    command: ['cat']
+    tty: true
+    resources:
+      limits:
+        memory: "2Gi"
+        cpu: "1"
+    volumeMounts:
+    - name: dockersock
+      mountPath: /var/run/docker.sock
+  - name: git
+    image: ${GIT_IMAGE}
+    imagePullPolicy: Always
+    command: ['cat']
+    tty: true
+    resources:
+      limits:
+        memory: "100Mi"
+        cpu: "100m"
+  - name: docker
+    image: docker:24
+    command: ['cat']
+    tty: true
+    volumeMounts:
+    - name: dockersock
+      mountPath: /var/run/docker.sock
+  volumes:
+  - name: dockersock
+    hostPath:
+      path: /var/run/docker.sock
+"""
+    }
+  }
+
+  environment {
+    CREDENTIAL = credentials("${CREDENTIAL_ID}")
+    REGISTRY = "${DOCKER_REGISTRY}"
+    IMAGE_NAME = "${DOCKER_IMAGE_NAME}"
+  }
+
+  stages {
+    stage('Setup') {
+      steps {
+        container('git') {
+          script {
+            env.GIT_PATH = sh(
+              script: 'echo $GIT_URL | awk -F"github.com/" "{print \\$2}"',
+              returnStdout: true
+            ).trim()
+            sh """
+            git remote set-url origin https://$CREDENTIAL_USR:"\$CREDENTIAL_PSW"@github.com/$GIT_PATH".git"
+            git config --global user.email "jenkins-bot@example.com"
+            git config --global user.name "jenkins[bot]"
+            echo \$CREDENTIAL_PSW | gh auth login --with-token
+            """
+          }
+        }
+        sh 'go version'
+        echo "${params}"
+      }
+    }
+
+    stage('Preflight Checks') {
+      steps {
+        script {
+          if (!("${tag}" ==~ semverPattern)) {
+            error "Tag must be semver but got: ${tag}"
+          }
+        }
+        container('git') {
+          script {
+            TAG_EXISTS = sh(
+              script: "gh release view ${tag} --json name",
+              returnStatus: true
+            )
+            if ("${TAG_EXISTS}" == "0") {
+              error "Tag ${tag} already exists"
+            }
+          }
+        }
+      }
+    }
+
+    stage('Build & Push Image') {
+      steps {
+        container('docker') {
+          sh """
+          docker build -t ${REGISTRY}/${IMAGE_NAME}:${tag} .
+          docker push ${REGISTRY}/${IMAGE_NAME}:${tag}
+          """
+        }
+      }
+    }
+
+    stage('Publish GitHub Release') {
+      steps {
+        container('git') {
+          sh "gh release create ${tag} --target ${ref} --generate-notes"
+        }
+      }
+    }
+  }
+}

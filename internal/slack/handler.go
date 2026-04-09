@@ -1,10 +1,130 @@
 package slack
 
 import (
-	"log/slog"
+	"fmt"
 	"sync"
 	"time"
 )
+
+// TriggerEvent represents an @bot mention or /triage command.
+type TriggerEvent struct {
+	ChannelID string
+	ThreadTS  string
+	TriggerTS string
+	UserID    string
+	Text      string
+}
+
+type HandlerConfig struct {
+	MaxConcurrent   int
+	DedupTTL        time.Duration
+	PerUserLimit    int
+	PerChannelLimit int
+	RateWindow      time.Duration
+	OnEvent         func(event TriggerEvent)
+	OnRejected      func(event TriggerEvent, reason string)
+}
+
+type Handler struct {
+	threadDedup  *threadDedup
+	userLimit    *rateLimiter
+	channelLimit *rateLimiter
+	semaphore    chan struct{}
+	onEvent      func(event TriggerEvent)
+	onRejected   func(event TriggerEvent, reason string)
+}
+
+func NewHandler(cfg HandlerConfig) *Handler {
+	if cfg.MaxConcurrent <= 0 {
+		cfg.MaxConcurrent = 3
+	}
+	if cfg.DedupTTL <= 0 {
+		cfg.DedupTTL = 5 * time.Minute
+	}
+	return &Handler{
+		threadDedup:  newThreadDedup(cfg.DedupTTL),
+		userLimit:    newRateLimiter(cfg.PerUserLimit, cfg.RateWindow),
+		channelLimit: newRateLimiter(cfg.PerChannelLimit, cfg.RateWindow),
+		semaphore:    make(chan struct{}, cfg.MaxConcurrent),
+		onEvent:      cfg.OnEvent,
+		onRejected:   cfg.OnRejected,
+	}
+}
+
+func (h *Handler) HandleTrigger(event TriggerEvent) bool {
+	if h.threadDedup.isDuplicate(event.ChannelID, event.ThreadTS) {
+		return false
+	}
+	if !h.userLimit.allow(event.UserID) {
+		if h.onRejected != nil {
+			h.onRejected(event, "rate limit exceeded")
+		}
+		return false
+	}
+	if !h.channelLimit.allow(event.ChannelID) {
+		if h.onRejected != nil {
+			h.onRejected(event, "channel rate limit exceeded")
+		}
+		return false
+	}
+	h.semaphore <- struct{}{}
+	go func() {
+		defer func() { <-h.semaphore }()
+		h.onEvent(event)
+	}()
+	return true
+}
+
+func (h *Handler) ClearThreadDedup(channelID, threadTS string) {
+	h.threadDedup.Remove(channelID, threadTS)
+}
+
+// --- Thread dedup ---
+
+type threadDedup struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+	ttl  time.Duration
+}
+
+func newThreadDedup(ttl time.Duration) *threadDedup {
+	d := &threadDedup{seen: make(map[string]time.Time), ttl: ttl}
+	go d.cleanup()
+	return d
+}
+
+func (d *threadDedup) isDuplicate(channelID, threadTS string) bool {
+	key := fmt.Sprintf("%s:%s", channelID, threadTS)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if t, ok := d.seen[key]; ok && time.Since(t) < d.ttl {
+		return true
+	}
+	d.seen[key] = time.Now()
+	return false
+}
+
+func (d *threadDedup) Remove(channelID, threadTS string) {
+	key := fmt.Sprintf("%s:%s", channelID, threadTS)
+	d.mu.Lock()
+	delete(d.seen, key)
+	d.mu.Unlock()
+}
+
+func (d *threadDedup) cleanup() {
+	ticker := time.NewTicker(d.ttl)
+	for range ticker.C {
+		d.mu.Lock()
+		for k, t := range d.seen {
+			if time.Since(t) >= d.ttl {
+				delete(d.seen, k)
+			}
+		}
+		d.mu.Unlock()
+	}
+}
+
+// --- Event-level dedup (for Socket Mode) ---
 
 type dedup struct {
 	mu   sync.Mutex
@@ -13,10 +133,7 @@ type dedup struct {
 }
 
 func newDedup(ttl time.Duration) *dedup {
-	d := &dedup{
-		seen: make(map[string]time.Time),
-		ttl:  ttl,
-	}
+	d := &dedup{seen: make(map[string]time.Time), ttl: ttl}
 	go d.cleanup()
 	return d
 }
@@ -24,7 +141,6 @@ func newDedup(ttl time.Duration) *dedup {
 func (d *dedup) isDuplicate(eventID string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
 	if t, ok := d.seen[eventID]; ok && time.Since(t) < d.ttl {
 		return true
 	}
@@ -34,28 +150,19 @@ func (d *dedup) isDuplicate(eventID string) bool {
 
 func (d *dedup) cleanup() {
 	ticker := time.NewTicker(d.ttl)
-	defer ticker.Stop()
 	for range ticker.C {
 		d.mu.Lock()
-		now := time.Now()
-		for id, t := range d.seen {
-			if now.Sub(t) > d.ttl {
-				delete(d.seen, id)
+		for k, t := range d.seen {
+			if time.Since(t) >= d.ttl {
+				delete(d.seen, k)
 			}
 		}
 		d.mu.Unlock()
 	}
 }
 
-type ReactionEvent struct {
-	EventID   string
-	Reaction  string
-	ChannelID string
-	MessageTS string
-	UserID    string
-}
+// --- Rate limiter ---
 
-// rateLimiter tracks event counts per key within a sliding window.
 type rateLimiter struct {
 	mu     sync.Mutex
 	counts map[string][]time.Time
@@ -64,9 +171,6 @@ type rateLimiter struct {
 }
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
-	if limit <= 0 || window <= 0 {
-		return nil // disabled
-	}
 	return &rateLimiter{
 		counts: make(map[string][]time.Time),
 		limit:  limit,
@@ -75,8 +179,8 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 }
 
 func (r *rateLimiter) allow(key string) bool {
-	if r == nil {
-		return true // disabled
+	if r.limit <= 0 {
+		return true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -84,8 +188,7 @@ func (r *rateLimiter) allow(key string) bool {
 	now := time.Now()
 	cutoff := now.Add(-r.window)
 
-	// Remove expired entries
-	valid := r.counts[key][:0]
+	var valid []time.Time
 	for _, t := range r.counts[key] {
 		if t.After(cutoff) {
 			valid = append(valid, t)
@@ -98,126 +201,5 @@ func (r *rateLimiter) allow(key string) bool {
 	}
 
 	r.counts[key] = append(valid, now)
-	return true
-}
-
-// messageDedup prevents the same message from being processed multiple times
-// (different emojis on the same message).
-type messageDedup struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
-	ttl  time.Duration
-}
-
-func newMessageDedup(ttl time.Duration) *messageDedup {
-	d := &messageDedup{
-		seen: make(map[string]time.Time),
-		ttl:  ttl,
-	}
-	go func() {
-		ticker := time.NewTicker(ttl)
-		defer ticker.Stop()
-		for range ticker.C {
-			d.mu.Lock()
-			now := time.Now()
-			for k, t := range d.seen {
-				if now.Sub(t) > d.ttl {
-					delete(d.seen, k)
-				}
-			}
-			d.mu.Unlock()
-		}
-	}()
-	return d
-}
-
-func (d *messageDedup) isDuplicate(channelID, messageTS string) bool {
-	key := channelID + ":" + messageTS
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if t, ok := d.seen[key]; ok && time.Since(t) < d.ttl {
-		return true
-	}
-	d.seen[key] = time.Now()
-	return false
-}
-
-// Remove clears the dedup entry so the same message can be re-triggered.
-func (d *messageDedup) Remove(channelID, messageTS string) {
-	key := channelID + ":" + messageTS
-	d.mu.Lock()
-	delete(d.seen, key)
-	d.mu.Unlock()
-}
-
-// MessageDedup exposes the messageDedup for external clearing (e.g. on timeout).
-func (h *Handler) ClearMessageDedup(channelID, messageTS string) {
-	h.messageDedup.Remove(channelID, messageTS)
-}
-
-type Handler struct {
-	dedup        *dedup
-	messageDedup *messageDedup
-	userLimit    *rateLimiter
-	channelLimit *rateLimiter
-	semaphore    chan struct{}
-	onEvent      func(event ReactionEvent)
-	onRejected   func(event ReactionEvent, reason string) // callback when rate limited
-}
-
-type HandlerConfig struct {
-	MaxConcurrent   int
-	DedupTTL        time.Duration
-	PerUserLimit    int
-	PerChannelLimit int
-	RateWindow      time.Duration
-	OnEvent         func(event ReactionEvent)
-	OnRejected      func(event ReactionEvent, reason string)
-}
-
-func NewHandler(cfg HandlerConfig) *Handler {
-	return &Handler{
-		dedup:        newDedup(cfg.DedupTTL),
-		messageDedup: newMessageDedup(cfg.DedupTTL),
-		userLimit:    newRateLimiter(cfg.PerUserLimit, cfg.RateWindow),
-		channelLimit: newRateLimiter(cfg.PerChannelLimit, cfg.RateWindow),
-		semaphore:    make(chan struct{}, cfg.MaxConcurrent),
-		onEvent:      cfg.OnEvent,
-		onRejected:   cfg.OnRejected,
-	}
-}
-
-func (h *Handler) HandleReaction(event ReactionEvent) bool {
-	if h.dedup.isDuplicate(event.EventID) {
-		slog.Debug("skipping duplicate event", "eventID", event.EventID)
-		return false
-	}
-
-	if h.messageDedup.isDuplicate(event.ChannelID, event.MessageTS) {
-		slog.Debug("skipping already-processed message", "channel", event.ChannelID, "ts", event.MessageTS)
-		return false
-	}
-
-	if !h.userLimit.allow(event.UserID) {
-		slog.Warn("rate limit hit for user", "userID", event.UserID)
-		if h.onRejected != nil {
-			h.onRejected(event, "rate limit exceeded for user")
-		}
-		return false
-	}
-
-	if !h.channelLimit.allow(event.ChannelID) {
-		slog.Warn("rate limit hit for channel", "channelID", event.ChannelID)
-		if h.onRejected != nil {
-			h.onRejected(event, "rate limit exceeded for channel")
-		}
-		return false
-	}
-
-	h.semaphore <- struct{}{}
-	go func() {
-		defer func() { <-h.semaphore }()
-		h.onEvent(event)
-	}()
 	return true
 }

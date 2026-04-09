@@ -1,0 +1,10 @@
+.git/
+docs/
+*.md
+config.yaml
+config.local.yaml
+bot
+.idea/
+.vscode/
+deploy/overlays/*/
+!deploy/overlays/example/

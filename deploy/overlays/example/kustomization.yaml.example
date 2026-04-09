@@ -1,0 +1,12 @@
+labels:
+  - includeSelectors: true
+    pairs:
+      app: react2issue
+namespace: your-namespace
+resources:
+  - ../../base
+  - secret.yaml
+images:
+  - name: IMAGE_PLACEHOLDER
+    newName: your-registry.example.com/your-org/react2issue
+    newTag: "0.1.0"
