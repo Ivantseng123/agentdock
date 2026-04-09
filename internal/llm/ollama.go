@@ -46,9 +46,13 @@ func (o *OllamaProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "user":
+			content := m.Content
+			if len(m.Images) > 0 {
+				content += imageFallbackText(m.Images)
+			}
 			msgs = append(msgs, map[string]string{
 				"role":    "user",
-				"content": m.Content,
+				"content": content,
 			})
 		case "assistant":
 			// Flatten assistant tool calls into text content.
