@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,28 @@ func NewOpenAIProvider(apiKey, model, baseURL string, timeout time.Duration) *Op
 
 func (o *OpenAIProvider) Name() string { return "openai" }
 
+func buildOpenAIUserContent(m Message) any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+
+	var blocks []map[string]any
+	for _, img := range m.Images {
+		dataURI := fmt.Sprintf("data:%s;base64,%s", img.MimeType, base64.StdEncoding.EncodeToString(img.Data))
+		blocks = append(blocks, map[string]any{
+			"type": "image_url",
+			"image_url": map[string]string{
+				"url": dataURI,
+			},
+		})
+	}
+	blocks = append(blocks, map[string]any{
+		"type": "text",
+		"text": m.Content,
+	})
+	return blocks
+}
+
 func (o *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	// Build messages array for OpenAI Chat Completions API.
 	var msgs []map[string]any
@@ -45,7 +68,7 @@ func (o *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 		case "user":
 			msgs = append(msgs, map[string]any{
 				"role":    "user",
-				"content": m.Content,
+				"content": buildOpenAIUserContent(m),
 			})
 		case "assistant":
 			msg := map[string]any{
