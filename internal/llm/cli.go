@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -68,10 +69,32 @@ func (c *CLIProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, 
 	}
 	fullPrompt := sb.String()
 
+	// Handle images: claude CLI gets --file flags, others get text fallback.
+	var allImages []ImageContent
+	for _, m := range req.Messages {
+		allImages = append(allImages, m.Images...)
+	}
+
+	tmpFiles, fileArgs := c.prepareImageFiles(allImages)
+	defer func() {
+		for _, f := range tmpFiles {
+			os.Remove(f)
+		}
+	}()
+
+	// Non-claude CLI or failed temp files: append text fallback to prompt.
+	if len(allImages) > 0 && len(tmpFiles) == 0 {
+		fullPrompt += imageFallbackText(allImages)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	args, useStdin := c.buildArgs(fullPrompt)
+	// Prepend --file args before other args.
+	if len(fileArgs) > 0 {
+		args = append(fileArgs, args...)
+	}
 	cmd := exec.CommandContext(ctx, c.command, args...)
 
 	if useStdin {
@@ -134,6 +157,50 @@ func (c *CLIProvider) buildArgs(prompt string) (args []string, useStdin bool) {
 	// Use stdin only when prompt was NOT placed in args
 	useStdin = !promptInArgs || !hasPlaceholder
 	return args, useStdin
+}
+
+// prepareImageFiles writes images to temp files and returns paths + CLI args.
+// Only creates files for claude CLI. Non-claude tools return empty (use text fallback).
+func (c *CLIProvider) prepareImageFiles(images []ImageContent) (tmpFiles []string, fileArgs []string) {
+	if len(images) == 0 {
+		return nil, nil
+	}
+	if !strings.Contains(c.command, "claude") {
+		return nil, nil
+	}
+
+	for _, img := range images {
+		ext := ".png"
+		if strings.Contains(img.MimeType, "jpeg") || strings.Contains(img.MimeType, "jpg") {
+			ext = ".jpg"
+		}
+
+		tmp, err := os.CreateTemp("", "slack-issue-bot-*"+ext)
+		if err != nil {
+			slog.Warn("failed to create temp image file", "name", img.Name, "error", err)
+			continue
+		}
+		if _, err := tmp.Write(img.Data); err != nil {
+			slog.Warn("failed to write temp image file", "name", img.Name, "error", err)
+			tmp.Close()
+			os.Remove(tmp.Name())
+			continue
+		}
+		tmp.Close()
+
+		tmpFiles = append(tmpFiles, tmp.Name())
+		fileArgs = append(fileArgs, "--file", tmp.Name())
+	}
+	return tmpFiles, fileArgs
+}
+
+// imageFallbackText returns text annotations for images (used when vision is not supported).
+func imageFallbackText(images []ImageContent) string {
+	var sb strings.Builder
+	for _, img := range images {
+		sb.WriteString(fmt.Sprintf("\n[圖片: %s]", img.Name))
+	}
+	return sb.String()
 }
 
 // parseJSONInTextResponse parses LLM text output that may contain JSON tool

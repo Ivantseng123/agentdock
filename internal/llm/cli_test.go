@@ -2,6 +2,8 @@ package llm
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,4 +148,67 @@ func TestParseJSONInTextResponse(t *testing.T) {
 			t.Errorf("expected no tool calls for JSON without tool field")
 		}
 	})
+}
+
+func TestCLIProvider_PrepareImageFiles_Claude(t *testing.T) {
+	p := NewCLIProvider("test", "claude", []string{"--print", "{prompt}"}, 10*time.Second)
+
+	images := []ImageContent{
+		{Name: "a.png", MimeType: "image/png", Data: []byte("fakepng")},
+		{Name: "b.jpg", MimeType: "image/jpeg", Data: []byte("fakejpg")},
+	}
+
+	tmpFiles, fileArgs := p.prepareImageFiles(images)
+	defer func() {
+		for _, f := range tmpFiles {
+			os.Remove(f)
+		}
+	}()
+
+	if len(tmpFiles) != 2 {
+		t.Fatalf("expected 2 temp files, got %d", len(tmpFiles))
+	}
+	if len(fileArgs) != 4 {
+		t.Fatalf("expected 4 file args (--file x2), got %d: %v", len(fileArgs), fileArgs)
+	}
+
+	for _, f := range tmpFiles {
+		info, err := os.Stat(f)
+		if err != nil {
+			t.Errorf("temp file %s not found: %v", f, err)
+		}
+		if info.Size() == 0 {
+			t.Errorf("temp file %s is empty", f)
+		}
+	}
+
+	if fileArgs[0] != "--file" || fileArgs[2] != "--file" {
+		t.Errorf("expected --file flags, got %v", fileArgs)
+	}
+}
+
+func TestCLIProvider_PrepareImageFiles_NonClaude(t *testing.T) {
+	p := NewCLIProvider("test", "some-other-tool", []string{"{prompt}"}, 10*time.Second)
+
+	images := []ImageContent{
+		{Name: "a.png", MimeType: "image/png", Data: []byte("fakepng")},
+	}
+
+	tmpFiles, fileArgs := p.prepareImageFiles(images)
+	if len(tmpFiles) != 0 {
+		t.Errorf("non-claude tool should not create temp files, got %d", len(tmpFiles))
+	}
+	if len(fileArgs) != 0 {
+		t.Errorf("non-claude tool should not produce file args, got %v", fileArgs)
+	}
+}
+
+func TestImageFallbackText(t *testing.T) {
+	images := []ImageContent{
+		{Name: "screen.png", MimeType: "image/png", Data: []byte("data")},
+	}
+	text := imageFallbackText(images)
+	if !strings.Contains(text, "[圖片: screen.png]") {
+		t.Errorf("expected fallback text, got %q", text)
+	}
 }
