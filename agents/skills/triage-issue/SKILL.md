@@ -1,11 +1,11 @@
 ---
 name: triage-issue
-description: Triage a bug or issue by exploring the codebase to find root cause, then create a GitHub issue with a TDD-based fix plan. Use when user reports a bug, wants to file an issue, mentions "triage", or wants to investigate and plan a fix for a problem.
+description: Triage a bug or issue by exploring the codebase to find root cause, then output a structured triage result with a TDD-based fix plan. Use when user reports a bug, wants to file an issue, mentions "triage", or wants to investigate and plan a fix for a problem.
 ---
 
 # Triage Issue
 
-Investigate a reported problem, find its root cause, and create a GitHub issue with a TDD fix plan. This is a mostly hands-off workflow - minimize questions to the user.
+Investigate a reported problem, find its root cause, and produce a structured triage result with a TDD fix plan. This is a mostly hands-off workflow - minimize questions to the user.
 
 ## Input
 
@@ -48,7 +48,10 @@ After investigation, assess your confidence:
 **If confidence is low**: Do NOT create an issue. Instead, output ONLY:
 ```
 ===TRIAGE_RESULT===
-REJECTED: [brief explanation why this problem is unrelated to the repo]
+{
+  "status": "REJECTED",
+  "message": "Brief explanation why this problem is unrelated to the repo"
+}
 ```
 Then stop.
 
@@ -75,17 +78,25 @@ Rules:
 - Include a final refactor step if needed
 - **Durability**: Only suggest fixes that would survive radical codebase changes. Describe behaviors and contracts, not internal structure. Tests assert on observable outcomes (API responses, UI state, user-visible effects), not internal state.
 
-### 6. Create the GitHub issue
+### 6. Output result
 
-Use the metadata from the prompt to create the issue. The prompt will include `github_repo`, `channel`, `reporter`, `branch`, and `labels`.
+After your investigation, output the result in this exact JSON format inside the sentinel marker.
 
-Create the issue using `gh issue create`:
-
-```bash
-gh issue create --repo {github_repo} --title "{title}" --label "{label1}" --label "{label2}" --body "..."
+For a successful triage (confidence is high or medium):
+```
+===TRIAGE_RESULT===
+{
+  "status": "CREATED",
+  "title": "Concise issue title",
+  "body": "Full markdown issue body including:\n\n**Channel**: #{channel}\n**Reporter**: {reporter}\n**Branch**: {branch}\n\n---\n\n## Problem\n...\n\n## Root Cause Analysis\n...\n\n## TDD Fix Plan\n...\n\n## Acceptance Criteria\n...",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 5,
+  "open_questions": 0
+}
 ```
 
-Use this template for the issue body:
+Use this template for the body field:
 
 ```
 **Channel**: #{channel}
@@ -128,16 +139,22 @@ Do NOT include specific file paths, line numbers, or implementation details that
 - [ ] Existing tests still pass
 ```
 
-### 7. Output result
-
-After creating the issue, output:
+For a rejection (confidence is low):
 ```
 ===TRIAGE_RESULT===
-CREATED: {issue_url}
+{
+  "status": "REJECTED",
+  "message": "Brief explanation why this problem is unrelated to the repo"
+}
 ```
 
-If `gh issue create` fails, output:
+For an error:
 ```
 ===TRIAGE_RESULT===
-ERROR: {error message}
+{
+  "status": "ERROR",
+  "message": "What went wrong"
+}
 ```
+
+**Important:** The body field should contain the complete issue body as a single string with \n for newlines. Do NOT use `gh issue create` — just output the JSON.
