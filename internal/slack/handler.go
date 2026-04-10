@@ -29,15 +29,11 @@ type Handler struct {
 	threadDedup  *threadDedup
 	userLimit    *rateLimiter
 	channelLimit *rateLimiter
-	semaphore    chan struct{}
 	onEvent      func(event TriggerEvent)
 	onRejected   func(event TriggerEvent, reason string)
 }
 
 func NewHandler(cfg HandlerConfig) *Handler {
-	if cfg.MaxConcurrent <= 0 {
-		cfg.MaxConcurrent = 3
-	}
 	if cfg.DedupTTL <= 0 {
 		cfg.DedupTTL = 5 * time.Minute
 	}
@@ -45,7 +41,6 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		threadDedup:  newThreadDedup(cfg.DedupTTL),
 		userLimit:    newRateLimiter(cfg.PerUserLimit, cfg.RateWindow),
 		channelLimit: newRateLimiter(cfg.PerChannelLimit, cfg.RateWindow),
-		semaphore:    make(chan struct{}, cfg.MaxConcurrent),
 		onEvent:      cfg.OnEvent,
 		onRejected:   cfg.OnRejected,
 	}
@@ -67,11 +62,7 @@ func (h *Handler) HandleTrigger(event TriggerEvent) bool {
 		}
 		return false
 	}
-	h.semaphore <- struct{}{}
-	go func() {
-		defer func() { <-h.semaphore }()
-		h.onEvent(event)
-	}()
+	go h.onEvent(event)
 	return true
 }
 
