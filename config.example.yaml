@@ -68,6 +68,13 @@ rate_limit:
 max_concurrent: 3
 max_thread_messages: 50
 
+# === Logging ===
+logging:
+  dir: "logs"
+  level: "debug"                  # file log level (stderr uses log_level above)
+  retention_days: 30
+  agent_output_dir: "logs/agent-outputs"
+
 # Optional: Mantis integration
 # mantis:
 #   base_url: https://mantis.example.com

@@ -1,6 +1,9 @@
 # Binary
 /bot
 
+# Logs
+logs/
+
 # Config with secrets (use config.example.yaml as template)
 config.yaml
 config.local.yaml
