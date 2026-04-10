@@ -136,14 +136,25 @@ func main() {
 	resultListener := bot.NewResultListener(jobQueue, jobStore, jobQueue, &slackPosterAdapter{client: slackClient}, issueClient)
 	go resultListener.Listen(context.Background())
 
+	// Job watchdog — detect stuck jobs and notify Slack.
+	slackAdapter := &slackPosterAdapter{client: slackClient}
+	watchdog := queue.NewWatchdog(jobStore, cfg.Queue.JobTimeout, func(job *queue.Job, status queue.JobStatus, stuckDuration time.Duration) {
+		msg := queue.FormatStuckMessage(job, status, stuckDuration)
+		slackAdapter.PostMessage(job.ChannelID, msg, job.ThreadTS)
+		// Also clear dedup so user can re-trigger.
+		handler.ClearThreadDedup(job.ChannelID, job.ThreadTS)
+	})
+	go watchdog.Start(make(chan struct{})) // runs until process exits
+
 	if cfg.Server.Port > 0 {
 		go func() {
 			http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("ok"))
 			})
+			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, jobQueue))
 			addr := fmt.Sprintf(":%d", cfg.Server.Port)
-			slog.Info("health check listening", "addr", addr)
+			slog.Info("http endpoints listening", "addr", addr, "endpoints", []string{"/healthz", "/jobs"})
 			http.ListenAndServe(addr, nil)
 		}()
 	}

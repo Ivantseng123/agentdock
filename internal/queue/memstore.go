@@ -81,11 +81,32 @@ func (s *MemJobStore) SetWorker(jobID, workerID string) error {
 	return nil
 }
 
+func (s *MemJobStore) SetAgentStatus(jobID string, report StatusReport) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.jobs[jobID]
+	if !ok {
+		return nil // silently ignore — job may have been deleted
+	}
+	state.AgentStatus = &report
+	return nil
+}
+
 func (s *MemJobStore) Delete(jobID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.jobs, jobID)
 	return nil
+}
+
+func (s *MemJobStore) ListAll() ([]*JobState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]*JobState, 0, len(s.jobs))
+	for _, state := range s.jobs {
+		result = append(result, state)
+	}
+	return result, nil
 }
 
 func (s *MemJobStore) StartCleanup(ttl time.Duration) {

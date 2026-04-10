@@ -1,6 +1,9 @@
 package queue
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type JobQueue interface {
 	Submit(ctx context.Context, job *Job) error
@@ -26,6 +29,39 @@ type ResultBus interface {
 	Close() error
 }
 
+type Command struct {
+	JobID  string `json:"job_id"`
+	Action string `json:"action"`
+}
+
+type CommandBus interface {
+	Send(ctx context.Context, cmd Command) error
+	Receive(ctx context.Context) (<-chan Command, error)
+	Close() error
+}
+
+type StatusReport struct {
+	JobID        string    `json:"job_id"`
+	WorkerID     string    `json:"worker_id"`
+	PID          int       `json:"pid"`
+	AgentCmd     string    `json:"agent_cmd"`
+	Alive        bool      `json:"alive"`
+	LastEvent    string    `json:"last_event,omitempty"`
+	LastEventAt  time.Time `json:"last_event_at"`
+	ToolCalls    int       `json:"tool_calls"`
+	FilesRead    int       `json:"files_read"`
+	OutputBytes  int       `json:"output_bytes"`
+	CostUSD      float64   `json:"cost_usd,omitempty"`
+	InputTokens  int       `json:"input_tokens,omitempty"`
+	OutputTokens int       `json:"output_tokens,omitempty"`
+}
+
+type StatusBus interface {
+	Report(ctx context.Context, report StatusReport) error
+	Subscribe(ctx context.Context) (<-chan StatusReport, error)
+	Close() error
+}
+
 type JobStore interface {
 	Put(job *Job) error
 	Get(jobID string) (*JobState, error)
@@ -33,5 +69,7 @@ type JobStore interface {
 	ListPending() ([]*JobState, error)
 	UpdateStatus(jobID string, status JobStatus) error
 	SetWorker(jobID, workerID string) error
+	SetAgentStatus(jobID string, report StatusReport) error
 	Delete(jobID string) error
+	ListAll() ([]*JobState, error)
 }

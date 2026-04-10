@@ -37,21 +37,25 @@ type AttachmentMeta struct {
 	Filename    string `json:"filename"`
 	Size        int64  `json:"size"`
 	MimeType    string `json:"mime_type"`
+	DownloadURL string `json:"download_url"`
 }
 
 type JobResult struct {
-	JobID      string    `json:"job_id"`
-	Status     string    `json:"status"`
-	Title      string    `json:"title"`
-	Body       string    `json:"body"`
-	Labels     []string  `json:"labels"`
-	Confidence string    `json:"confidence"`
-	FilesFound int       `json:"files_found"`
-	Questions  int       `json:"open_questions"`
-	RawOutput  string    `json:"raw_output"`
-	Error      string    `json:"error"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at"`
+	JobID        string    `json:"job_id"`
+	Status       string    `json:"status"`
+	Title        string    `json:"title"`
+	Body         string    `json:"body"`
+	Labels       []string  `json:"labels"`
+	Confidence   string    `json:"confidence"`
+	FilesFound   int       `json:"files_found"`
+	Questions    int       `json:"open_questions"`
+	RawOutput    string    `json:"raw_output"`
+	Error        string    `json:"error"`
+	StartedAt    time.Time `json:"started_at"`
+	FinishedAt   time.Time `json:"finished_at"`
+	CostUSD      float64   `json:"cost_usd,omitempty"`
+	InputTokens  int       `json:"input_tokens,omitempty"`
+	OutputTokens int       `json:"output_tokens,omitempty"`
 }
 
 type AttachmentReady struct {
@@ -60,12 +64,13 @@ type AttachmentReady struct {
 }
 
 type JobState struct {
-	Job       *Job
-	Status    JobStatus
-	Position  int
-	WorkerID  string
-	StartedAt time.Time
-	WaitTime  time.Duration
+	Job         *Job
+	Status      JobStatus
+	Position    int
+	WorkerID    string
+	StartedAt   time.Time
+	WaitTime    time.Duration
+	AgentStatus *StatusReport
 }
 
 type WorkerInfo struct {
