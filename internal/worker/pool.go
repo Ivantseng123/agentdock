@@ -111,26 +111,29 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerID int, job *queue
 		alive:    true,
 	}
 
+	// Status reporting — starts AFTER agent process launches (OnStarted).
+	var stopReporter chan struct{}
+
 	opts := bot.RunOptions{
 		OnStarted: func(pid int, command string) {
 			status.setPID(pid, command)
 			p.registry.Register(job.ID, pid, command, jobCancel)
 			logger.Info("agent registered", "pid", pid, "command", command)
+
+			// Now that we have a PID, send first report immediately + start periodic.
+			if p.cfg.Status != nil {
+				p.cfg.Status.Report(jobCtx, status.toReport())
+				stopReporter = make(chan struct{})
+				interval := p.cfg.StatusInterval
+				if interval <= 0 {
+					interval = 5 * time.Second
+				}
+				go p.reportStatus(jobCtx, status, interval, stopReporter)
+			}
 		},
 		OnEvent: func(event queue.StreamEvent) {
 			status.recordEvent(event)
 		},
-	}
-
-	// Status reporting.
-	var stopReporter chan struct{}
-	if p.cfg.Status != nil {
-		stopReporter = make(chan struct{})
-		interval := p.cfg.StatusInterval
-		if interval <= 0 {
-			interval = 5 * time.Second
-		}
-		go p.reportStatus(jobCtx, status, interval, stopReporter)
 	}
 
 	// Ack.
