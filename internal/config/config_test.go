@@ -190,6 +190,22 @@ active_agent: claude
 	}
 }
 
+func loadFromString(t *testing.T, yamlContent string) *Config {
+	t.Helper()
+	tmpFile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.WriteString(yamlContent)
+	tmpFile.Close()
+	cfg, err := Load(tmpFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
 func writeAndLoad(t *testing.T, yamlContent string) *Config {
 	t.Helper()
 	f, err := os.CreateTemp("", "config-*.yaml")
@@ -267,5 +283,76 @@ active_agent: claude
 	claude := cfg.Agents["claude"]
 	if claude.Timeout != 5*time.Minute {
 		t.Errorf("default agent timeout = %v, want 5m", claude.Timeout)
+	}
+}
+
+func TestLoad_QueueConfig(t *testing.T) {
+	yaml := `
+queue:
+  capacity: 100
+  transport: inmem
+channel_priority:
+  C_INCIDENTS: 100
+  C_ONCALL: 80
+workers:
+  count: 5
+attachments:
+  store: local
+  temp_dir: /tmp/test-attach
+  ttl: 15m
+agents:
+  claude:
+    command: claude
+    args: ["--print"]
+    skill_dir: ".claude/skills"
+`
+	cfg := loadFromString(t, yaml)
+	if cfg.Queue.Capacity != 100 {
+		t.Errorf("queue capacity = %d, want 100", cfg.Queue.Capacity)
+	}
+	if cfg.Workers.Count != 5 {
+		t.Errorf("workers count = %d, want 5", cfg.Workers.Count)
+	}
+	pri, ok := cfg.ChannelPriority["C_INCIDENTS"]
+	if !ok || pri != 100 {
+		t.Errorf("channel priority = %d, want 100", pri)
+	}
+	agent := cfg.Agents["claude"]
+	if agent.SkillDir != ".claude/skills" {
+		t.Errorf("skill_dir = %q", agent.SkillDir)
+	}
+	if cfg.Attachments.TempDir != "/tmp/test-attach" {
+		t.Errorf("temp_dir = %q", cfg.Attachments.TempDir)
+	}
+	if cfg.Attachments.TTL != 15*time.Minute {
+		t.Errorf("ttl = %v", cfg.Attachments.TTL)
+	}
+}
+
+func TestLoad_QueueDefaults(t *testing.T) {
+	yaml := `
+agents:
+  claude:
+    command: claude
+`
+	cfg := loadFromString(t, yaml)
+	if cfg.Queue.Capacity != 50 {
+		t.Errorf("default queue capacity = %d, want 50", cfg.Queue.Capacity)
+	}
+	if cfg.Workers.Count != 3 {
+		t.Errorf("default workers count = %d, want 3", cfg.Workers.Count)
+	}
+}
+
+func TestLoad_MaxConcurrentBackwardCompat(t *testing.T) {
+	yaml := `
+max_concurrent: 7
+agents:
+  claude:
+    command: claude
+`
+	cfg := loadFromString(t, yaml)
+	if cfg.Workers.Count != 7 {
+		t.Errorf("workers count = %d, want 7 (from max_concurrent)", cfg.Workers.Count)
 	}
 }

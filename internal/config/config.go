@@ -27,6 +27,10 @@ type Config struct {
 	Mantis            MantisConfig             `yaml:"mantis"`
 	RepoCache         RepoCacheConfig          `yaml:"repo_cache"`
 	Logging           LoggingConfig            `yaml:"logging"`
+	Queue             QueueConfig              `yaml:"queue"`
+	ChannelPriority   map[string]int           `yaml:"channel_priority"`
+	Workers           WorkersConfig            `yaml:"workers"`
+	Attachments       AttachmentsConfig        `yaml:"attachments"`
 }
 
 type ServerConfig struct {
@@ -43,9 +47,25 @@ type GitHubConfig struct {
 }
 
 type AgentConfig struct {
-	Command string        `yaml:"command"`
-	Args    []string      `yaml:"args"`
-	Timeout time.Duration `yaml:"timeout"`
+	Command  string        `yaml:"command"`
+	Args     []string      `yaml:"args"`
+	Timeout  time.Duration `yaml:"timeout"`
+	SkillDir string        `yaml:"skill_dir"`
+}
+
+type QueueConfig struct {
+	Capacity  int    `yaml:"capacity"`
+	Transport string `yaml:"transport"`
+}
+
+type WorkersConfig struct {
+	Count int `yaml:"count"`
+}
+
+type AttachmentsConfig struct {
+	Store   string        `yaml:"store"`
+	TempDir string        `yaml:"temp_dir"`
+	TTL     time.Duration `yaml:"ttl"`
 }
 
 type PromptConfig struct {
@@ -131,6 +151,17 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
+	// Workers.Count must be resolved before MaxConcurrent gets its own default,
+	// so that we can distinguish "user set max_concurrent" from "default applied".
+	if cfg.Workers.Count <= 0 {
+		if cfg.MaxConcurrent > 0 {
+			cfg.Workers.Count = cfg.MaxConcurrent
+			slog.Warn("max_concurrent is deprecated, use workers.count instead")
+		} else {
+			cfg.Workers.Count = 3
+		}
+	}
+
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = 3
 	}
@@ -160,6 +191,21 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Logging.AgentOutputDir == "" {
 		cfg.Logging.AgentOutputDir = "logs/agent-outputs"
+	}
+	if cfg.Queue.Capacity <= 0 {
+		cfg.Queue.Capacity = 50
+	}
+	if cfg.Queue.Transport == "" {
+		cfg.Queue.Transport = "inmem"
+	}
+	if cfg.ChannelPriority == nil {
+		cfg.ChannelPriority = map[string]int{"default": 50}
+	}
+	if cfg.Attachments.TempDir == "" {
+		cfg.Attachments.TempDir = "/tmp/triage-attachments"
+	}
+	if cfg.Attachments.TTL <= 0 {
+		cfg.Attachments.TTL = 30 * time.Minute
 	}
 }
 
