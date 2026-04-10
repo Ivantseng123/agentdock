@@ -234,6 +234,15 @@ func (pq priorityQueue) Less(i, j int) bool {
 }
 ```
 
+`Seq` is assigned by the `Submit` implementation using an internal `atomic.Uint64` counter — callers never set it:
+
+```go
+func (t *InMemTransport) Submit(ctx context.Context, job *Job) error {
+    job.Seq = t.seqCounter.Add(1)
+    // ... push to heap
+}
+```
+
 Priority derived from channel config:
 
 ```yaml
@@ -276,7 +285,6 @@ func (p *Pool) executeJob(ctx context.Context, job *Job) *JobResult {
     }
 
     // Clone/fetch repo
-    owner, repo := splitRepo(job.Repo)
     repoPath, err := p.repoCache.Prepare(job.CloneURL, job.Branch)
     if err != nil {
         return failedResult(job, fmt.Errorf("repo prepare failed: %w", err))
@@ -317,13 +325,23 @@ func (r *ResultListener) Listen(ctx context.Context) {
         case result.Confidence == "low":
             r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, "判斷不屬於此 repo，已跳過")
         case result.FilesFound == 0 || result.Questions >= 5:
-            url, _ := r.github.CreateIssue(owner, repo, result.Title,
+            url, err := r.github.CreateIssue(owner, repo, result.Title,
                 stripTriageSection(result.Body), result.Labels)
-            r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, url)
+            if err != nil {
+                r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS,
+                    fmt.Sprintf("Triage 完成但建立 issue 失敗: %v", err))
+            } else {
+                r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, url)
+            }
         default:
-            url, _ := r.github.CreateIssue(owner, repo, result.Title,
+            url, err := r.github.CreateIssue(owner, repo, result.Title,
                 result.Body, result.Labels)
-            r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, url)
+            if err != nil {
+                r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS,
+                    fmt.Sprintf("Triage 完成但建立 issue 失敗: %v", err))
+            } else {
+                r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, url)
+            }
         }
 
         // Cleanup: attachments, dedup, and job store entry
