@@ -139,6 +139,9 @@ func main() {
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments, &slackPosterAdapter{client: slackClient}, issueClient)
 	go resultListener.Listen(context.Background())
 
+	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
+	go statusListener.Listen(context.Background())
+
 	// Job watchdog — detect stuck jobs and notify Slack.
 	slackAdapter := &slackPosterAdapter{client: slackClient}
 	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, queue.WatchdogConfig{
@@ -160,8 +163,9 @@ func main() {
 				w.Write([]byte("ok"))
 			})
 			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, bundle.Queue))
+			http.HandleFunc("/jobs/", queue.KillHandler(jobStore, bundle.Commands))
 			addr := fmt.Sprintf(":%d", cfg.Server.Port)
-			slog.Info("http endpoints listening", "addr", addr, "endpoints", []string{"/healthz", "/jobs"})
+			slog.Info("http endpoints listening", "addr", addr, "endpoints", []string{"/healthz", "/jobs", "/jobs/{id}"})
 			http.ListenAndServe(addr, nil)
 		}()
 	}
@@ -273,6 +277,18 @@ func main() {
 
 					case strings.HasPrefix(action.ActionID, "description_action"):
 						wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
+
+					case strings.HasPrefix(action.ActionID, "cancel_job"):
+						jobID := action.Value
+						state, err := jobStore.Get(jobID)
+						if err == nil && state.Status != queue.JobFailed && state.Status != queue.JobCompleted {
+							bundle.Commands.Send(context.Background(), queue.Command{JobID: jobID, Action: "kill"})
+							jobStore.UpdateStatus(jobID, queue.JobFailed)
+							slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":stop_sign: 正在取消...")
+							handler.ClearThreadDedup(cb.Channel.ID, state.Job.ThreadTS)
+						} else {
+							slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":information_source: 此任務已結束")
+						}
 					}
 
 				case slack.InteractionTypeViewSubmission:
