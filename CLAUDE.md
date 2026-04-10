@@ -84,3 +84,20 @@ go test ./...   # 69 tests
 # or
 go build -o bot ./cmd/bot/ && ./bot -config config.yaml
 ```
+
+## Release
+
+Automated via [release-please](https://github.com/googleapis/release-please). Flow:
+
+1. Write Conventional Commits (`feat:`, `fix:`, `chore:`, etc.)
+2. release-please auto-maintains a Release PR on `main` (version bump + CHANGELOG)
+3. Merge the Release PR → GitHub Release + tag created automatically
+4. GHA builds Docker image → pushes to `ghcr.io/ivantseng123/react2issue:<version>`
+
+If Docker build fails: manually trigger the `Release Publish` workflow with the tag from GitHub Actions UI.
+
+## Git Conventions
+
+- **Merge strategy:** rebase merge (preserve individual commits)
+- **Commit format:** [Conventional Commits](https://www.conventionalcommits.org/) — enforced by commitlint on PRs
+- **Versioning:** semver, automated by release-please (`feat:`→minor, `fix:`→patch, `BREAKING CHANGE`→major)
