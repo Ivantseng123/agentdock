@@ -435,10 +435,13 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	pos, _ := w.queue.QueuePosition(job.ID)
 	if pos <= 1 {
-		w.slack.PostMessage(pt.ChannelID, ":hourglass_flowing_sand: 正在處理你的請求...", pt.ThreadTS)
+		w.slack.PostMessageWithButton(pt.ChannelID,
+			":hourglass_flowing_sand: 正在處理你的請求...",
+			pt.ThreadTS, "cancel_job", "取消", job.ID)
 	} else {
-		w.slack.PostMessage(pt.ChannelID,
-			fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1), pt.ThreadTS)
+		w.slack.PostMessageWithButton(pt.ChannelID,
+			fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1),
+			pt.ThreadTS, "cancel_job", "取消", job.ID)
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.
 }

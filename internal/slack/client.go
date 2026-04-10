@@ -298,6 +298,29 @@ func (c *Client) OpenDescriptionModal(triggerID, selectorMsgTS string) error {
 	return nil
 }
 
+// PostMessageWithButton sends a message with a single action button in the thread.
+// Returns the message timestamp.
+func (c *Client) PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error) {
+	btnBlock := slack.NewActionBlock("cancel_actions",
+		slack.NewButtonBlockElement(actionID, value,
+			slack.NewTextBlockObject("plain_text", buttonText, false, false)),
+	)
+	textBlock := slack.NewSectionBlock(
+		slack.NewTextBlockObject("mrkdwn", text, false, false), nil, nil)
+
+	opts := []slack.MsgOption{
+		slack.MsgOptionBlocks(textBlock, btnBlock),
+	}
+	if threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+	_, ts, err := c.api.PostMessage(channelID, opts...)
+	if err != nil {
+		return "", fmt.Errorf("post message with button: %w", err)
+	}
+	return ts, nil
+}
+
 // UpdateMessage replaces an existing message (used to clear buttons after selection).
 func (c *Client) UpdateMessage(channelID, messageTS, text string) error {
 	_, _, _, err := c.api.UpdateMessage(channelID, messageTS,
