@@ -356,3 +356,63 @@ agents:
 		t.Errorf("workers count = %d, want 7 (from max_concurrent)", cfg.Workers.Count)
 	}
 }
+
+func TestLoad_AgentStream(t *testing.T) {
+	yaml := `
+agents:
+  claude:
+    command: claude
+    args: ["--print", "--output-format", "stream-json", "-p", "{prompt}"]
+    stream: true
+  opencode:
+    command: opencode
+    args: ["--prompt", "{prompt}"]
+`
+	cfg := loadFromString(t, yaml)
+	if !cfg.Agents["claude"].Stream {
+		t.Error("claude stream should be true")
+	}
+	if cfg.Agents["opencode"].Stream {
+		t.Error("opencode stream should be false")
+	}
+}
+
+func TestLoad_TrackingTimeouts(t *testing.T) {
+	yaml := `
+queue:
+  agent_idle_timeout: 3m
+  prepare_timeout: 2m
+  status_interval: 10s
+agents:
+  claude:
+    command: claude
+`
+	cfg := loadFromString(t, yaml)
+	if cfg.Queue.AgentIdleTimeout != 3*time.Minute {
+		t.Errorf("agent_idle_timeout = %v", cfg.Queue.AgentIdleTimeout)
+	}
+	if cfg.Queue.PrepareTimeout != 2*time.Minute {
+		t.Errorf("prepare_timeout = %v", cfg.Queue.PrepareTimeout)
+	}
+	if cfg.Queue.StatusInterval != 10*time.Second {
+		t.Errorf("status_interval = %v", cfg.Queue.StatusInterval)
+	}
+}
+
+func TestLoad_TrackingTimeoutDefaults(t *testing.T) {
+	yaml := `
+agents:
+  claude:
+    command: claude
+`
+	cfg := loadFromString(t, yaml)
+	if cfg.Queue.AgentIdleTimeout != 5*time.Minute {
+		t.Errorf("default agent_idle_timeout = %v, want 5m", cfg.Queue.AgentIdleTimeout)
+	}
+	if cfg.Queue.PrepareTimeout != 3*time.Minute {
+		t.Errorf("default prepare_timeout = %v, want 3m", cfg.Queue.PrepareTimeout)
+	}
+	if cfg.Queue.StatusInterval != 5*time.Second {
+		t.Errorf("default status_interval = %v, want 5s", cfg.Queue.StatusInterval)
+	}
+}

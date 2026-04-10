@@ -51,11 +51,16 @@ type AgentConfig struct {
 	Args     []string      `yaml:"args"`
 	Timeout  time.Duration `yaml:"timeout"`
 	SkillDir string        `yaml:"skill_dir"`
+	Stream   bool          `yaml:"stream"`
 }
 
 type QueueConfig struct {
-	Capacity  int    `yaml:"capacity"`
-	Transport string `yaml:"transport"`
+	Capacity         int           `yaml:"capacity"`
+	Transport        string        `yaml:"transport"`
+	JobTimeout       time.Duration `yaml:"job_timeout"`
+	AgentIdleTimeout time.Duration `yaml:"agent_idle_timeout"`
+	PrepareTimeout   time.Duration `yaml:"prepare_timeout"`
+	StatusInterval   time.Duration `yaml:"status_interval"`
 }
 
 type WorkersConfig struct {
@@ -200,6 +205,18 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.ChannelPriority == nil {
 		cfg.ChannelPriority = map[string]int{"default": 50}
+	}
+	if cfg.Queue.JobTimeout <= 0 {
+		cfg.Queue.JobTimeout = 20 * time.Minute
+	}
+	if cfg.Queue.AgentIdleTimeout <= 0 {
+		cfg.Queue.AgentIdleTimeout = 5 * time.Minute
+	}
+	if cfg.Queue.PrepareTimeout <= 0 {
+		cfg.Queue.PrepareTimeout = 3 * time.Minute
+	}
+	if cfg.Queue.StatusInterval <= 0 {
+		cfg.Queue.StatusInterval = 5 * time.Second
 	}
 	if cfg.Attachments.TempDir == "" {
 		cfg.Attachments.TempDir = "/tmp/triage-attachments"
