@@ -33,7 +33,7 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
-	cloneURL := rc.resolveURL(repoRef)
+	cloneURL := rc.ResolveURL(repoRef)
 	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
 
 	if _, err := os.Stat(filepath.Join(localPath, ".git")); os.IsNotExist(err) {
@@ -125,7 +125,7 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 	return nil
 }
 
-func (rc *RepoCache) resolveURL(repoRef string) string {
+func (rc *RepoCache) ResolveURL(repoRef string) string {
 	if strings.HasPrefix(repoRef, "http") || strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
 		return repoRef
 	}
