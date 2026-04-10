@@ -6,11 +6,12 @@ Add real-time agent process visibility and kill capability across all deployment
 
 ## Requirements
 
-- **Process tracking**: Track PID, command, alive status for all agents; track stream events (tool calls, files read, output bytes) for agents that support stream-json
-- **Kill mechanism**: Four trigger sources — manual HTTP, watchdog timeout, agent idle detection, Slack user cancel — all unified through a single CommandBus
+- **Process tracking**: Track PID, command, alive status for all agents; track stream events (tool calls, files read, output bytes, cost) for agents that support stream-json
+- **Kill mechanism**: Four trigger sources — manual HTTP, watchdog timeout, agent idle detection, Slack cancel button — all unified through a single CommandBus
 - **Three deployment modes**: In-memory (direct), remote worker (via transport), external listener (via transport) — same interfaces, different transport implementations
 - **Zero agent slowdown**: Stream parsing runs in a separate goroutine reading stdout pipe; agent writes at its own pace
-- **Graceful termination**: SIGTERM first, SIGKILL after grace period
+- **Graceful termination**: SIGTERM via `cmd.Cancel`, auto-SIGKILL after `cmd.WaitDelay` (10s)
+- **Cost tracking**: Capture `total_cost_usd`, `input_tokens`, `output_tokens` from claude's `result` event
 
 ## Architecture
 
@@ -21,12 +22,16 @@ Add real-time agent process visibility and kill capability across all deployment
 │  Kill triggers:                                         │
 │    DELETE /jobs/{id}     ─┐                             │
 │    Watchdog timeout      ─┤→ CommandBus.Send(kill)      │
-│    Idle detection        ─┤                             │
-│    Slack user cancel     ─┘                             │
+│    Idle/prepare timeout  ─┤                             │
+│    Slack cancel button   ─┘                             │
 │                                                         │
 │  StatusListener ← StatusBus.Subscribe()                 │
 │    → updates JobStore with AgentStatus                  │
-│    → idle detection checks last_event_at                │
+│                                                         │
+│  Watchdog checks:                                       │
+│    → job_timeout (all jobs)                             │
+│    → agent_idle_timeout (stream-json agents)            │
+│    → prepare_timeout (preparing stage)                  │
 │                                                         │
 │  GET /jobs ← reads JobStore (includes agent status)     │
 └──────────────┬─────────────────────┬───────────────────┘
@@ -36,14 +41,17 @@ Add real-time agent process visibility and kill capability across all deployment
 │                     Worker Side                         │
 │                                                         │
 │  CommandListener ← CommandBus.Receive()                 │
-│    → ProcessRegistry.Kill(jobID)                        │
+│    → ProcessRegistry.Kill(jobID) → calls jobCancel()    │
 │                                                         │
 │  Worker goroutine:                                      │
 │    cmd.StdoutPipe() → streamReader goroutine            │
-│      → parse events (stream-json) or just count bytes   │
+│      → stream: parse NDJSON, extract result event       │
+│      → non-stream: raw text accumulation                │
 │      → every status_interval: StatusBus.Report(status)  │
-│    cmd.Start() → ProcessRegistry.Register(jobID, proc)  │
+│    cmd.Cancel = SIGTERM, cmd.WaitDelay = 10s            │
+│    cmd.Start() → ProcessRegistry.Register(jobID)        │
 │    cmd.Wait()  → ProcessRegistry.Remove(jobID)          │
+│                → cleanupSkills + git reset repo          │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -87,74 +95,57 @@ type StatusBus interface {
 }
 ```
 
-### InMemTransport Extension
+### Split In-Memory Transport
 
-`InMemTransport` gains two more channels:
+`InMemTransport` is split into 5 focused implementations + a factory:
 
 ```go
-type InMemTransport struct {
-    // ...existing fields (jobCh, resultCh, pq, etc.)
+type InMemJobQueue struct { ... }      // priority heap + dispatch loop
+type InMemResultBus struct { ... }     // buffered result channel
+type InMemAttachmentStore struct { ... } // per-job ready channels
+type InMemCommandBus struct { ... }    // buffered command channel (cap: 10)
+type InMemStatusBus struct { ... }     // buffered status channel (cap: workerCount*2)
 
-    commandCh chan Command       // buffer: 10 (kill commands are rare)
-    statusCh  chan StatusReport  // buffer: workerCount * 2 (batched reports)
+// Factory creates all five, returns a bundle
+type InMemBundle struct {
+    Queue       *InMemJobQueue
+    Results     *InMemResultBus
+    Attachments *InMemAttachmentStore
+    Commands    *InMemCommandBus
+    Status      *InMemStatusBus
 }
+
+func NewInMemBundle(cfg TransportConfig, store JobStore) *InMemBundle
 ```
 
-In-memory implementation is trivial — `Send` writes to `commandCh`, `Receive` returns `commandCh`. Same for StatusBus. No new struct needed; extend `InMemTransport` to implement both.
+Each struct implements one interface. For future remote transport (NATS/Redis), each has its own independent implementation (e.g., `NATSJobQueue`, `NATSCommandBus`).
 
-Channel buffer sizes: `commandCh` buffered at 10 (kill commands are infrequent), `statusCh` buffered at `workerCount * 2` (each worker reports every `status_interval`, need enough buffer to avoid blocking workers).
+## ProcessRegistry (Worker-Side, Simplified)
 
-For future remote transport (NATS/Redis), CommandBus maps to a pub/sub topic per worker (or broadcast), StatusBus maps to another topic.
-
-## ProcessRegistry (Worker-Side)
-
-Lives on the worker side. Each worker process has one. Holds references to running OS processes for kill.
+Lives on the worker side. Holds `context.CancelFunc` per job — **no `*os.Process` reference**. Kill = cancel the job's context, which triggers `cmd.Cancel` (SIGTERM) + `cmd.WaitDelay` (auto SIGKILL after 10s).
 
 ```go
 type ProcessRegistry struct {
     mu        sync.RWMutex
-    processes map[string]*runningAgent // jobID → agent
+    processes map[string]*runningAgent
 }
 
 type runningAgent struct {
     JobID     string
     PID       int
     Command   string
-    Process   *os.Process
-    StartedAt time.Time
-    Cancel    context.CancelFunc // cancel the job's context
-}
-
-func (r *ProcessRegistry) Register(jobID string, proc *os.Process, command string, cancel context.CancelFunc)
-func (r *ProcessRegistry) Kill(jobID string) error   // SIGTERM → wait 3s → SIGKILL
-func (r *ProcessRegistry) Get(jobID string) (*runningAgent, bool)
-func (r *ProcessRegistry) Remove(jobID string)
-func (r *ProcessRegistry) List() []runningAgent
-```
-
-### Kill implementation
-
-Each `runningAgent` has a `done` channel that `Remove` closes. This avoids polling and race conditions.
-
-```go
-type runningAgent struct {
-    JobID     string
-    PID       int
-    Command   string
-    Process   *os.Process
     StartedAt time.Time
     Cancel    context.CancelFunc
     done      chan struct{} // closed by Remove()
 }
 
-func (r *ProcessRegistry) Register(jobID string, proc *os.Process, command string, cancel context.CancelFunc) {
+func (r *ProcessRegistry) Register(jobID string, pid int, command string, cancel context.CancelFunc) {
     r.mu.Lock()
     defer r.mu.Unlock()
     r.processes[jobID] = &runningAgent{
         JobID:     jobID,
-        PID:       proc.Pid,
+        PID:       pid,
         Command:   command,
-        Process:   proc,
         StartedAt: time.Now(),
         Cancel:    cancel,
         done:      make(chan struct{}),
@@ -166,7 +157,7 @@ func (r *ProcessRegistry) Remove(jobID string) {
     agent, ok := r.processes[jobID]
     if ok {
         delete(r.processes, jobID)
-        close(agent.done) // signal Kill() if waiting
+        close(agent.done)
     }
     r.mu.Unlock()
 }
@@ -179,25 +170,32 @@ func (r *ProcessRegistry) Kill(jobID string) error {
         return fmt.Errorf("no running agent for job %q", jobID)
     }
 
-    // Copy references under lock — safe to use after unlock.
-    proc := agent.Process
-    cancel := agent.Cancel
-    done := agent.done
+    // Cancel the job context → triggers cmd.Cancel (SIGTERM)
+    // cmd.WaitDelay (10s) handles escalation to SIGKILL automatically
+    agent.Cancel()
 
-    // 1. Try graceful: SIGTERM
-    proc.Signal(syscall.SIGTERM)
-
-    // 2. Wait for Remove() to close done, or timeout
+    // Wait for Remove() to confirm process exited, or timeout
     select {
-    case <-done:
-        return nil // graceful exit confirmed
-    case <-time.After(3 * time.Second):
-        // 3. Force kill
-        proc.Kill()
-        cancel()
+    case <-agent.done:
         return nil
+    case <-time.After(15 * time.Second): // 10s WaitDelay + 5s buffer
+        return fmt.Errorf("kill timeout for job %q", jobID)
     }
 }
+```
+
+### Post-Kill Cleanup
+
+After `cmd.Wait()` returns (whether from normal exit, SIGTERM, or SIGKILL), the worker always runs:
+
+```go
+defer func() {
+    cleanupSkills(repoPath, job.Skills, skillDir)
+    // Reset repo to clean state (kill may leave dirty files)
+    exec.Command("git", "-C", repoPath, "checkout", ".").Run()
+    exec.Command("git", "-C", repoPath, "clean", "-fd").Run()
+    p.registry.Remove(job.ID)
+}()
 ```
 
 ## Agent Runner Changes
@@ -210,63 +208,81 @@ type AgentConfig struct {
     Args     []string      `yaml:"args"`
     Timeout  time.Duration `yaml:"timeout"`
     SkillDir string        `yaml:"skill_dir"`
-    Stream   bool          `yaml:"stream"`   // NEW: enable stream-json event tracking
+    Stream   bool          `yaml:"stream"` // enable stream-json event tracking
 }
 ```
 
-### runOne refactor
+### Per-call RunOptions (no shared state)
 
-Change from `cmd.Start()` + `strings.Builder` to `cmd.StdoutPipe()` + goroutine reader:
+Callbacks are per-call, not per-struct, to avoid race conditions when multiple workers share one AgentRunner:
 
 ```go
-func (r *AgentRunner) runOne(ctx, logger, agent, workDir, prompt) (string, error) {
+type RunOptions struct {
+    OnStarted func(pid int, command string)
+    OnProcess func(proc *os.Process) // worker captures for cmd.Cancel setup
+    OnEvent   func(event StreamEvent)
+}
+
+func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string, opts RunOptions) (string, error) {
+    // ... fallback chain, each calling runOne with opts
+}
+```
+
+### runOne refactor — StdoutPipe + stream parsing
+
+```go
+func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (string, error) {
     cmd := exec.CommandContext(ctx, agent.Command, args...)
+    cmd.Dir = workDir
+    cmd.Env = append(os.Environ(), fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
+
+    // Graceful termination: SIGTERM first, auto-SIGKILL after 10s
+    cmd.Cancel = func() error {
+        return cmd.Process.Signal(syscall.SIGTERM)
+    }
+    cmd.WaitDelay = 10 * time.Second
 
     stdoutPipe, _ := cmd.StdoutPipe()
     var stderr strings.Builder
     cmd.Stderr = &stderr
 
-    cmd.Start()
-
-    // Notify: PID + command (worker stores in JobStore)
-    if r.onStarted != nil {
-        r.onStarted(cmd.Process.Pid, agent.Command)
-    }
-    // Worker-internal: capture process handle for ProcessRegistry
-    if r.onProcess != nil {
-        r.onProcess(cmd.Process)
+    if useStdin {
+        cmd.Stdin = strings.NewReader(prompt)
     }
 
-    // Read stdout in goroutine — collects full output + optionally parses stream events.
-    // Uses WaitGroup to ensure reader finishes BEFORE cmd.Wait() closes the pipe.
-    var fullOutput strings.Builder
-    eventCh := make(chan StreamEvent, 1000) // large buffer, drop on full
+    if err := cmd.Start(); err != nil {
+        return "", err
+    }
+
+    // Notify callbacks
+    if opts.OnStarted != nil {
+        opts.OnStarted(cmd.Process.Pid, agent.Command)
+    }
+    if opts.OnProcess != nil {
+        opts.OnProcess(cmd.Process)
+    }
+    logger.Info("agent process started", "command", agent.Command, "pid", cmd.Process.Pid)
+
+    // Read stdout in goroutine — stream or raw mode
     var readerWg sync.WaitGroup
     readerWg.Add(1)
+
+    var finalText string  // populated by result event or raw accumulation
+    eventCh := make(chan StreamEvent, 1000)
 
     go func() {
         defer readerWg.Done()
         defer close(eventCh)
-        scanner := bufio.NewScanner(stdoutPipe)
-        scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB line buffer
-        for scanner.Scan() {
-            line := scanner.Text()
-            fullOutput.WriteString(line)
-            fullOutput.WriteByte('\n')
 
-            if agent.Stream {
-                if event, ok := parseStreamEvent(line); ok {
-                    select {
-                    case eventCh <- event:
-                    default: // drop if channel full — non-blocking
-                    }
-                }
-            }
+        if agent.Stream {
+            finalText = readStreamJSON(stdoutPipe, eventCh)
+        } else {
+            finalText = readRawOutput(stdoutPipe)
         }
     }()
 
     // Forward events to callback with context awareness
-    if r.onEvent != nil {
+    if opts.OnEvent != nil {
         go func() {
             for {
                 select {
@@ -274,7 +290,7 @@ func (r *AgentRunner) runOne(ctx, logger, agent, workDir, prompt) (string, error
                     if !ok {
                         return
                     }
-                    r.onEvent(event)
+                    opts.OnEvent(event)
                 case <-ctx.Done():
                     return
                 }
@@ -282,13 +298,105 @@ func (r *AgentRunner) runOne(ctx, logger, agent, workDir, prompt) (string, error
         }()
     }
 
-    // Wait for reader to finish BEFORE cmd.Wait closes the pipe.
+    // Wait for reader to finish BEFORE cmd.Wait closes the pipe
     readerWg.Wait()
 
     err := cmd.Wait()
-    // ... error handling same as before
+    if err != nil {
+        if ctx.Err() != nil {
+            return "", fmt.Errorf("cancelled")
+        }
+        if exitErr, ok := err.(*exec.ExitError); ok {
+            return "", fmt.Errorf("exit %d: %s", exitErr.ExitCode(), strings.TrimSpace(stderr.String()))
+        }
+        return "", err
+    }
 
-    return fullOutput.String(), nil
+    return finalText, nil
+}
+```
+
+### Stream Reader — result event as primary text source
+
+```go
+// readStreamJSON reads NDJSON from claude --output-format stream-json.
+// Returns the final text from the "result" event, or reassembled message_delta as fallback.
+func readStreamJSON(r io.Reader, eventCh chan<- StreamEvent) string {
+    scanner := bufio.NewScanner(r)
+    scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+    var reassembled strings.Builder  // fallback: message_delta text
+    var resultText string            // primary: result event text
+
+    for scanner.Scan() {
+        line := scanner.Text()
+        var raw map[string]any
+        if json.Unmarshal([]byte(line), &raw) != nil {
+            continue
+        }
+
+        eventType, _ := raw["type"].(string)
+        switch eventType {
+        case "message_delta":
+            if delta, ok := raw["delta"].(map[string]any); ok {
+                if text, ok := delta["text"].(string); ok {
+                    reassembled.WriteString(text)
+                    select {
+                    case eventCh <- StreamEvent{Type: "message_delta", TextBytes: len(text)}:
+                    default:
+                    }
+                }
+            }
+
+        case "tool_use":
+            name, _ := raw["name"].(string)
+            select {
+            case eventCh <- StreamEvent{Type: "tool_use", ToolName: name}:
+            default:
+            }
+
+        case "result":
+            // Primary text source — complete final output
+            if res, ok := raw["result"].(string); ok {
+                resultText = res
+            }
+            // Cost tracking
+            costEvent := StreamEvent{Type: "result"}
+            if cost, ok := raw["total_cost_usd"].(float64); ok {
+                costEvent.CostUSD = cost
+            }
+            if usage, ok := raw["usage"].(map[string]any); ok {
+                if in, ok := usage["input_tokens"].(float64); ok {
+                    costEvent.InputTokens = int(in)
+                }
+                if out, ok := usage["output_tokens"].(float64); ok {
+                    costEvent.OutputTokens = int(out)
+                }
+            }
+            select {
+            case eventCh <- costEvent:
+            default:
+            }
+        }
+    }
+
+    // Prefer result event text; fall back to reassembled message_delta
+    if resultText != "" {
+        return resultText
+    }
+    return reassembled.String()
+}
+
+// readRawOutput reads plain text stdout (non-stream agents).
+func readRawOutput(r io.Reader) string {
+    scanner := bufio.NewScanner(r)
+    scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+    var buf strings.Builder
+    for scanner.Scan() {
+        buf.WriteString(scanner.Text())
+        buf.WriteByte('\n')
+    }
+    return buf.String()
 }
 ```
 
@@ -296,58 +404,12 @@ func (r *AgentRunner) runOne(ctx, logger, agent, workDir, prompt) (string, error
 
 ```go
 type StreamEvent struct {
-    Type      string // "tool_use", "tool_result", "message_delta", "result"
-    ToolName  string // e.g. "Read", "Bash", "Grep" (for tool_use)
-    TextBytes int    // bytes of text generated (for message_delta)
-}
-
-func parseStreamEvent(line string) (StreamEvent, bool) {
-    // Parse NDJSON line from claude --output-format stream-json
-    var raw map[string]any
-    if json.Unmarshal([]byte(line), &raw) != nil {
-        return StreamEvent{}, false
-    }
-    eventType, _ := raw["type"].(string)
-    switch eventType {
-    case "tool_use":
-        name, _ := raw["name"].(string)
-        return StreamEvent{Type: "tool_use", ToolName: name}, true
-    case "message_delta":
-        // Count text bytes in delta
-        if delta, ok := raw["delta"].(map[string]any); ok {
-            if text, ok := delta["text"].(string); ok {
-                return StreamEvent{Type: "message_delta", TextBytes: len(text)}, true
-            }
-        }
-        return StreamEvent{Type: "message_delta"}, true
-    default:
-        return StreamEvent{}, false
-    }
-}
-```
-
-### AgentRunner callbacks
-
-The `onStarted` callback does NOT pass `*os.Process` directly — that leaks OS concerns into the callback chain. Instead, the worker wraps it internally:
-
-```go
-type AgentRunner struct {
-    agents      []config.AgentConfig
-    githubToken string
-    onStarted   func(pid int, command string)    // notifies worker of PID/command
-    onProcess   func(proc *os.Process)           // worker-internal: captures process handle
-    onEvent     func(event StreamEvent)           // stream events
-}
-```
-
-The `TrackedRunner` interface is updated:
-
-```go
-type TrackedRunner interface {
-    Runner
-    SetOnStarted(fn func(pid int, command string))
-    SetOnProcess(fn func(proc *os.Process))
-    SetOnEvent(fn func(event StreamEvent))
+    Type         string  // "tool_use", "message_delta", "result"
+    ToolName     string  // e.g. "Read", "Bash", "Grep" (for tool_use)
+    TextBytes    int     // bytes of text generated (for message_delta)
+    CostUSD      float64 // total cost (for result)
+    InputTokens  int     // (for result)
+    OutputTokens int     // (for result)
 }
 ```
 
@@ -359,7 +421,6 @@ Kill commands MUST be processed while jobs are executing. A dedicated command li
 
 ```go
 func (p *Pool) Start(ctx context.Context) {
-    // Dedicated command listener — NOT inside worker loop
     go p.commandListener(ctx)
 
     for i := 0; i < p.cfg.WorkerCount; i++ {
@@ -385,7 +446,11 @@ func (p *Pool) commandListener(ctx context.Context) {
         }
     }
 }
+```
 
+### Worker — per-job context + status reporting + cancel check
+
+```go
 func (p *Pool) runWorker(ctx context.Context, id int) {
     jobs, _ := p.cfg.Queue.Receive(ctx)
     for {
@@ -393,6 +458,14 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
         case job, ok := <-jobs:
             if !ok {
                 return
+            }
+            // Check if job was already cancelled while pending
+            state, err := p.cfg.Store.Get(job.ID)
+            if err != nil || state.Status == queue.JobFailed {
+                p.cfg.Results.Publish(ctx, &queue.JobResult{
+                    JobID: job.ID, Status: "failed", Error: "cancelled before execution",
+                })
+                continue
             }
             p.executeWithTracking(ctx, id, job)
         case <-ctx.Done():
@@ -406,47 +479,36 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerID int, job *queue
     jobCtx, jobCancel := context.WithCancel(ctx)
     defer jobCancel()
 
-    // Status accumulator — collects stream events, batches reports
+    // Status accumulator
     status := &statusAccumulator{
         jobID:    job.ID,
         workerID: fmt.Sprintf("worker-%d", workerID),
+        alive:    true,
     }
 
-    // Wire up callbacks before execution
-    // (AgentRunner callbacks are set per-job, called from the runner goroutine)
-    // ... setup onStarted to register in ProcessRegistry with jobCancel
-    // ... setup onEvent to feed status accumulator
+    // Wire RunOptions — per-call, no shared state
+    opts := RunOptions{
+        OnStarted: func(pid int, command string) {
+            status.setPID(pid, command)
+            p.registry.Register(job.ID, pid, command, jobCancel)
+        },
+        OnEvent: func(event StreamEvent) {
+            status.recordEvent(event)
+        },
+    }
 
     // Start periodic status reporting
     stopReporter := make(chan struct{})
     go p.reportStatus(jobCtx, status, stopReporter)
 
-    // Execute job (blocks until agent finishes)
-    result := executeJob(jobCtx, job, deps)
+    // Execute job (blocks until agent finishes or is killed)
+    result := executeJob(jobCtx, job, deps, opts)
 
     close(stopReporter)
     p.registry.Remove(job.ID)
-
-    // Final status report
-    status.alive = false
-    p.cfg.Status.Report(ctx, status.toReport())
+    // No final Alive=false report — ResultListener handles completion
 
     p.cfg.Results.Publish(ctx, result)
-}
-
-func (p *Pool) reportStatus(ctx context.Context, status *statusAccumulator, stop <-chan struct{}) {
-    ticker := time.NewTicker(p.cfg.StatusInterval)
-    defer ticker.Stop()
-    for {
-        select {
-        case <-ticker.C:
-            p.cfg.Status.Report(ctx, status.toReport())
-        case <-stop:
-            return
-        case <-ctx.Done():
-            return
-        }
-    }
 }
 ```
 
@@ -465,6 +527,16 @@ type statusAccumulator struct {
     toolCalls   int
     filesRead   int
     outputBytes int
+    costUSD     float64
+    inputTokens int
+    outputTokens int
+}
+
+func (s *statusAccumulator) setPID(pid int, cmd string) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    s.pid = pid
+    s.agentCmd = cmd
 }
 
 func (s *statusAccumulator) recordEvent(event StreamEvent) {
@@ -481,51 +553,30 @@ func (s *statusAccumulator) recordEvent(event StreamEvent) {
     case "message_delta":
         s.outputBytes += event.TextBytes
         s.lastEvent = "message_delta"
+    case "result":
+        s.costUSD = event.CostUSD
+        s.inputTokens = event.InputTokens
+        s.outputTokens = event.OutputTokens
+        s.lastEvent = "result"
     }
 }
 
-func (s *statusAccumulator) toReport() StatusReport {
-    s.mu.Lock()
-    defer s.mu.Unlock()
-    return StatusReport{
-        JobID:       s.jobID,
-        WorkerID:    s.workerID,
-        PID:         s.pid,
-        AgentCmd:    s.agentCmd,
-        Alive:       s.alive,
-        LastEvent:   s.lastEvent,
-        LastEventAt: s.lastEventAt,
-        ToolCalls:   s.toolCalls,
-        FilesRead:   s.filesRead,
-        OutputBytes: s.outputBytes,
-    }
-}
+func (s *statusAccumulator) toReport() StatusReport { ... }
 ```
 
-## App-Side: StatusListener + Idle Detection
+## App-Side: StatusListener + Watchdog
 
 ### StatusListener
 
-Runs as a goroutine on the app side. Receives status reports and updates the JobStore.
-
 ```go
-type StatusListener struct {
-    status   StatusBus
-    store    JobStore
-    commands CommandBus
-    idleTTL  time.Duration // agent_idle_timeout from config
-}
-
 func (l *StatusListener) Listen(ctx context.Context) {
     ch, _ := l.status.Subscribe(ctx)
     for {
         select {
         case report, ok := <-ch:
             if !ok {
-                return // channel closed
+                return
             }
-            // SetAgentStatus is the single authoritative update — replaces SetAgent.
-            // SetAgent (PID + command only) is removed; SetAgentStatus covers all fields.
             l.store.SetAgentStatus(report.JobID, report)
         case <-ctx.Done():
             return
@@ -534,9 +585,7 @@ func (l *StatusListener) Listen(ctx context.Context) {
 }
 ```
 
-### Idle Detection
-
-Integrated into the existing Watchdog. Check both job-level timeout AND agent idle timeout:
+### Watchdog — three timeout checks
 
 ```go
 func (w *Watchdog) check() {
@@ -548,15 +597,26 @@ func (w *Watchdog) check() {
             continue
         }
 
-        // 1. Job-level timeout (existing)
+        // 1. Job-level timeout (all jobs)
         if now.Sub(state.Job.SubmittedAt) > w.jobTimeout {
             w.killAndNotify(state, "job timeout")
             continue
         }
 
-        // 2. Agent idle timeout (new, stream-json only)
-        if w.idleTimeout > 0 && !state.AgentLastEventAt.IsZero() {
-            if now.Sub(state.AgentLastEventAt) > w.idleTimeout {
+        // 2. Prepare timeout (job stuck in preparing stage)
+        if state.Status == JobPreparing && w.prepareTimeout > 0 {
+            if state.AgentStatus == nil || state.AgentStatus.LastEventAt.IsZero() {
+                // No events yet — check time since status changed to preparing
+                if now.Sub(state.StartedAt) > w.prepareTimeout {
+                    w.killAndNotify(state, "prepare timeout")
+                    continue
+                }
+            }
+        }
+
+        // 3. Agent idle timeout (stream-json agents only)
+        if w.idleTimeout > 0 && state.AgentStatus != nil && !state.AgentStatus.LastEventAt.IsZero() {
+            if now.Sub(state.AgentStatus.LastEventAt) > w.idleTimeout {
                 w.killAndNotify(state, "agent idle timeout")
                 continue
             }
@@ -575,27 +635,18 @@ func (w *Watchdog) killAndNotify(state *JobState, reason string) {
 
 ### Updated StuckNotifier signature
 
-The existing `StuckNotifier` changes from `func(job *Job, status JobStatus, stuckDuration time.Duration)` to:
-
 ```go
 type StuckNotifier func(job *Job, status JobStatus, reason string)
-```
 
-This supports both timeout reasons ("job timeout") and idle reasons ("agent idle timeout"). The existing `FormatStuckMessage` helper and the main.go watchdog setup must be updated accordingly:
-
-```go
 func FormatStuckMessage(job *Job, status JobStatus, reason string) string {
     return fmt.Sprintf(":warning: Job 已終止 (%s)，狀態停在 `%s`，repo: `%s`。請重新觸發。",
         reason, status, job.Repo)
 }
 ```
-```
 
 ## HTTP Endpoints
 
 ### GET /jobs (enhanced)
-
-Returns agent tracking info when available:
 
 ```json
 {
@@ -615,7 +666,10 @@ Returns agent tracking info when available:
         "last_event_age": "3s",
         "tool_calls": 12,
         "files_read": 8,
-        "output_bytes": 15360
+        "output_bytes": 15360,
+        "cost_usd": 0.042,
+        "input_tokens": 8500,
+        "output_tokens": 1200
       }
     }
   ]
@@ -624,12 +678,10 @@ Returns agent tracking info when available:
 
 ### DELETE /jobs/{id}
 
-Kill a running job:
-
 ```
 DELETE /jobs/req-abc123
 
-Response 200: {"status": "killed", "job_id": "req-abc123"}
+Response 200: {"status": "killing", "job_id": "req-abc123"}
 Response 404: {"error": "job not found"}
 Response 409: {"error": "job not running"}
 ```
@@ -641,33 +693,73 @@ Flow:
 4. If pending (still in queue): worker will dequeue the job but skip execution because JobStore shows `JobFailed`. No need for a `Cancel` method on JobQueue — the worker checks status after dequeue.
 5. Return immediately (async — result comes via ResultListener or worker skip)
 
-Note: We do NOT add a `Remove/Cancel` method to `JobQueue` interface. Instead, workers check `JobStore.Get(jobID).Status` after dequeuing — if already `JobFailed`, they skip execution and publish a cancelled result. This keeps the interface simple.
+## Slack Cancel Button
 
-## Slack User Cancel
-
-User types ONLY a cancel keyword (exact match, trimmed) in a thread that has an active job. This avoids false positives from messages like "don't cancel the meeting":
+When submitting a job, attach a "取消" button to the queue position message:
 
 ```go
-// isCancel requires the entire message (trimmed) to be a cancel keyword.
-func isCancel(text string) bool {
-    text = strings.TrimSpace(strings.ToLower(text))
-    switch text {
-    case "取消", "cancel", "stop", "abort":
-        return true
+// In workflow.go after queue.Submit
+msg := fmt.Sprintf(":hourglass_flowing_sand: 正在處理你的請求...")
+w.slack.PostMessageWithButton(pt.ChannelID, msg, pt.ThreadTS,
+    "cancel_job", "取消", job.ID)
+```
+
+Button click handler in the Socket Mode event loop (uses existing `InteractionTypeBlockActions`):
+
+```go
+case strings.HasPrefix(action.ActionID, "cancel_job"):
+    jobID := action.Value
+    state, err := jobStore.Get(jobID)
+    if err == nil && isActive(state.Status) {
+        commandBus.Send(ctx, Command{JobID: jobID, Action: "kill"})
+        slackClient.UpdateMessage(cb.Channel.ID, selectorTS,
+            ":stop_sign: 正在取消...")
     }
-    return false
+```
+
+No additional Slack App event subscriptions needed — Interactive buttons already work.
+
+## Attachment Fix
+
+`AttachmentMeta` gains `DownloadURL` for the two-phase flow:
+
+```go
+type AttachmentMeta struct {
+    SlackFileID string `json:"slack_file_id"`
+    Filename    string `json:"filename"`
+    Size        int64  `json:"size"`
+    MimeType    string `json:"mime_type"`
+    DownloadURL string `json:"download_url"` // Slack private file URL
+}
+```
+
+`workflow.runTriage` collects metadata + URLs but does NOT download. `AttachmentStore.Prepare` uses `DownloadURL` to fetch files after worker Ack.
+
+## JobResult Cost Extension
+
+```go
+type JobResult struct {
+    // ...existing fields
+    CostUSD      float64 `json:"cost_usd,omitempty"`
+    InputTokens  int     `json:"input_tokens,omitempty"`
+    OutputTokens int     `json:"output_tokens,omitempty"`
+}
+```
+
+## JobStore Extension
+
+```go
+type JobState struct {
+    // ...existing fields (Job, Status, Position, WorkerID, StartedAt, WaitTime)
+    AgentStatus *StatusReport // nil if no status reported yet
 }
 
-// In the Socket Mode event loop
-case *slackevents.MessageEvent:
-    if isCancel(inner.Text) && inner.ThreadTimeStamp != "" {
-        state, err := jobStore.GetByThread(inner.Channel, inner.ThreadTimeStamp)
-        if err == nil && isActive(state.Status) {
-            commandBus.Send(ctx, Command{JobID: state.Job.ID, Action: "kill"})
-            slackClient.PostMessage(inner.Channel,
-                ":stop_sign: 正在取消...", inner.ThreadTimeStamp)
-        }
-    }
+type JobStore interface {
+    // ...existing methods
+    // SetAgent is removed — replaced by SetAgentStatus
+    SetAgentStatus(jobID string, report StatusReport) error
+    // SetAgentStatus on a deleted/not-found job is silently ignored
+}
 ```
 
 ## Config
@@ -678,8 +770,8 @@ queue:
   transport: inmem
   job_timeout: 20m              # watchdog: max job lifetime
   agent_idle_timeout: 5m        # stream-json agent: no events for this long = stuck
+  prepare_timeout: 3m           # preparing stage: clone/setup timeout
   status_interval: 5s           # worker status report frequency
-  kill_grace_period: 3s         # SIGTERM → SIGKILL wait time
 
 agents:
   claude:
@@ -696,67 +788,64 @@ agents:
     stream: false
 ```
 
-## JobStore Extension
-
-```go
-type JobState struct {
-    // ...existing fields
-    // Remove: AgentPID, AgentCommand (replaced by full status below)
-    AgentStatus *StatusReport // nil if no status reported yet
-}
-
-type JobStore interface {
-    // ...existing methods
-    // Remove: SetAgent(jobID string, pid int, command string) — replaced by SetAgentStatus
-    SetAgentStatus(jobID string, report StatusReport) error
-}
-```
-
-Note: The existing `SetAgent` method is removed. `SetAgentStatus` is the single write path for all agent tracking data. Called by `StatusListener` when it receives periodic reports from workers. The first report (from `onStarted`) contains PID and command; subsequent reports add event data.
+Note: `kill_grace_period` is removed from config — hardcoded as `cmd.WaitDelay = 10 * time.Second` since it's tied to Go's exec behavior, not a user-tunable knob.
 
 ## File Structure (new/changed)
 
 ```
 internal/
   queue/
-    interface.go          # CHANGED: add CommandBus, StatusBus, StatusReport, Command
-    job.go                # CHANGED: extend JobState with agent tracking fields
-    inmem.go              # CHANGED: add commandCh, statusCh
-    memstore.go           # CHANGED: add SetAgentStatus, extend ListAll
-    httpstatus.go         # CHANGED: enhanced /jobs response, add DELETE /jobs/{id}
-    watchdog.go           # CHANGED: add idle detection, use CommandBus for kill
-    registry.go           # NEW: ProcessRegistry (worker-side)
-    stream.go             # NEW: StreamEvent, parseStreamEvent
+    interface.go          # CHANGED: add CommandBus, StatusBus, StatusReport, Command; remove SetAgent
+    job.go                # CHANGED: extend JobState, JobResult; add AttachmentMeta.DownloadURL
+    inmem_jobqueue.go     # NEW: InMemJobQueue (extracted from inmem.go)
+    inmem_resultbus.go    # NEW: InMemResultBus
+    inmem_attachments.go  # NEW: InMemAttachmentStore
+    inmem_commandbus.go   # NEW: InMemCommandBus
+    inmem_statusbus.go    # NEW: InMemStatusBus
+    inmem_bundle.go       # NEW: InMemBundle factory
+    inmem.go              # REMOVED: replaced by 6 files above
+    memstore.go           # CHANGED: add SetAgentStatus; remove SetAgent
+    httpstatus.go         # CHANGED: enhanced /jobs, add DELETE /jobs/{id}
+    watchdog.go           # CHANGED: idle + prepare detection, CommandBus kill, new notifier signature
+    registry.go           # NEW: ProcessRegistry (simplified, cancel-only)
+    stream.go             # NEW: StreamEvent, readStreamJSON, readRawOutput
   worker/
-    pool.go               # CHANGED: command listener, per-job context, status reporting
-    executor.go           # CHANGED: wire onStarted/onEvent callbacks
+    pool.go               # CHANGED: command listener, per-job context, cancel check, status reporting
+    executor.go           # CHANGED: wire RunOptions, post-kill cleanup (git reset)
     status.go             # NEW: statusAccumulator
   bot/
-    agent.go              # CHANGED: StdoutPipe reader, onEvent callback, Stream support
+    agent.go              # CHANGED: RunOptions, cmd.Cancel/WaitDelay, StdoutPipe reader
   config/
-    config.go             # CHANGED: add Stream, agent_idle_timeout, status_interval, kill_grace_period
+    config.go             # CHANGED: add Stream, prepare_timeout, agent_idle_timeout, status_interval
 cmd/
   bot/
-    main.go               # CHANGED: wire StatusListener, CommandBus, updated watchdog
+    main.go               # CHANGED: wire StatusListener, CommandBus, cancel button handler, updated watchdog
 ```
 
 ## Deployment Mode Summary
 
 | Capability | In-Memory | Remote Worker | External Listener |
 |-----------|-----------|---------------|-------------------|
-| Kill | CommandBus (channel) → ProcessRegistry.Kill() | CommandBus (NATS/Redis) → Worker's ProcessRegistry.Kill() | Same as remote |
-| Status tracking | StatusBus (channel) → JobStore | StatusBus (NATS/Redis) → JobStore | Same as remote |
+| Kill | CommandBus (channel) → jobCancel() | CommandBus (NATS) → Worker's jobCancel() | Same as remote |
+| Status tracking | StatusBus (channel) → JobStore | StatusBus (NATS) → JobStore | Same as remote |
 | Stream events | Same-process, zero latency | Batched every status_interval | Same as remote |
-| PID alive check | Direct (same machine) | Worker reports alive flag | Same as remote |
-| Idle detection | App-side Watchdog reads JobStore | Same — based on StatusReport timestamps | Same |
+| Idle detection | Watchdog reads JobStore | Same — based on StatusReport timestamps | Same |
+| Prepare timeout | Watchdog reads JobStore | Same | Same |
+| Cost tracking | From result event via StatusBus | Same | Same |
 
 All modes use the same interfaces. Only the transport layer differs.
 
 ## Migration Notes
 
-- `agent.Args` for claude should change from `["--print", "-p", "{prompt}"]` to `["--print", "--output-format", "stream-json", "-p", "{prompt}"]`
+- `agent.Args` for claude changes to include `--output-format stream-json`
 - Add `stream: true` to claude agent config
-- Add `agent_idle_timeout`, `status_interval`, `kill_grace_period` to queue config
-- AgentRunner `onStarted` callback signature changes: adds `*os.Process` parameter
-- Worker pool gains CommandBus dependency
-- Existing tests need updating for new callback signatures
+- Add `prepare_timeout`, `agent_idle_timeout`, `status_interval` to queue config
+- `AgentRunner.Run` signature changes: adds `RunOptions` parameter
+- `TrackedRunner` interface replaced by `RunOptions` pattern
+- `SetAgent` removed from JobStore; replaced by `SetAgentStatus`
+- `StuckNotifier` signature changes: `time.Duration` → `string` reason
+- `InMemTransport` split into 5 structs + bundle factory
+- `AttachmentMeta` gains `DownloadURL` field
+- `JobResult` gains cost/token fields
+- Existing tests need updating for new signatures
+- Slack cancel button requires `PostMessageWithButton` helper on slack client

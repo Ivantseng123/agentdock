@@ -82,6 +82,7 @@ type AttachmentMeta struct {
     Filename    string `json:"filename"`
     Size        int64  `json:"size"`
     MimeType    string `json:"mime_type"`
+    DownloadURL string `json:"download_url"` // Slack private file URL for two-phase download
 }
 ```
 
