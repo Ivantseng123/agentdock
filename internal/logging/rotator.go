@@ -23,7 +23,7 @@ func NewRotator(dir string) (*Rotator, error) {
 		return nil, fmt.Errorf("create log dir: %w", err)
 	}
 	r := &Rotator{dir: dir}
-	if err := r.rotate(); err != nil {
+	if err := r.rotateLocked(); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -51,15 +51,10 @@ func (r *Rotator) Close() error {
 	return nil
 }
 
-func (r *Rotator) rotate() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.rotateLocked()
-}
-
 func (r *Rotator) rotateLocked() error {
 	if r.current != nil {
 		r.current.Close()
+		r.current = nil
 	}
 	today := time.Now().Format("2006-01-02")
 	path := filepath.Join(r.dir, today+".jsonl")

@@ -38,11 +38,18 @@ func TestRotator_MultipleWrites(t *testing.T) {
 	}
 	defer r.Close()
 
-	r.Write([]byte("line1\n"))
-	r.Write([]byte("line2\n"))
+	if _, err := r.Write([]byte("line1\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Write([]byte("line2\n")); err != nil {
+		t.Fatal(err)
+	}
 
 	expected := filepath.Join(dir, time.Now().Format("2006-01-02")+".jsonl")
-	data, _ := os.ReadFile(expected)
+	data, err := os.ReadFile(expected)
+	if err != nil {
+		t.Fatalf("expected file %s: %v", expected, err)
+	}
 	if string(data) != "line1\nline2\n" {
 		t.Errorf("file content = %q", string(data))
 	}
