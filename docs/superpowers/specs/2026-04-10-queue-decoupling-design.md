@@ -446,25 +446,90 @@ rate_limit:
   window: 1m
 ```
 
+## Skill and Prompt Changes
+
+### Skill (`agents/skills/triage-issue/SKILL.md`)
+
+The skill currently instructs the agent to create a GitHub issue via `gh issue create` and output `===TRIAGE_RESULT===CREATED:<url>`. This needs to change:
+
+**Remove:**
+- Step 6 (Create the GitHub issue) — agent no longer calls `gh issue create`
+- `gh issue create` command and template
+
+**Change Step 7 (Output result) to structured JSON output:**
+
+```
+===TRIAGE_RESULT===
+{
+  "status": "CREATED",
+  "title": "...",
+  "body": "...(full markdown issue body)...",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 5,
+  "open_questions": 0
+}
+```
+
+For rejection (confidence=low), keep the existing format:
+```
+===TRIAGE_RESULT===
+{
+  "status": "REJECTED",
+  "message": "reason"
+}
+```
+
+The rest of the skill (Steps 1-5: understand, explore, assess, fix approach, TDD plan) stays unchanged — this is the core analysis value.
+
+### Prompt builder (`internal/bot/prompt.go`)
+
+**Remove from prompt:**
+- `RepoPath` — worker determines the local path after clone
+- `github_repo` metadata line — agent doesn't need it (app handles issue creation)
+- `labels` metadata line — same reason
+
+**Keep in prompt:**
+- Thread context (unchanged)
+- Extra description (unchanged)
+- Branch info (agent needs to know which branch to investigate)
+- `channel`, `reporter` — still needed in issue body header (agent includes them in the body template)
+- Attachments (unchanged, but paths are now relative to worker's clone dir)
+- Language + extra rules (unchanged)
+
+### Skill mounting for workers
+
+All supported agent CLIs (claude, opencode, codex) read skills from the repo directory. Since the skill file is checked into the repo at `agents/skills/triage-issue/SKILL.md`, any worker that clones the repo automatically has access to it. No additional skill mounting or configuration is needed.
+
+| Worker type | Skill source | How it works |
+|-------------|-------------|--------------|
+| In-pod worker | Clone repo → `agents/skills/` in repo | Agent reads on startup |
+| Remote pod worker | Clone repo → same | Same as in-pod |
+| External listener | Clone repo → same | Same; uses own agent CLI + API key |
+
 ## File Structure (new/changed)
 
 ```
+agents/
+  skills/
+    triage-issue/
+      SKILL.md            # CHANGED: remove gh issue create, output structured JSON
 internal/
   queue/
-    interface.go        # JobQueue, ResultBus, AttachmentStore, JobStore
-    job.go              # Job, JobResult, JobState, AttachmentMeta
-    priority.go         # container/heap priority queue implementation
-    inmem.go            # InMemTransport (implements all interfaces)
+    interface.go          # JobQueue, ResultBus, AttachmentStore, JobStore
+    job.go                # Job, JobResult, JobState, AttachmentMeta
+    priority.go           # container/heap priority queue implementation
+    inmem.go              # InMemTransport (implements all interfaces)
   worker/
-    pool.go             # Worker pool startup and management
-    executor.go         # Single job execution (clone, agent, parse)
+    pool.go               # Worker pool startup and management
+    executor.go           # Single job execution (clone, agent, parse)
   bot/
-    handler.go          # CHANGED: semaphore → queue.Submit()
-    workflow.go         # CHANGED: split into submit-side and worker-side
-    prompt.go           # CHANGED: no longer instruct agent to create issues
-    parser.go           # CHANGED: parse structured triage output instead of issue URL
+    handler.go            # CHANGED: remove semaphore
+    workflow.go           # CHANGED: split — interactive UI stays, runTriage → queue.Submit
+    prompt.go             # CHANGED: remove RepoPath, github_repo, labels from prompt
+    parser.go             # CHANGED: parse structured JSON output instead of ===TRIAGE_RESULT===CREATED:<url>
   config/
-    config.go           # CHANGED: add queue, channel_priority, workers, attachments config
+    config.go             # CHANGED: add queue, channel_priority, workers, attachments config
 ```
 
 ## What's Deferred (遠期)
@@ -479,7 +544,8 @@ internal/
 ## Migration Notes
 
 - `max_concurrent` config: config loader checks both `max_concurrent` (old path) and `workers.count` (new path); old path takes precedence if both set, with deprecation warning logged
-- Prompt changes: agent no longer runs `gh issue create`; outputs structured triage result
-- Parser changes: new output format for title/body/labels/metadata instead of `===TRIAGE_RESULT===`
+- Skill change: `agents/skills/triage-issue/SKILL.md` — remove `gh issue create`, output structured JSON with title/body/labels/confidence/files_found/open_questions
+- Prompt change: `internal/bot/prompt.go` — remove `RepoPath`, `github_repo`, `labels` from prompt; keep thread context, branch, channel, reporter, attachments
+- Parser change: `internal/bot/parser.go` — parse structured JSON from `===TRIAGE_RESULT===` block instead of `CREATED:<url>` format
 - Semaphore removal from handler.go
 - Existing tests need updating for new flow split
