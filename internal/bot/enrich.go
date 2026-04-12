@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"slack-issue-bot/internal/mantis"
+	"agentdock/internal/mantis"
 )
 
 var urlRegex = regexp.MustCompile(`https?://[^\s<>|]+`)

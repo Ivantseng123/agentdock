@@ -1,10 +1,10 @@
-# react2issue v2
+# AgentDock
 
 [English](README.en.md)
 
-Slack 對話 → AI codebase triage → GitHub Issue。Go 單一 binary，Socket Mode（不需公開 URL）。
+AI agent 調度平台 — 從任何來源接收請求，分派給 CLI agent（claude/codex/opencode）執行，回傳結構化結果。目前支援 Slack → codebase triage → GitHub Issue 流程。
 
-在 Slack thread 中 `@bot` 或 `/triage`，bot 會讀取整段對話、透過 queue 分派給 CLI agent（claude/opencode/codex）探索 codebase，然後建立結構化的 GitHub issue。支援 in-memory 和 Redis 兩種 transport，worker 可在同一 process 或獨立 pod 執行。
+Go 單一 binary，支援 in-memory 和 Redis 兩種 transport，worker 可在同一 process、獨立 pod、或同事的電腦上執行。
 
 ## Quick Start
 
@@ -322,21 +322,21 @@ Image 包含三個 agent CLI：claude、codex、opencode。
 > **注意：Docker 容器只能使用 API key 認證，不支援 OAuth 登入。** Agent CLI 的 OAuth（如 `claude login`）綁定本機 keychain，無法移植到容器內。個人電腦使用 OAuth 的場景請用上方的「外部 Worker」方式（native binary）。
 
 ```bash
-docker build -t react2issue .
+docker build -t agentdock .
 
 # App 模式（inmem，單機）
 docker run -e SLACK_BOT_TOKEN=xoxb-... \
            -e SLACK_APP_TOKEN=xapp-... \
            -e GITHUB_TOKEN=ghp_... \
            -e ANTHROPIC_API_KEY=sk-ant-... \
-           react2issue
+           agentdock
 
 # Worker 模式（Redis，獨立消費 job）
 docker run -e REDIS_ADDR=redis:6379 \
            -e GITHUB_TOKEN=ghp_... \
            -e FALLBACK=claude \
            -e ANTHROPIC_API_KEY=sk-ant-... \
-           react2issue worker
+           agentdock worker
 ```
 
 #### Agent 認證方式比較

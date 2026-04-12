@@ -1,4 +1,4 @@
-# react2issue
+# agentdock
 
 [繁體中文](README.md)
 

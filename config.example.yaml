@@ -61,7 +61,7 @@ prompt:
     - "列出所有相關的檔案名稱與完整路徑"
 
 repo_cache:
-  dir: "/tmp/slack-issue-bot/repos"
+  dir: "/tmp/agentdock/repos"
   max_age: 1h
 
 rate_limit:

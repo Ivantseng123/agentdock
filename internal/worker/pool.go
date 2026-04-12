@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"time"
 
-	"slack-issue-bot/internal/bot"
-	"slack-issue-bot/internal/queue"
+	"agentdock/internal/bot"
+	"agentdock/internal/queue"
 )
 
 type Config struct {

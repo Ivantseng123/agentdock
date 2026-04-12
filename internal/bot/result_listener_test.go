@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"slack-issue-bot/internal/queue"
+	"agentdock/internal/queue"
 )
 
 type mockSlackPoster struct {

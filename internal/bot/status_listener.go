@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"slack-issue-bot/internal/queue"
+	"agentdock/internal/queue"
 )
 
 type StatusListener struct {

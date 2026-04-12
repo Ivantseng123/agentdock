@@ -39,4 +39,4 @@ func NewRedisClient(cfg RedisConfig) (*redis.Client, error) {
 	return client, nil
 }
 
-const keyPrefix = "r2i:"
+const keyPrefix = "ad:"

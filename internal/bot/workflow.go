@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"slack-issue-bot/internal/config"
-	ghclient "slack-issue-bot/internal/github"
-	"slack-issue-bot/internal/logging"
-	"slack-issue-bot/internal/mantis"
-	"slack-issue-bot/internal/queue"
-	slackclient "slack-issue-bot/internal/slack"
+	"agentdock/internal/config"
+	ghclient "agentdock/internal/github"
+	"agentdock/internal/logging"
+	"agentdock/internal/mantis"
+	"agentdock/internal/queue"
+	slackclient "agentdock/internal/slack"
 )
 
 const pendingTimeout = 1 * time.Minute

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"slack-issue-bot/internal/bot"
-	"slack-issue-bot/internal/queue"
+	"agentdock/internal/bot"
+	"agentdock/internal/queue"
 )
 
 // Runner abstracts agent execution (for testing).

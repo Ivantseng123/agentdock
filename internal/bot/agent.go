@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"slack-issue-bot/internal/config"
-	"slack-issue-bot/internal/queue"
+	"agentdock/internal/config"
+	"agentdock/internal/queue"
 )
 
 // RunOptions provides per-call callbacks for agent execution.

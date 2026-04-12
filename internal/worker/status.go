@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"slack-issue-bot/internal/queue"
+	"agentdock/internal/queue"
 )
 
 type statusAccumulator struct {

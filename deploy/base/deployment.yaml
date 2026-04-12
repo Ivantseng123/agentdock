@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: react2issue
+  name: agentdock
 spec:
   replicas: 1
   strategy:
@@ -11,7 +11,7 @@ spec:
       imagePullSecrets:
         - name: regcred
       containers:
-        - name: react2issue
+        - name: agentdock
           image: IMAGE_PLACEHOLDER
           imagePullPolicy: Always
           ports:
@@ -40,7 +40,7 @@ spec:
               memory: 512Mi
           envFrom:
             - secretRef:
-                name: react2issue-secret
+                name: agentdock-secret
           volumeMounts:
             - name: repo-cache
               mountPath: /data/repos

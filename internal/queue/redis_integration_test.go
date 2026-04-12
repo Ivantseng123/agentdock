@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"slack-issue-bot/internal/queue"
-	"slack-issue-bot/internal/worker"
+	"agentdock/internal/queue"
+	"agentdock/internal/worker"
 )
 
 func redisClient(t *testing.T) *redis.Client {

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"slack-issue-bot/internal/bot"
-	"slack-issue-bot/internal/queue"
-	"slack-issue-bot/internal/worker"
+	"agentdock/internal/bot"
+	"agentdock/internal/queue"
+	"agentdock/internal/worker"
 )
 
 type fakeRunner struct{}

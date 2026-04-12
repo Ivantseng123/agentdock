@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"slack-issue-bot/internal/queue"
+	"agentdock/internal/queue"
 )
 
 // SlackPoster abstracts Slack message posting for testing.

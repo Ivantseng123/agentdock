@@ -1,4 +1,4 @@
-module slack-issue-bot
+module agentdock
 
 go 1.25
 

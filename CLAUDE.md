@@ -1,6 +1,6 @@
-# react2issue v2
+# AgentDock
 
-Go service that turns Slack conversations into structured GitHub issues with AI-powered codebase triage. Triggered by `@bot` mentions or `/triage` slash commands in threads. Core value: lowering the barrier for non-engineers to create useful issues from Slack conversations.
+AI agent dispatch platform. Currently: turns Slack conversations into structured GitHub issues with AI-powered codebase triage. Triggered by `@bot` mentions or `/triage` slash commands in threads. Core value: lowering the barrier for non-engineers to create useful issues from Slack conversations.
 
 ## Architecture
 
@@ -92,7 +92,7 @@ Automated via [release-please](https://github.com/googleapis/release-please). Fl
 1. Write Conventional Commits (`feat:`, `fix:`, `chore:`, etc.)
 2. release-please auto-maintains a Release PR on `main` (version bump + CHANGELOG)
 3. Merge the Release PR → GitHub Release + tag created automatically
-4. GHA builds Docker image → pushes to `ghcr.io/ivantseng123/react2issue:<version>`
+4. GHA builds Docker image → pushes to `ghcr.io/ivantseng123/agentdock:<version>`
 
 If Docker build fails: manually trigger the `Release Publish` workflow with the tag from GitHub Actions UI.
 

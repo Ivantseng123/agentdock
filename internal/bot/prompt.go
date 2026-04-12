@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"slack-issue-bot/internal/config"
+	"agentdock/internal/config"
 )
 
 type ThreadMessage struct {

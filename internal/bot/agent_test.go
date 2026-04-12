@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"slack-issue-bot/internal/config"
+	"agentdock/internal/config"
 )
 
 func TestAgentRunner_Success(t *testing.T) {

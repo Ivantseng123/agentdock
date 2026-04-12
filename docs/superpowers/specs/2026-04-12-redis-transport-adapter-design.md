@@ -237,7 +237,7 @@ type Bundle struct {
 | CommandBus | Pub/Sub | `r2i:jobs:commands` | Broadcast, worker filters by job_id |
 | AttachmentStore | Hash | `r2i:jobs:attachments:{job_id}` | Metadata + download URL |
 
-All Redis keys are prefixed with `r2i:` (react2issue) to avoid namespace collisions.
+All Redis keys are prefixed with `ad:) to avoid namespace collisions.
 
 ### JobQueue Details
 

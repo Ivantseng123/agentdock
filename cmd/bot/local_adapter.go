@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"slack-issue-bot/internal/queue"
-	"slack-issue-bot/internal/worker"
+	"agentdock/internal/queue"
+	"agentdock/internal/worker"
 )
 
 // LocalAdapterConfig holds agent-specific configuration for the local adapter.

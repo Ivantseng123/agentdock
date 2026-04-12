@@ -19,3 +19,5 @@ deploy/overlays/*/
 
 # OS
 .DS_Store
+dump.rdb
+worker.yaml

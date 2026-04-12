@@ -8,11 +8,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"slack-issue-bot/internal/bot"
-	"slack-issue-bot/internal/config"
-	ghclient "slack-issue-bot/internal/github"
-	"slack-issue-bot/internal/queue"
-	"slack-issue-bot/internal/worker"
+	"agentdock/internal/bot"
+	"agentdock/internal/config"
+	ghclient "agentdock/internal/github"
+	"agentdock/internal/queue"
+	"agentdock/internal/worker"
 )
 
 func runWorker() {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"slack-issue-bot/internal/config"
+	"agentdock/internal/config"
 )
 
 func TestBuildPrompt_Basic(t *testing.T) {

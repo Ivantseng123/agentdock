@@ -1,6 +1,6 @@
 labels:
   - includeSelectors: true
     pairs:
-      app: react2issue
+      app: agentdock
 resources:
   - deployment.yaml
