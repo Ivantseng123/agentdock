@@ -23,6 +23,8 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
+var version = "dev"
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -224,7 +226,7 @@ func main() {
 		slog.Warn("failed to resolve bot identity, auto-bind may not filter correctly", "error", err)
 	}
 
-	slog.Info("starting bot v2 (agent architecture)")
+	slog.Info("starting bot", "version", version)
 
 	go func() {
 		for evt := range sm.Events {
