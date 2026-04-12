@@ -4,7 +4,7 @@
 
 Slack 對話 → AI codebase triage → GitHub Issue。Go 單一 binary，Socket Mode（不需公開 URL）。
 
-在 Slack thread 中 `@bot` 或 `/triage`，bot 會讀取整段對話、透過 queue 分派給 CLI agent（claude/opencode/codex）探索 codebase，然後建立結構化的 GitHub issue。
+在 Slack thread 中 `@bot` 或 `/triage`，bot 會讀取整段對話、透過 queue 分派給 CLI agent（claude/opencode/codex）探索 codebase，然後建立結構化的 GitHub issue。支援 in-memory 和 Redis 兩種 transport，worker 可在同一 process 或獨立 pod 執行。
 
 ## Quick Start
 
@@ -57,13 +57,29 @@ Bot 使用 producer/consumer queue 解耦 Slack 事件處理和 agent 執行：
 
 ### 部署模式
 
-| 模式 | 說明 |
-|------|------|
-| In-Memory | 全部在同一個 process，Go channel 通訊（預設） |
-| Remote Worker | Worker 在其他 pod，透過 NATS/Redis 通訊（遠期） |
-| External Listener | 別人的電腦 listen queue，自帶 CLI + API key（遠期） |
+| 模式 | Transport | 說明 |
+|------|-----------|------|
+| In-Memory | `queue.transport: inmem` | 全部在同一個 process，Go channel 通訊（預設） |
+| Redis Worker | `queue.transport: redis` | App 和 Worker 分開部署，Redis Stream/Pub/Sub 通訊 |
+| External Worker | Redis + runner binary | 未來擴展：外部機器跑 `bot worker`，連同一個 Redis |
 
-三種模式用同一套 interface，只換 transport 層。
+三種模式用同一套 interface（`JobQueue`, `ResultBus`, `StatusBus`, `CommandBus`, `AttachmentStore`），只換 transport 層。切換只改 config，不改代碼。
+
+#### Redis 模式架構
+
+```
+┌─────────────┐                    ┌─────────────┐
+│  App Pod    │                    │ Worker Pod  │
+│             │    Redis Streams   │             │
+│ Slack ──→   │──── JobQueue ────→│ consume job │
+│ Workflow    │                    │ clone repo  │
+│             │←── ResultBus ────│ run agent   │
+│ create issue│←── StatusBus ────│ report      │
+│ post Slack  │──── CommandBus ──→│ kill signal │
+└─────────────┘                    └─────────────┘
+```
+
+App 不跑 agent。Worker 不需要 Slack token 或 GitHub write token。
 
 ## 觸發方式
 
@@ -170,7 +186,7 @@ fallback: [claude, opencode]
 # Queue 設定
 queue:
   capacity: 50                        # queue 上限
-  transport: inmem                    # inmem | nats | redis（遠期）
+  transport: inmem                    # inmem | redis
   job_timeout: 20m                    # watchdog: 最大 job 生命週期
   agent_idle_timeout: 5m              # stream-json: 無 event 超時
   prepare_timeout: 3m                 # clone/setup 超時
@@ -178,6 +194,12 @@ queue:
 
 workers:
   count: 3                            # worker pool 大小
+
+# Redis 設定（transport: redis 時使用）
+# redis:
+#   addr: redis:6379
+#   password: ""
+#   db: 0
 
 channel_priority:
   # C_INCIDENTS: 100                  # production incidents 優先
@@ -256,12 +278,25 @@ Socket Mode 啟用，App-Level Token scope `connections:write`。
 
 ## 部署
 
-### Local
+### Local（In-Memory 模式）
 
 ```bash
 ./run.sh
 # 或
 go build -o bot ./cmd/bot/ && ./bot -config config.yaml
+```
+
+### Local（Redis 模式）
+
+```bash
+# 啟動 Redis
+redis-server --daemonize yes
+
+# App（處理 Slack 事件、建 issue）
+./bot -config config.yaml   # config 裡 queue.transport: redis
+
+# Worker（消費 job、跑 agent）— 可以開多個
+./bot worker -config worker.yaml
 ```
 
 ### Docker
@@ -302,21 +337,24 @@ kubectl apply -k deploy/overlays/my-env/
 
 Claude CLI 認證：本地跑 `claude setup-token` 取得 token，存入 k8s Secret 的 `CLAUDE_AUTH_TOKEN`。
 
-### CI/CD (Jenkins)
+### CI/CD
 
-| Pipeline | 說明 |
-|----------|------|
-| `Jenkinsfile-bump-version` | semver 檢查 → go test → 自動 PR merge 更新版號 |
-| `Jenkinsfile-release` | docker build/push → GitHub Release |
+Automated via [release-please](https://github.com/googleapis/release-please):
 
-Registry、image name、credential ID 透過 Jenkins parameters 注入，不寫死在 repo。
+1. 寫 Conventional Commits（`feat:`, `fix:`, `chore:` 等）
+2. release-please 自動維護 Release PR（version bump + CHANGELOG）
+3. Merge Release PR → 自動建 GitHub Release + tag
+4. GHA build Docker image → push 到 `ghcr.io`
 
 ## 架構
 
 ```
-cmd/bot/main.go              # entry point, Socket Mode event loop, wiring
+cmd/bot/
+  main.go                    # entry point, transport switch, Socket Mode event loop
+  local_adapter.go           # LocalAdapter: wraps worker.Pool for inmem mode
+  worker.go                  # `bot worker` subcommand for standalone Redis worker
 internal/
-  config/config.go           # YAML config: agents, queue, channels, prompt
+  config/config.go           # YAML config: agents, queue, redis, channels, prompt
   bot/
     workflow.go              # trigger → interact → build prompt → queue.Submit
     agent.go                 # AgentRunner: spawn CLI agent with RunOptions + stream
@@ -334,13 +372,14 @@ internal/
     discovery.go             # GitHub API repo discovery with cache
   queue/
     interface.go             # JobQueue, ResultBus, CommandBus, StatusBus, JobStore
+    adapter.go               # Adapter interface + AdapterDeps
+    coordinator.go           # Coordinator: JobQueue decorator, routes by TaskType
+    bundle.go                # Common Bundle struct (transport-agnostic)
     job.go                   # Job, JobResult, JobState, AttachmentMeta
-    inmem_jobqueue.go        # InMemJobQueue (priority heap + dispatch)
-    inmem_resultbus.go       # InMemResultBus (channel)
-    inmem_attachments.go     # InMemAttachmentStore (two-phase)
-    inmem_commandbus.go      # InMemCommandBus (kill signals)
-    inmem_statusbus.go       # InMemStatusBus (agent status reports)
-    inmem_bundle.go          # InMemBundle factory
+    inmem_*.go               # In-memory transport implementations
+    redis_*.go               # Redis transport implementations (Stream, Pub/Sub, Hash)
+    redis_bundle.go          # NewRedisBundle factory
+    redis_client.go          # Redis client construction helper
     memstore.go              # MemJobStore (in-memory job state)
     priority.go              # container/heap priority queue
     registry.go              # ProcessRegistry (cancel-based kill)
@@ -364,7 +403,7 @@ deploy/
 ## 測試
 
 ```bash
-go test ./...   # 101 tests
+go test ./...   # 114 tests (Redis tests auto-skip if no Redis)
 ```
 
 ## HTTP Endpoints
