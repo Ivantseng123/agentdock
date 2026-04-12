@@ -164,6 +164,36 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// LoadDefaults creates a Config with sensible defaults + env overrides, no YAML file needed.
+// Includes a default claude agent config so workers can run with just env vars.
+func LoadDefaults() (*Config, error) {
+	cfg := Config{
+		Agents: map[string]AgentConfig{
+			"claude": {
+				Command:  "claude",
+				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
+				SkillDir: ".claude/skills",
+				Stream:   true,
+			},
+			"codex": {
+				Command:  "codex",
+				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
+				SkillDir: ".codex/skills",
+				Stream:   true,
+			},
+			"opencode": {
+				Command:  "opencode",
+				Args:     []string{"--prompt", "{prompt}"},
+				SkillDir: ".opencode/skills",
+			},
+		},
+		Fallback: []string{"claude"},
+	}
+	applyDefaults(&cfg)
+	applyEnvOverrides(&cfg)
+	return &cfg, nil
+}
+
 func applyDefaults(cfg *Config) {
 	// Workers.Count must be resolved before MaxConcurrent gets its own default,
 	// so that we can distinguish "user set max_concurrent" from "default applied".

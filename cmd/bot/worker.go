@@ -17,15 +17,25 @@ import (
 
 func runWorker() {
 	fs := flag.NewFlagSet("worker", flag.ExitOnError)
-	configPath := fs.String("config", "worker.yaml", "path to worker config file")
+	configPath := fs.String("config", "", "path to worker config file (optional, can use env vars only)")
 	fs.Parse(os.Args[2:])
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
+	var cfg *config.Config
+	var err error
+	if *configPath != "" {
+		cfg, err = config.Load(*configPath)
+		if err != nil {
+			slog.Error("failed to load config", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		cfg, err = config.LoadDefaults()
+		if err != nil {
+			slog.Error("failed to load defaults", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{
