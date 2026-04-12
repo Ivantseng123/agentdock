@@ -301,14 +301,36 @@ redis-server --daemonize yes
 
 ### Docker
 
+Image 包含三個 agent CLI：claude、codex、opencode。
+
 ```bash
 docker build -t react2issue .
+
+# App 模式（inmem，單機）
 docker run -e SLACK_BOT_TOKEN=xoxb-... \
            -e SLACK_APP_TOKEN=xapp-... \
-           -e GH_TOKEN=ghp_... \
+           -e GITHUB_TOKEN=ghp_... \
            -e CLAUDE_AUTH_TOKEN=... \
            react2issue
+
+# Worker 模式（Redis，獨立消費 job）
+docker run -e REDIS_ADDR=redis:6379 \
+           -e GITHUB_TOKEN=ghp_... \
+           -e CLAUDE_AUTH_TOKEN=... \
+           react2issue worker -config /config.yaml
 ```
+
+#### Agent 認證
+
+Worker 需要的 token 取決於 config 裡啟用了哪些 agent：
+
+| Agent | 環境變數 | 取得方式 |
+|-------|---------|---------|
+| claude | `CLAUDE_AUTH_TOKEN` | `claude setup-token` |
+| codex | `OPENAI_API_KEY` | OpenAI dashboard |
+| opencode | `ANTHROPIC_API_KEY` | Anthropic console |
+
+只需要傳你實際使用的 agent 的 token。例如 `fallback: [claude]` 只需要 `CLAUDE_AUTH_TOKEN`。
 
 ### Kubernetes
 
@@ -334,8 +356,6 @@ vi deploy/overlays/my-env/kustomization.yaml
 vi deploy/overlays/my-env/secret.yaml
 kubectl apply -k deploy/overlays/my-env/
 ```
-
-Claude CLI 認證：本地跑 `claude setup-token` 取得 token，存入 k8s Secret 的 `CLAUDE_AUTH_TOKEN`。
 
 ### CI/CD
 
