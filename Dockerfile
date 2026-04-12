@@ -13,8 +13,13 @@ FROM node:22-alpine
 
 RUN apk add --no-cache git ca-certificates curl
 
-# Install claude CLI globally
-RUN npm install -g @anthropic-ai/claude-code
+# Install agent CLIs globally
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
+
+# Install opencode CLI (musl build for Alpine)
+ARG OPENCODE_VERSION=1.4.3
+RUN curl -sL https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64-musl.tar.gz | \
+    tar xzf - -C /usr/local/bin opencode
 
 # Install gh CLI (not available in Alpine apk)
 ARG GH_VERSION=2.65.0
