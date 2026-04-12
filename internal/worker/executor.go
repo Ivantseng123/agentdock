@@ -26,16 +26,20 @@ type executionDeps struct {
 	repoCache   RepoProvider
 	runner      Runner
 	store       queue.JobStore
-	skillDir    string
+	skillDirs   []string
 }
 
 func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions) *queue.JobResult {
 	startedAt := time.Now()
 
 	// Resolve attachments (blocks until Prepare completes on app side).
-	attachments, err := deps.attachments.Resolve(ctx, job.ID)
-	if err != nil {
-		return failedResult(job, startedAt, fmt.Errorf("attachments failed: %w", err))
+	var attachments []queue.AttachmentReady
+	if len(job.Attachments) > 0 {
+		var err error
+		attachments, err = deps.attachments.Resolve(ctx, job.ID)
+		if err != nil {
+			return failedResult(job, startedAt, fmt.Errorf("attachments failed: %w", err))
+		}
 	}
 
 	// Clone/fetch repo.
@@ -51,12 +55,14 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		}
 	}
 
-	// Mount skills.
+	// Mount skills to all agent skill directories.
 	if len(job.Skills) > 0 {
-		if err := mountSkills(repoPath, job.Skills, deps.skillDir); err != nil {
-			return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err))
+		for _, sd := range deps.skillDirs {
+			if err := mountSkills(repoPath, job.Skills, sd); err != nil {
+				return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err))
+			}
+			defer cleanupSkills(repoPath, job.Skills, sd)
 		}
-		defer cleanupSkills(repoPath, job.Skills, deps.skillDir)
 	}
 
 	// Execute agent.
@@ -101,12 +107,12 @@ func mountSkills(repoPath string, skills map[string]string, skillDir string) err
 	if skillDir == "" {
 		return nil
 	}
-	dir := filepath.Join(repoPath, skillDir)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
 	for name, content := range skills {
-		path := filepath.Join(dir, name+".md")
+		skillSubDir := filepath.Join(repoPath, skillDir, name)
+		if err := os.MkdirAll(skillSubDir, 0755); err != nil {
+			return err
+		}
+		path := filepath.Join(skillSubDir, "SKILL.md")
 		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 			return err
 		}
@@ -120,7 +126,7 @@ func cleanupSkills(repoPath string, skills map[string]string, skillDir string) {
 	}
 	dir := filepath.Join(repoPath, skillDir)
 	for name := range skills {
-		os.Remove(filepath.Join(dir, name+".md"))
+		os.RemoveAll(filepath.Join(dir, name))
 	}
 	os.Remove(dir) // only succeeds if empty (safe)
 }

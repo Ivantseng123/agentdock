@@ -19,7 +19,7 @@ type Config struct {
 	Runner         Runner
 	RepoCache      RepoProvider
 	WorkerCount    int
-	SkillDir       string
+	SkillDirs      []string
 	Commands       queue.CommandBus
 	Status         queue.StatusBus
 	StatusInterval time.Duration
@@ -153,10 +153,16 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerID int, job *queue
 		repoCache:   p.cfg.RepoCache,
 		runner:      p.cfg.Runner,
 		store:       p.cfg.Store,
-		skillDir:    p.cfg.SkillDir,
+		skillDirs:   p.cfg.SkillDirs,
 	}
 
 	result := executeJob(jobCtx, job, deps, opts)
+
+	// Send final status report (captures cost/tokens from result event).
+	status.alive = false
+	if p.cfg.Status != nil {
+		p.cfg.Status.Report(ctx, status.toReport())
+	}
 
 	if stopReporter != nil {
 		close(stopReporter)

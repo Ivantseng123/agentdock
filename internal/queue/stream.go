@@ -34,21 +34,36 @@ func ReadStreamJSON(r io.Reader, eventCh chan<- StreamEvent) string {
 
 		eventType, _ := raw["type"].(string)
 		switch eventType {
-		case "message_delta":
-			if delta, ok := raw["delta"].(map[string]any); ok {
-				if text, ok := delta["text"].(string); ok {
-					reassembled.WriteString(text)
+		case "assistant":
+			// Claude CLI wraps content in message.content[] blocks.
+			msg, _ := raw["message"].(map[string]any)
+			if msg == nil {
+				continue
+			}
+			blocks, _ := msg["content"].([]any)
+			for _, b := range blocks {
+				block, _ := b.(map[string]any)
+				if block == nil {
+					continue
+				}
+				blockType, _ := block["type"].(string)
+				switch blockType {
+				case "tool_use":
+					name, _ := block["name"].(string)
 					select {
-					case eventCh <- StreamEvent{Type: "message_delta", TextBytes: len(text)}:
+					case eventCh <- StreamEvent{Type: "tool_use", ToolName: name}:
 					default:
 					}
+				case "text":
+					text, _ := block["text"].(string)
+					if text != "" {
+						reassembled.WriteString(text)
+						select {
+						case eventCh <- StreamEvent{Type: "message_delta", TextBytes: len(text)}:
+						default:
+						}
+					}
 				}
-			}
-		case "tool_use":
-			name, _ := raw["name"].(string)
-			select {
-			case eventCh <- StreamEvent{Type: "tool_use", ToolName: name}:
-			default:
 			}
 		case "result":
 			if res, ok := raw["result"].(string); ok {

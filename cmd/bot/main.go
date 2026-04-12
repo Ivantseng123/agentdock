@@ -90,17 +90,18 @@ func main() {
 	jobStore.StartCleanup(1 * time.Hour)
 	bundle := queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
 
-	// Determine skill dir from active agent config.
-	skillDir := ""
+	// Collect skill dirs from all agents in fallback chain.
+	seen := make(map[string]bool)
+	var skillDirs []string
 	for _, name := range cfg.Fallback {
-		if agent, ok := cfg.Agents[name]; ok && agent.SkillDir != "" {
-			skillDir = agent.SkillDir
-			break
+		if agent, ok := cfg.Agents[name]; ok && agent.SkillDir != "" && !seen[agent.SkillDir] {
+			skillDirs = append(skillDirs, agent.SkillDir)
+			seen[agent.SkillDir] = true
 		}
 	}
-	if skillDir == "" && cfg.ActiveAgent != "" {
-		if agent, ok := cfg.Agents[cfg.ActiveAgent]; ok {
-			skillDir = agent.SkillDir
+	if len(skillDirs) == 0 && cfg.ActiveAgent != "" {
+		if agent, ok := cfg.Agents[cfg.ActiveAgent]; ok && agent.SkillDir != "" {
+			skillDirs = append(skillDirs, agent.SkillDir)
 		}
 	}
 
@@ -112,14 +113,14 @@ func main() {
 		Runner:         &agentRunnerAdapter{runner: agentRunner},
 		RepoCache:      &repoCacheAdapter{cache: repoCache},
 		WorkerCount:    cfg.Workers.Count,
-		SkillDir:       skillDir,
+		SkillDirs:      skillDirs,
 		Commands:       bundle.Commands,
 		Status:         bundle.Status,
 		StatusInterval: cfg.Queue.StatusInterval,
 	})
 	workerPool.Start(context.Background())
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, bundle.Queue, jobStore, skills)
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, bundle.Queue, jobStore, bundle.Attachments, skills)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,
@@ -349,6 +350,12 @@ type slackPosterAdapter struct {
 func (a *slackPosterAdapter) PostMessage(channelID, text, threadTS string) {
 	if err := a.client.PostMessage(channelID, text, threadTS); err != nil {
 		slog.Warn("failed to post slack message", "channel", channelID, "error", err)
+	}
+}
+
+func (a *slackPosterAdapter) UpdateMessage(channelID, messageTS, text string) {
+	if err := a.client.UpdateMessage(channelID, messageTS, text); err != nil {
+		slog.Warn("failed to update slack message", "channel", channelID, "error", err)
 	}
 }
 

@@ -46,6 +46,7 @@ type Workflow struct {
 	mantisClient  *mantis.Client
 	queue         queue.JobQueue
 	store         queue.JobStore
+	attachments   queue.AttachmentStore
 	skills        map[string]string
 
 	mu        sync.Mutex
@@ -62,6 +63,7 @@ func NewWorkflow(
 	mantisClient *mantis.Client,
 	jobQueue queue.JobQueue,
 	jobStore queue.JobStore,
+	attachStore queue.AttachmentStore,
 	skills map[string]string,
 ) *Workflow {
 	return &Workflow{
@@ -73,6 +75,7 @@ func NewWorkflow(
 		mantisClient:  mantisClient,
 		queue:         jobQueue,
 		store:         jobStore,
+		attachments:   attachStore,
 		skills:        skills,
 		pending:       make(map[string]*pendingTriage),
 		autoBound:     make(map[string]bool),
@@ -433,15 +436,22 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		return
 	}
 
+	// Signal attachment readiness so workers can proceed.
+	if len(attachMeta) > 0 {
+		w.attachments.Prepare(ctx, job.ID, attachMeta)
+	}
+
 	pos, _ := w.queue.QueuePosition(job.ID)
+	var statusMsg string
 	if pos <= 1 {
-		w.slack.PostMessageWithButton(pt.ChannelID,
-			":hourglass_flowing_sand: 正在處理你的請求...",
-			pt.ThreadTS, "cancel_job", "取消", job.ID)
+		statusMsg = ":hourglass_flowing_sand: 正在處理你的請求..."
 	} else {
-		w.slack.PostMessageWithButton(pt.ChannelID,
-			fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1),
-			pt.ThreadTS, "cancel_job", "取消", job.ID)
+		statusMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
+	}
+	if msgTS, err := w.slack.PostMessageWithButton(pt.ChannelID,
+		statusMsg, pt.ThreadTS, "cancel_job", "取消", job.ID); err == nil {
+		job.StatusMsgTS = msgTS
+		w.store.Put(job) // update with StatusMsgTS
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.
 }

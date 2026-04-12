@@ -29,6 +29,7 @@ type Job struct {
 	Skills      map[string]string `json:"skills"`
 	RequestID   string            `json:"request_id"`
 	Attachments []AttachmentMeta  `json:"attachments"`
+	StatusMsgTS string            `json:"status_msg_ts,omitempty"`
 	SubmittedAt time.Time         `json:"submitted_at"`
 }
 

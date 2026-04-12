@@ -21,6 +21,12 @@ func (m *mockSlackPoster) PostMessage(channelID, text, threadTS string) {
 	m.mu.Unlock()
 }
 
+func (m *mockSlackPoster) UpdateMessage(channelID, messageTS, text string) {
+	m.mu.Lock()
+	m.messages = append(m.messages, text)
+	m.mu.Unlock()
+}
+
 type mockIssueCreator struct {
 	url string
 	err error

@@ -6,9 +6,9 @@ import (
 )
 
 func TestReadStreamJSON_ResultEvent(t *testing.T) {
-	input := `{"type":"message_delta","delta":{"text":"Looking at code..."}}
-{"type":"tool_use","name":"Read","input":{"file_path":"/src/main.go"}}
-{"type":"message_delta","delta":{"text":"Found the issue..."}}
+	input := `{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at code..."}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/main.go"}}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Found the issue..."}]}}
 {"type":"result","result":"Final answer text here","total_cost_usd":0.042,"usage":{"input_tokens":8500,"output_tokens":1200}}`
 
 	r := strings.NewReader(input)
@@ -53,8 +53,8 @@ func TestReadStreamJSON_ResultEvent(t *testing.T) {
 }
 
 func TestReadStreamJSON_FallbackToReassembly(t *testing.T) {
-	input := `{"type":"message_delta","delta":{"text":"Hello "}}
-{"type":"message_delta","delta":{"text":"World"}}`
+	input := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello "}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"World"}]}}`
 
 	r := strings.NewReader(input)
 	eventCh := make(chan StreamEvent, 100)

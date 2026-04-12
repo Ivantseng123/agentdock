@@ -12,6 +12,7 @@ import (
 // SlackPoster abstracts Slack message posting for testing.
 type SlackPoster interface {
 	PostMessage(channelID, text, threadTS string)
+	UpdateMessage(channelID, messageTS, text string)
 }
 
 // IssueCreator abstracts GitHub issue creation for testing.
@@ -75,12 +76,10 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 
 	switch {
 	case result.Status == "failed":
-		r.slack.PostMessage(job.ChannelID,
-			fmt.Sprintf(":x: 分析失敗: %s", result.Error), job.ThreadTS)
+		r.updateStatus(job, fmt.Sprintf(":x: 分析失敗: %s", result.Error))
 
 	case result.Confidence == "low":
-		r.slack.PostMessage(job.ChannelID,
-			":warning: 判斷不屬於此 repo，已跳過", job.ThreadTS)
+		r.updateStatus(job, ":warning: 判斷不屬於此 repo，已跳過")
 
 	case result.FilesFound == 0 || result.Questions >= 5:
 		r.createAndPostIssue(ctx, job, owner, repo, result, true)
@@ -89,9 +88,8 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 		r.createAndPostIssue(ctx, job, owner, repo, result, false)
 	}
 
-	// Cleanup.
+	// Cleanup attachments; keep job in store for status visibility (TTL cleanup handles removal).
 	r.attachments.Cleanup(ctx, result.JobID)
-	r.store.Delete(result.JobID)
 }
 
 func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job, owner, repo string, result *queue.JobResult, degraded bool) {
@@ -113,13 +111,20 @@ func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job,
 
 	url, err := r.github.CreateIssue(ctx, owner, repo, result.Title, body, result.Labels)
 	if err != nil {
-		r.slack.PostMessage(job.ChannelID,
-			fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err), job.ThreadTS)
+		r.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
 		return
 	}
 
-	r.slack.PostMessage(job.ChannelID,
-		fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url), job.ThreadTS)
+	r.updateStatus(job, fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url))
+}
+
+// updateStatus updates the original status message if possible, otherwise posts a new message.
+func (r *ResultListener) updateStatus(job *queue.Job, text string) {
+	if job.StatusMsgTS != "" {
+		r.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+	} else {
+		r.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
+	}
 }
 
 func splitRepo(repo string) (string, string) {
