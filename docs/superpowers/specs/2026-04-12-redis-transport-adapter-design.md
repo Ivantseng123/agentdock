@@ -26,6 +26,31 @@ react2issue 目前所有元件跑在同一個 process，用 in-memory channel �
 - 外部 lightweight runner binary 用同一個 Redis transport，零代碼改動
 - 新 adapter type 只需實作 `Adapter` interface + config
 
+## Implementation Phases
+
+### Phase A — Adapter 抽象 + Bundle 重構（不碰 Redis）
+
+目標：行為完全不變，但架構準備好接 Redis。
+
+- 引入 common `Bundle` struct（interface-typed fields）
+- 引入 `Adapter` interface + `LocalAdapter`（包裝現有 worker.Pool）
+- 引入 `Coordinator`（實作 `JobQueue` interface，Decorator pattern）
+- 加 `TaskType` 到 Job
+- 重構 `InMemBundle` → 回傳 common `Bundle`
+- 重構 `main.go` wiring：Workflow 拿到 Coordinator（而非直接拿 InMemJobQueue）
+
+Phase A 結束時的驗證：`go test ./...` + Slack 端對端手動測試。
+
+### Phase B — Redis transport + Worker binary
+
+- 實作 Redis 版的五個 interface（`redis_*.go`）
+- `bot worker` subcommand
+- Worker registration + heartbeat
+- `/workers` endpoint
+- Attachment HTTP serving
+- Graceful shutdown
+- 新增依賴：`github.com/redis/go-redis/v9`
+
 ## Architecture
 
 ```
@@ -35,7 +60,8 @@ react2issue 目前所有元件跑在同一個 process，用 in-memory channel �
 │  Slack Socket Mode → Handler → Workflow             │
 │                                    │                │
 │                              Coordinator            │
-│                          (route by capability)      │
+│                       (JobQueue decorator,          │
+│                        routes by TaskType)          │
 │                                    │                │
 │                              Redis Streams          │
 │                                    │                │
@@ -70,6 +96,7 @@ type Adapter interface {
     Stop() error
 }
 
+// AdapterDeps contains only transport interfaces — shared by all adapter types.
 type AdapterDeps struct {
     Jobs        JobQueue
     Results     ResultBus
@@ -81,56 +108,97 @@ type AdapterDeps struct {
 
 ### LocalAdapter
 
-Wraps the existing `worker.Pool`. Current behavior is unchanged — this is a refactor, not a rewrite.
+Creates and manages its own `worker.Pool` internally. Agent-specific configuration is provided at construction time, transport dependencies at `Start` time.
 
 ```go
-type LocalAdapter struct {
-    pool *worker.Pool
-    caps []string
+type LocalAdapterConfig struct {
+    Runner         worker.Runner
+    RepoCache      worker.RepoProvider
+    SkillDirs      []string
+    WorkerCount    int
+    StatusInterval time.Duration
+    Capabilities   []string
+}
+
+func NewLocalAdapter(cfg LocalAdapterConfig) *LocalAdapter
+
+func (a *LocalAdapter) Start(deps AdapterDeps) error {
+    // Creates worker.Pool using cfg + deps, calls pool.Start()
+}
+
+func (a *LocalAdapter) Stop() error {
+    // Stops the pool, cleans up
 }
 ```
 
-### Coordinator
+main.go does NOT create worker.Pool directly — LocalAdapter owns its lifecycle.
 
-Routes jobs to the correct adapter based on `TaskType` and adapter capabilities. Lives in the app process.
+### Coordinator (JobQueue Decorator)
+
+Coordinator implements the `JobQueue` interface. Workflow continues calling `w.queue.Submit()` — it does not know about the Coordinator.
 
 ```go
 type Coordinator struct {
-    adapters []Adapter
-    bundles  map[string]*Bundle // task_type → bundle (for per-type streams in redis mode)
+    queues   map[string]JobQueue  // task_type → queue
+    fallback JobQueue             // for jobs with empty TaskType
 }
 
-// SubmitJob finds the right adapter and submits to its queue.
-func (c *Coordinator) SubmitJob(ctx context.Context, job *Job) error {
-    // Find bundle for this task type, submit to its JobQueue
-}
-```
-
-**Wiring in main.go (redis mode):**
-```go
-coordinator := queue.NewCoordinator()
-for _, adapterCfg := range cfg.Adapters {
-    // Workers are separate pods — coordinator only needs the submission side
-    for _, cap := range adapterCfg.Capabilities {
-        coordinator.RegisterStream(cap, redisBundle)
+func (c *Coordinator) Submit(ctx context.Context, job *Job) error {
+    if q, ok := c.queues[job.TaskType]; ok {
+        return q.Submit(ctx, job)
     }
+    return c.fallback.Submit(ctx, job)
 }
-// Workflow calls coordinator.SubmitJob() instead of bundle.Queue.Submit()
+
+func (c *Coordinator) QueuePosition(jobID string) (int, error) {
+    // Search all queues, return first match
+}
+
+func (c *Coordinator) QueueDepth() int {
+    // Sum across all queues
+}
+
+// Receive, Ack, Register, etc. — delegate to fallback queue.
+// These are worker-side methods; the Coordinator is app-side only.
 ```
 
 **Wiring in main.go (inmem mode):**
 ```go
-coordinator := queue.NewCoordinator()
-localAdapter := NewLocalAdapter(inmemBundle, workerPool, cfg)
-coordinator.RegisterAdapter(localAdapter)
-localAdapter.Start(AdapterDeps{...})
-// Same interface — workflow calls coordinator.SubmitJob()
+bundle := queue.NewInMemBundle(cfg.Queue.Capacity, jobStore)
+
+coordinator := queue.NewCoordinator(bundle.Queue) // fallback = bundle.Queue
+coordinator.RegisterQueue("triage", bundle.Queue)
+
+localAdapter := queue.NewLocalAdapter(LocalAdapterConfig{
+    Runner:      agentRunner,
+    RepoCache:   repoCache,
+    SkillDirs:   skillDirs,
+    WorkerCount: cfg.Workers.Count,
+    // ...
+})
+localAdapter.Start(AdapterDeps{
+    Jobs:    bundle.Queue,   // adapter consumes from the actual queue, not the coordinator
+    Results: bundle.Results,
+    Status:  bundle.Status,
+    Commands: bundle.Commands,
+    Attachments: bundle.Attachments,
+})
+
+wf := bot.NewWorkflow(..., coordinator, ...)  // workflow gets Coordinator as JobQueue
 ```
 
-- **inmem mode:** Coordinator calls the matching adapter's JobQueue directly.
-- **redis mode:** Each task type maps to a dedicated stream (`r2i:jobs:{task_type}`). Adapters subscribe only to streams matching their capabilities. Streams and consumer groups are created on app startup via `XGROUP CREATE ... MKSTREAM`. If the group already exists, the error is ignored (idempotent).
-- **Claim mechanism:** Redis consumer groups guarantee no duplicate consumption. No custom first-write-wins needed.
-- **No-subscriber handling:** If a job is submitted to a task type with no subscribed workers, it remains in the stream. Watchdog detects it via prepare timeout (3 min) and notifies the Slack thread.
+**Wiring in main.go (redis mode):**
+```go
+bundle := queue.NewRedisBundle(cfg.Redis, jobStore)
+
+coordinator := queue.NewCoordinator(bundle.Queue)
+coordinator.RegisterQueue("triage", bundle.Queue)
+// Workers are separate pods — no LocalAdapter here
+
+wf := bot.NewWorkflow(..., coordinator, ...)
+```
+
+Key point: **Workflow submits via Coordinator. Workers consume from the actual queue.** The Coordinator is only on the submission path.
 
 ### Job Changes
 
@@ -143,57 +211,79 @@ type Job struct {
 
 Default `TaskType` is `"triage"` for backwards compatibility.
 
+## Common Bundle Type
+
+Both transport implementations return a common `Bundle` struct with interface-typed fields:
+
+```go
+type Bundle struct {
+    Queue       JobQueue
+    Results     ResultBus
+    Status      StatusBus
+    Commands    CommandBus
+    Attachments AttachmentStore
+}
+```
+
+`NewInMemBundle` and `NewRedisBundle` both return `*Bundle`. The existing `InMemBundle` is refactored to use this common type (fields change from concrete types to interfaces). Downstream code already accesses fields through the interface — no consumer changes needed.
+
 ## Redis Primitive Mapping
 
 | Interface | Redis Primitive | Key Pattern | Semantics |
 |-----------|----------------|-------------|-----------|
-| JobQueue | Stream + Consumer Group | `jobs:{task_type}` | One job to one worker, ack required |
-| ResultBus | Stream + Consumer Group | `jobs:results` | Persistent, app consumes reliably |
-| StatusBus | Pub/Sub | `jobs:status` | Broadcast, loss tolerable |
-| CommandBus | Pub/Sub | `jobs:commands` | Broadcast, worker filters by job_id |
-| AttachmentStore | Hash | `jobs:attachments:{job_id}` | Metadata + download URL |
+| JobQueue | Stream + Consumer Group | `r2i:jobs:{task_type}` | One job to one worker, ack required |
+| ResultBus | Stream + Consumer Group | `r2i:jobs:results` | Persistent, app consumes reliably |
+| StatusBus | Pub/Sub | `r2i:jobs:status` | Broadcast, loss tolerable |
+| CommandBus | Pub/Sub | `r2i:jobs:commands` | Broadcast, worker filters by job_id |
+| AttachmentStore | Hash | `r2i:jobs:attachments:{job_id}` | Metadata + download URL |
+
+All Redis keys are prefixed with `r2i:` (react2issue) to avoid namespace collisions.
 
 ### JobQueue Details
 
 **Submit (App):**
 ```
-XADD jobs:{task_type} * job_id {id} payload {json}
+XADD r2i:jobs:{task_type} * job_id {id} payload {json}
 ```
 
 **Receive (Worker):**
 ```
-XREADGROUP GROUP workers consumer-{pod_name} COUNT 1 BLOCK 5000 STREAMS jobs:{task_type} >
+XREADGROUP GROUP workers consumer-{pod_name} COUNT 1 BLOCK 5000 STREAMS r2i:jobs:{task_type} >
 ```
 
 **Ack (Worker):**
 ```
-XACK jobs:{task_type} workers {message_id}
+XACK r2i:jobs:{task_type} workers {message_id}
 ```
 
-**Crash recovery:** Each worker runs an `XAUTOCLAIM` loop on startup and periodically (every 60 seconds). It reclaims messages that have been pending for longer than 2x the status interval (i.e., 10 seconds idle = likely dead worker, not a slow job). To distinguish slow jobs from dead workers, `XAUTOCLAIM` is only attempted for messages whose consumer has no active heartbeat in `workers:{worker_id}` (TTL expired). This prevents reclaiming jobs from workers that are alive but running long agents.
+**Stream/group initialization:** Streams and consumer groups are created on app startup via `XGROUP CREATE r2i:jobs:{task_type} workers $ MKSTREAM`. If the group already exists, the `BUSYGROUP` error is ignored (idempotent).
+
+**Crash recovery:** Each worker runs an `XAUTOCLAIM` loop on startup and periodically (every 60 seconds). It reclaims messages that have been pending for longer than 2x the status interval (i.e., 10 seconds idle = likely dead worker, not a slow job). To distinguish slow jobs from dead workers, `XAUTOCLAIM` is only attempted for messages whose consumer has no active heartbeat in `r2i:workers:{worker_id}` (TTL expired). This prevents reclaiming jobs from workers that are alive but running long agents.
+
+**No-subscriber handling:** If a job is submitted to a task type with no subscribed workers, it remains in the stream. Watchdog detects it via prepare timeout (3 min) and notifies the Slack thread.
 
 ### ResultBus Details
 
 **Publish (Worker):**
 ```
-XADD jobs:results * job_id {id} payload {json}
+XADD r2i:jobs:results * job_id {id} payload {json}
 ```
 
 **Subscribe (App):**
 ```
-XREADGROUP GROUP app app-0 COUNT 1 BLOCK 5000 STREAMS jobs:results >
+XREADGROUP GROUP app app-0 COUNT 1 BLOCK 5000 STREAMS r2i:jobs:results >
 ```
 
 ### StatusBus Details
 
 **Report (Worker):**
 ```
-PUBLISH jobs:status {json}
+PUBLISH r2i:jobs:status {json}
 ```
 
 **Subscribe (App):**
 ```
-SUBSCRIBE jobs:status
+SUBSCRIBE r2i:jobs:status
 ```
 
 Status reports arrive every 5 seconds. Missing one or two during reconnect is acceptable.
@@ -202,12 +292,12 @@ Status reports arrive every 5 seconds. Missing one or two during reconnect is ac
 
 **Send (App):**
 ```
-PUBLISH jobs:commands {json with job_id + action}
+PUBLISH r2i:jobs:commands {json with job_id + action}
 ```
 
 **Receive (Worker):**
 ```
-SUBSCRIBE jobs:commands
+SUBSCRIBE r2i:jobs:commands
 ```
 
 Worker checks if `job_id` matches a job it's currently running.
@@ -216,12 +306,12 @@ Worker checks if `job_id` matches a job it's currently running.
 
 **Prepare (App):**
 ```
-HSET jobs:attachments:{job_id} meta {json}
+HSET r2i:jobs:attachments:{job_id} meta {json}
 ```
 
 **Resolve (Worker):**
 ```
-HGET jobs:attachments:{job_id} meta
+HGET r2i:jobs:attachments:{job_id} meta
 ```
 
 Worker downloads files from URLs in the metadata (internal network accessible).
@@ -239,15 +329,16 @@ bot worker -config worker.yaml   # Worker: consume queue + run agents
 
 - Slack Socket Mode event handling
 - Workflow orchestration (thread context, repo/branch selection)
-- Job submission to Redis
+- Job submission via Coordinator
 - ResultListener: consume results, create GitHub issues, post to Slack
 - StatusListener: consume status, update JobStore, serve /jobs API
 - Watchdog: detect stuck jobs, send kill commands
 - HTTP endpoints: /healthz, /jobs, /workers
 
-Does NOT run agents. Does NOT clone repos.
+In `transport: redis` mode: does NOT run agents, does NOT clone repos.
+In `transport: inmem` mode: runs LocalAdapter with embedded worker pool (existing behavior).
 
-### Worker Pod Responsibilities
+### Worker Pod Responsibilities (redis mode only)
 
 - Consume jobs from Redis
 - Clone/fetch repos
@@ -267,15 +358,13 @@ Does NOT need Slack token. Does NOT need GitHub write token. Only needs:
 Workers register via Redis hash with TTL heartbeat:
 
 ```
-HSET workers:{worker_id} status alive started_at {ts} agents "claude" capabilities "triage"
-EXPIRE workers:{worker_id} 30
+HSET r2i:workers:{worker_id} status alive started_at {ts} agents "claude" capabilities "triage"
+EXPIRE r2i:workers:{worker_id} 30
 ```
 
 Heartbeat every 10 seconds refreshes the TTL. App lists workers via `SCAN r2i:workers:*`.
 
 The existing `JobQueue` interface has `Register`, `Unregister`, and `ListWorkers` methods. For Redis mode, these delegate to the Redis hash-based registration above. For inmem mode, they continue using the current in-memory map.
-
-All Redis keys are prefixed with `r2i:` (react2issue) to avoid namespace collisions.
 
 ### /workers Endpoint
 
@@ -321,39 +410,6 @@ redis:
   password: ""
   db: 0
 ```
-
-### Common Bundle Type
-
-Both transport implementations return a common `Bundle` struct with interface-typed fields:
-
-```go
-type Bundle struct {
-    Queue       JobQueue
-    Results     ResultBus
-    Status      StatusBus
-    Commands    CommandBus
-    Attachments AttachmentStore
-}
-```
-
-`NewInMemBundle` and `NewRedisBundle` both return `*Bundle`. The existing `InMemBundle` is refactored to use this common type (fields change from concrete types to interfaces). Downstream code already accesses fields through the interface — no consumer changes needed.
-
-### Code Structure
-
-```go
-// cmd/bot/main.go
-var bundle *queue.Bundle
-switch cfg.Queue.Transport {
-case "redis":
-    bundle = queue.NewRedisBundle(cfg.Redis, jobStore)
-    // No local worker pool — workers are separate pods
-case "inmem":
-    bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
-    // Start local worker pool (existing behavior)
-}
-```
-
-All downstream code (ResultListener, StatusListener, Watchdog, HTTP handlers) works unchanged.
 
 ## Config
 
@@ -456,62 +512,6 @@ For non-interruptible long jobs, a future enhancement could drain the worker (fi
 - Pub/Sub messages lost during disconnect are acceptable: status re-sends every 5s, kill commands can be retried
 - Unacked jobs in consumer group pending list are reclaimed by other workers after visibility timeout
 
-## Package Structure
-
-### New Files
-
-```
-internal/queue/
-  redis_jobqueue.go
-  redis_resultbus.go
-  redis_statusbus.go
-  redis_commandbus.go
-  redis_attachments.go
-  redis_bundle.go
-  adapter.go              # Adapter interface + AdapterDeps
-  coordinator.go          # Capability routing
-
-internal/config/
-  config.go               # RedisConfig, AdapterConfig additions
-
-cmd/bot/
-  worker.go               # bot worker subcommand
-```
-
-### Modified Files
-
-```
-cmd/bot/main.go           # Transport switch, coordinator wiring
-internal/queue/job.go     # TaskType field
-internal/queue/httpstatus.go  # /workers endpoint
-```
-
-### Unchanged Files
-
-```
-internal/bot/*            # workflow, agent, prompt, parser, listeners
-internal/worker/*         # pool, executor, status
-internal/slack/*
-internal/github/*
-```
-
-## Future Extension Path
-
-### External Worker (Personal Computer)
-
-Same `bot worker -config worker.yaml` binary, pointing `redis.addr` to a public Redis endpoint (with TLS + auth). Zero code changes. Requires Redis to be externally accessible (via VPN or public ingress with authentication).
-
-### New Adapter Types
-
-Implement `Adapter` interface + add config section. Examples:
-- GitHub Actions adapter: `workflow_dispatch` trigger, webhook result collection
-- gRPC adapter: remote worker connects via gRPC streaming
-- HTTP adapter: long-poll based job consumption
-
-### New Task Types
-
-Add capability string to adapters, set `TaskType` on jobs. Coordinator routes automatically. New Redis stream created per task type.
-
 ## JobStore
 
 ### App Side
@@ -536,20 +536,105 @@ This requires no changes to `worker.Pool` — it receives a `JobStore` via confi
 
 For Redis mode, `QueuePosition` returns 0 (not meaningful with consumer groups — jobs are distributed, not queued in a visible line). `QueueDepth` uses `XLEN` on the stream, which returns total unprocessed entries. These are used for Slack queue position messages and the `/jobs` endpoint — returning approximate values is acceptable.
 
+## Package Structure
+
+### Phase A — New Files
+
+```
+internal/queue/
+  bundle.go               # Common Bundle struct
+  adapter.go              # Adapter interface + AdapterDeps + LocalAdapter
+  coordinator.go          # Coordinator (JobQueue decorator)
+```
+
+### Phase A — Modified Files
+
+```
+cmd/bot/main.go           # Coordinator wiring, LocalAdapter creation
+internal/queue/inmem_bundle.go  # Return common Bundle instead of InMemBundle
+internal/queue/job.go     # TaskType field
+```
+
+### Phase A — Unchanged Files
+
+```
+internal/bot/*            # workflow, agent, prompt, parser, listeners
+internal/worker/*         # pool, executor, status
+internal/slack/*
+internal/github/*
+internal/queue/inmem_*.go # Individual inmem implementations (unchanged)
+internal/queue/interface.go  # Interfaces unchanged
+```
+
+### Phase B — New Files
+
+```
+internal/queue/
+  redis_jobqueue.go
+  redis_resultbus.go
+  redis_statusbus.go
+  redis_commandbus.go
+  redis_attachments.go
+  redis_bundle.go
+
+internal/config/
+  config.go               # RedisConfig additions
+
+cmd/bot/
+  worker.go               # bot worker subcommand
+```
+
+### Phase B — Modified Files
+
+```
+cmd/bot/main.go           # Transport switch (inmem vs redis)
+internal/queue/httpstatus.go  # /workers endpoint, liveness check
+```
+
+## Future Extension Path
+
+### External Worker (Personal Computer)
+
+Same `bot worker -config worker.yaml` binary, pointing `redis.addr` to a public Redis endpoint (with TLS + auth). Zero code changes. Requires Redis to be externally accessible (via VPN or public ingress with authentication).
+
+### New Adapter Types
+
+Implement `Adapter` interface + add config section. Examples:
+- GitHub Actions adapter: `workflow_dispatch` trigger, webhook result collection
+- gRPC adapter: remote worker connects via gRPC streaming
+- HTTP adapter: long-poll based job consumption
+
+### New Task Types
+
+Add capability string to adapters, set `TaskType` on jobs. Coordinator routes automatically. New Redis stream created per task type.
+
 ## Mapping to Original Issue
 
 | Issue Concept | This Design | Notes |
 |---------------|-------------|-------|
 | EventBus | Separated interfaces (JobQueue, ResultBus, StatusBus, CommandBus) | Typed, semantic-specific |
-| Adapter | `Adapter` interface with `AdapterDeps` | Composable with existing interfaces |
-| Coordinator | `Coordinator` with capability routing | Routes by TaskType |
-| Local Adapter (exec) | `LocalAdapter` wrapping `worker.Pool` | Existing behavior unchanged |
+| Adapter | `Adapter` interface with `AdapterDeps` | Transport-only deps; agent config in LocalAdapterConfig |
+| Coordinator | `Coordinator` implementing `JobQueue` (Decorator) | Routes by TaskType, transparent to Workflow |
+| Local Adapter (exec) | `LocalAdapter` creating own `worker.Pool` | Self-contained lifecycle |
 | Remote Adapter (gRPC) | Future extension | Interface ready |
 | GitHub Actions Adapter | Future extension | Interface ready |
 | Claim mechanism | Redis consumer groups | Automatic, no custom CAS |
 | worker.online/health | Redis hash + TTL heartbeat | /workers endpoint |
 | task.progress | StatusBus (Pub/Sub) | Every 5s with tool_calls, cost, etc. |
 | Phase 1 (event bus + local) | Already done (inmem bundle) | ✅ |
-| Phase 2 (worker registry) | This design | ✅ |
+| Phase 2 (worker registry) | This design (Phase B) | ✅ |
 | Phase 3 (remote adapter) | Future, interface ready | Deferred |
 | Phase 4 (GitHub Actions) | Future, interface ready | Deferred |
+
+## Design Decisions Log (from grill-me)
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Implementation phases | Phase A (refactor) + Phase B (Redis) | Validate architecture without new dependencies first |
+| Coordinator pattern | Implements `JobQueue` (Decorator) | Workflow code zero changes — continues calling `w.queue.Submit()` |
+| Adapter in Phase A | Yes, introduce immediately | Architecture one step to completion |
+| Pool creation | LocalAdapter creates own Pool | Self-contained unit; main.go doesn't know about Pool |
+| AdapterDeps scope | Transport interfaces only | Agent config in `LocalAdapterConfig`; future adapters have different configs |
+| Multi-queue in Coordinator | Yes, `map[string]JobQueue` + fallback from Phase A | 5 extra lines, routing logic complete, no Phase B changes needed |
+| Verification strategy | `go test ./...` + Slack end-to-end manual test | Refactor = no new behavior, but must verify nothing broke |
+| Bug fixes | Commit before Phase A starts | Avoid tangling bug fixes with refactor in git history |
