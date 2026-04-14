@@ -19,6 +19,7 @@ type Config struct {
 	Runner         Runner
 	RepoCache      RepoProvider
 	WorkerCount    int
+	Hostname       string
 	SkillDirs      []string
 	Commands       queue.CommandBus
 	Status         queue.StatusBus
@@ -100,14 +101,16 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 	}
 }
 
-func (p *Pool) executeWithTracking(ctx context.Context, workerID int, job *queue.Job) {
-	logger := slog.With("worker_id", workerID, "job_id", job.ID)
+func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *queue.Job) {
+	logger := slog.With("worker_id", workerIndex, "job_id", job.ID)
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
 
+	wID := fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, workerIndex)
+
 	status := &statusAccumulator{
 		jobID:    job.ID,
-		workerID: fmt.Sprintf("worker-%d", workerID),
+		workerID: wID,
 		alive:    true,
 	}
 
@@ -147,6 +150,8 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerID int, job *queue
 		}
 		return
 	}
+
+	p.cfg.Store.SetWorker(job.ID, wID)
 
 	deps := executionDeps{
 		attachments: p.cfg.Attachments,

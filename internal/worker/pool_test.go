@@ -85,6 +85,54 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 	}
 }
 
+func TestPool_WorkerIDIncludesHostname(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	agentOutput := "Analysis done.\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "CREATED",
+  "title": "Bug fix",
+  "body": "## Problem\nSomething broke",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 3,
+  "open_questions": 0
+}`
+
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      &mockRunner{output: agentOutput},
+		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
+		WorkerCount: 1,
+		Hostname:    "test-host",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool.Start(ctx)
+	bundle.Attachments.Prepare(ctx, "j1", nil)
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, Prompt: "test"})
+
+	ch, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case <-ch:
+		state, _ := store.Get("j1")
+		if state.WorkerID == "" {
+			t.Error("WorkerID should be set after execution")
+		}
+		if state.WorkerID != "test-host/worker-0" {
+			t.Errorf("WorkerID = %q, want test-host/worker-0", state.WorkerID)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout")
+	}
+}
+
 func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 	store := queue.NewMemJobStore()
 	bundle := queue.NewInMemBundle(10, 3, store)

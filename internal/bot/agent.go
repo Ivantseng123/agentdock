@@ -33,12 +33,12 @@ func NewAgentRunner(agents []config.AgentConfig) *AgentRunner {
 
 func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 	var chain []config.AgentConfig
-	if len(cfg.Fallback) > 0 {
-		for _, name := range cfg.Fallback {
+	if len(cfg.Providers) > 0 {
+		for _, name := range cfg.Providers {
 			if agent, ok := cfg.Agents[name]; ok {
 				chain = append(chain, agent)
 			} else {
-				slog.Warn("fallback agent not found in agents config", "name", name)
+				slog.Warn("provider not found in agents config", "name", name)
 			}
 		}
 	} else if cfg.ActiveAgent != "" {

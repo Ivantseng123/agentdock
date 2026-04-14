@@ -40,7 +40,7 @@ echo '{"issue_type":"bug","confidence":"high","files":[],"open_questions":[],"su
 	}
 }
 
-func TestAgentRunner_Fallback(t *testing.T) {
+func TestAgentRunner_ProviderChain(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "good-agent")
 	os.WriteFile(script, []byte("#!/bin/sh\necho 'fallback output with enough characters to pass the minimum length check of fifty chars'\n"), 0755)
@@ -52,7 +52,7 @@ func TestAgentRunner_Fallback(t *testing.T) {
 
 	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
 	if err != nil {
-		t.Fatalf("Run with fallback failed: %v", err)
+		t.Fatalf("Run with provider chain failed: %v", err)
 	}
 	if !strings.Contains(output, "fallback output") {
 		t.Errorf("output = %q, want fallback output", output)

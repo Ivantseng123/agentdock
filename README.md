@@ -181,7 +181,7 @@ agents:
     skill_dir: ".opencode/skills"
 
 active_agent: claude
-fallback: [claude, opencode]
+providers: [claude, opencode]
 
 # Queue 設定
 queue:
@@ -310,7 +310,7 @@ REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx ./bot worker
 
 自訂 agent：
 ```bash
-REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx FALLBACK=codex ./bot worker
+REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx PROVIDERS=codex ./bot worker
 ```
 
 Worker 內建三個 agent 的預設 config（claude/codex/opencode），不需要 YAML。Redis 地址和 token 透過環境變數傳入。
@@ -334,7 +334,7 @@ docker run -e SLACK_BOT_TOKEN=xoxb-... \
 # Worker 模式（Redis，獨立消費 job）
 docker run -e REDIS_ADDR=redis:6379 \
            -e GITHUB_TOKEN=ghp_... \
-           -e FALLBACK=claude \
+           -e PROVIDERS=claude \
            -e ANTHROPIC_API_KEY=sk-ant-... \
            agentdock worker
 ```
@@ -348,17 +348,17 @@ docker run -e REDIS_ADDR=redis:6379 \
 
 #### Agent 選擇與 API Key
 
-Worker 透過 `FALLBACK` 環境變數選擇要使用的 agent（逗號分隔，依序 fallback），不需要修改 config 檔：
+Worker 透過 `PROVIDERS` 環境變數選擇要使用的 agent（逗號分隔，依序嘗試），不需要修改 config 檔：
 
 ```bash
 # 用 claude
-docker run -e FALLBACK=claude -e ANTHROPIC_API_KEY=sk-ant-... ...
+docker run -e PROVIDERS=claude -e ANTHROPIC_API_KEY=sk-ant-... ...
 
-# 用 codex，fallback 到 claude
-docker run -e FALLBACK=codex,claude -e OPENAI_API_KEY=sk-... -e ANTHROPIC_API_KEY=sk-ant-... ...
+# 用 codex，fallback 到 claude（依序嘗試）
+docker run -e PROVIDERS=codex,claude -e OPENAI_API_KEY=sk-... -e ANTHROPIC_API_KEY=sk-ant-... ...
 
 # 用 opencode
-docker run -e FALLBACK=opencode -e ANTHROPIC_API_KEY=sk-ant-... ...
+docker run -e PROVIDERS=opencode -e ANTHROPIC_API_KEY=sk-ant-... ...
 ```
 
 | Agent | API Key 環境變數 | 取得方式 |
@@ -367,7 +367,7 @@ docker run -e FALLBACK=opencode -e ANTHROPIC_API_KEY=sk-ant-... ...
 | codex | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) |
 | opencode | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
 
-只需要傳 `FALLBACK` 裡列出的 agent 的 API key。
+只需要傳 `PROVIDERS` 裡列出的 agent 的 API key。
 
 #### 所有環境變數
 
@@ -378,7 +378,7 @@ docker run -e FALLBACK=opencode -e ANTHROPIC_API_KEY=sk-ant-... ...
 | `GITHUB_TOKEN` | GitHub token（App: read+write, Worker: read） | 是 |
 | `REDIS_ADDR` | Redis 連線地址 | Redis 模式 |
 | `REDIS_PASSWORD` | Redis 密碼 | 有密碼時 |
-| `FALLBACK` | Agent fallback 順序（逗號分隔） | 否（預設用 config） |
+| `PROVIDERS` | Agent provider 順序（逗號分隔） | 否（預設用 config） |
 | `ACTIVE_AGENT` | 主要 agent | 否（預設用 config） |
 | `CLAUDE_AUTH_TOKEN` | Claude CLI auth | 用 claude 時 |
 | `OPENAI_API_KEY` | Codex CLI auth | 用 codex 時 |
@@ -432,7 +432,8 @@ internal/
     agent.go                 # AgentRunner: spawn CLI agent with RunOptions + stream
     parser.go                # parse ===TRIAGE_RESULT=== JSON (+ legacy fallback)
     prompt.go                # build user prompt for CLI agent
-    result_listener.go       # ResultBus → create issue → post Slack
+    result_listener.go       # ResultBus → create issue / retry button → post Slack
+    retry_handler.go         # Retry button interaction → re-submit job to queue
     status_listener.go       # StatusBus → update JobStore agent tracking
     enrich.go                # expand Mantis URLs in messages
   slack/

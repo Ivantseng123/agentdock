@@ -28,7 +28,7 @@ github:
   token: "ghp_your-token"
 
 # === Agents ===
-# CLI agents are spawned as subprocesses. Tried in fallback order.
+# CLI agents are spawned as subprocesses. Tried in provider order.
 agents:
   claude:
     command: claude
@@ -52,7 +52,7 @@ agents:
   #   timeout: 5m
 
 active_agent: claude
-fallback: [claude, opencode]
+providers: [claude, opencode]
 
 # === Prompt ===
 prompt:

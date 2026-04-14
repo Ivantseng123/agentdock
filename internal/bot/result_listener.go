@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"agentdock/internal/queue"
 )
@@ -13,6 +14,7 @@ import (
 type SlackPoster interface {
 	PostMessage(channelID, text, threadTS string)
 	UpdateMessage(channelID, messageTS, text string)
+	PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
 }
 
 // IssueCreator abstracts GitHub issue creation for testing.
@@ -21,11 +23,15 @@ type IssueCreator interface {
 }
 
 type ResultListener struct {
-	results     queue.ResultBus
-	store       queue.JobStore
-	attachments queue.AttachmentStore
-	slack       SlackPoster
-	github      IssueCreator
+	results       queue.ResultBus
+	store         queue.JobStore
+	attachments   queue.AttachmentStore
+	slack         SlackPoster
+	github        IssueCreator
+	onDedupClear  func(channelID, threadTS string)
+
+	mu            sync.Mutex
+	processedJobs map[string]bool
 }
 
 func NewResultListener(
@@ -34,13 +40,16 @@ func NewResultListener(
 	attachments queue.AttachmentStore,
 	slack SlackPoster,
 	github IssueCreator,
+	onDedupClear func(channelID, threadTS string),
 ) *ResultListener {
 	return &ResultListener{
-		results:     results,
-		store:       store,
-		attachments: attachments,
-		slack:       slack,
-		github:      github,
+		results:       results,
+		store:         store,
+		attachments:   attachments,
+		slack:         slack,
+		github:        github,
+		onDedupClear:  onDedupClear,
+		processedJobs: make(map[string]bool),
 	}
 }
 
@@ -65,6 +74,16 @@ func (r *ResultListener) Listen(ctx context.Context) {
 }
 
 func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResult) {
+	// Dedup guard: drop duplicate results for same job.
+	r.mu.Lock()
+	if r.processedJobs[result.JobID] {
+		r.mu.Unlock()
+		slog.Debug("dropping duplicate result", "job_id", result.JobID)
+		return
+	}
+	r.processedJobs[result.JobID] = true
+	r.mu.Unlock()
+
 	state, err := r.store.Get(result.JobID)
 	if err != nil {
 		slog.Error("job not found for result", "job_id", result.JobID, "error", err)
@@ -76,20 +95,53 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 
 	switch {
 	case result.Status == "failed":
-		r.updateStatus(job, fmt.Sprintf(":x: 分析失敗: %s", result.Error))
+		r.handleFailure(job, state, result)
 
 	case result.Confidence == "low":
 		r.updateStatus(job, ":warning: 判斷不屬於此 repo，已跳過")
+		r.clearDedup(job)
 
 	case result.FilesFound == 0 || result.Questions >= 5:
 		r.createAndPostIssue(ctx, job, owner, repo, result, true)
+		r.clearDedup(job)
 
 	default:
 		r.createAndPostIssue(ctx, job, owner, repo, result, false)
+		r.clearDedup(job)
 	}
 
-	// Cleanup attachments; keep job in store for status visibility (TTL cleanup handles removal).
+	// Cleanup attachments.
 	r.attachments.Cleanup(ctx, result.JobID)
+}
+
+func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, result *queue.JobResult) {
+	r.store.UpdateStatus(job.ID, queue.JobFailed)
+
+	workerID := ""
+	if state.AgentStatus != nil {
+		workerID = state.AgentStatus.WorkerID
+	}
+	if workerID == "" {
+		workerID = state.WorkerID
+	}
+
+	workerInfo := ""
+	if workerID != "" {
+		workerInfo = fmt.Sprintf(" | worker: %s", workerID)
+	}
+
+	if job.RetryCount < 1 {
+		// Show retry button.
+		text := fmt.Sprintf(":x: 分析失敗: %s\nrepo: `%s`%s", result.Error, job.Repo, workerInfo)
+		r.slack.PostMessageWithButton(job.ChannelID, text, job.ThreadTS,
+			"retry_job", "🔄 重試", job.ID)
+		// Do NOT clear dedup — user should use retry button.
+	} else {
+		// Retry exhausted, no button.
+		text := fmt.Sprintf(":x: 分析失敗（重試後仍失敗）: %s\nrepo: `%s`%s", result.Error, job.Repo, workerInfo)
+		r.updateStatus(job, text)
+		r.clearDedup(job)
+	}
 }
 
 func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job, owner, repo string, result *queue.JobResult, degraded bool) {
@@ -118,12 +170,17 @@ func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job,
 	r.updateStatus(job, fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url))
 }
 
-// updateStatus updates the original status message if possible, otherwise posts a new message.
 func (r *ResultListener) updateStatus(job *queue.Job, text string) {
 	if job.StatusMsgTS != "" {
 		r.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
 	} else {
 		r.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
+	}
+}
+
+func (r *ResultListener) clearDedup(job *queue.Job) {
+	if r.onDedupClear != nil {
+		r.onDedupClear(job.ChannelID, job.ThreadTS)
 	}
 }
 

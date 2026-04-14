@@ -26,9 +26,11 @@ internal/
   config/config.go           # YAML config: agents, channels, prompt, rate limits
   bot/
     workflow.go              # Orchestrator: trigger → interact → spawn agent → parse → issue
-    agent.go                 # AgentRunner: spawn CLI agent with fallback chain
+    agent.go                 # AgentRunner: spawn CLI agent with provider chain
     parser.go                # Parse agent output (===TRIAGE_RESULT=== CREATED/REJECTED/ERROR)
     prompt.go                # Build minimal user prompt for CLI agent
+    result_listener.go       # ResultBus → create issue / retry button → Slack
+    retry_handler.go         # Retry button interaction → re-submit job
     enrich.go                # Expand Mantis URLs in messages
   slack/
     client.go                # PostMessage/PostSelector/FetchThreadContext/DownloadAttachments
@@ -48,8 +50,8 @@ This is a **structuring tool**, not a diagnosis tool. The core value is turning 
 ### CLI Agent Delegation (v2)
 Instead of implementing a custom agent loop with tools, the bot spawns external CLI agents (claude, opencode, codex, gemini) that use their own built-in tools to explore the codebase. The bot sends a minimal prompt with thread context and repo path, and parses the structured output.
 
-### Multi-Agent Fallback
-Agents are configured in YAML. If the active agent fails (timeout, not found, error), the bot tries the next agent in the fallback chain.
+### Multi-Agent Providers
+Agents are configured in YAML with a `providers` list. If the active provider fails (timeout, not found, error), the bot tries the next provider in the chain.
 
 ### Output Format
 Agent creates the GitHub issue directly via `gh issue create` and outputs a result marker. The parser looks for `===TRIAGE_RESULT===` followed by `CREATED: {url}`, `REJECTED: {reason}`, or `ERROR: {message}`. If the marker is missing, the parser falls back to extracting a GitHub issue URL from the output.

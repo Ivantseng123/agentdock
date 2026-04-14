@@ -16,7 +16,7 @@ type Config struct {
 	GitHub            GitHubConfig             `yaml:"github"`
 	Agents            map[string]AgentConfig   `yaml:"agents"`
 	ActiveAgent       string                   `yaml:"active_agent"`
-	Fallback          []string                 `yaml:"fallback"`
+	Providers         []string                 `yaml:"providers"`
 	Prompt            PromptConfig             `yaml:"prompt"`
 	Channels          map[string]ChannelConfig `yaml:"channels"`
 	ChannelDefaults   ChannelConfig            `yaml:"channel_defaults"`
@@ -187,7 +187,7 @@ func LoadDefaults() (*Config, error) {
 				SkillDir: ".opencode/skills",
 			},
 		},
-		Fallback: []string{"claude"},
+		Providers: []string{"claude"},
 	}
 	applyDefaults(&cfg)
 	applyEnvOverrides(&cfg)
@@ -287,7 +287,7 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ACTIVE_AGENT"); v != "" {
 		cfg.ActiveAgent = v
 	}
-	if v := os.Getenv("FALLBACK"); v != "" {
-		cfg.Fallback = strings.Split(v, ",")
+	if v := os.Getenv("PROVIDERS"); v != "" {
+		cfg.Providers = strings.Split(v, ",")
 	}
 }
