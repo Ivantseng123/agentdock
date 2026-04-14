@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.4](https://github.com/Ivantseng123/agentdock/compare/v0.2.3...v0.2.4) (2026-04-14)
+
+
+### Features
+
+* add fsnotify watcher for skills.yaml hot reload ([7c239e6](https://github.com/Ivantseng123/agentdock/commit/7c239e6f7267385f61c0f0486ee75b3a3da50fc4))
+* add npx package scanning and skill file reading ([5437c9a](https://github.com/Ivantseng123/agentdock/commit/5437c9abb839657e42edd3287198fb62e6257ee3))
+* add skill file validation (size, extension whitelist, path safety) ([e05e83b](https://github.com/Ivantseng123/agentdock/commit/e05e83b6f56dc2dd18da733495e714864bf8aedf))
+* add SkillLoader with cache, singleflight, and fallback ([b31af19](https://github.com/Ivantseng123/agentdock/commit/b31af1977d52709402e8f0e4e290098251052981))
+* add skills.yaml config types and loading ([59e6abe](https://github.com/Ivantseng123/agentdock/commit/59e6abec375f1ff0750e2f7834e5f63b322b8775))
+* change Job.Skills to SkillPayload with multi-file support ([92c3686](https://github.com/Ivantseng123/agentdock/commit/92c368620d4a5dd77f2009b22a22c0c532b14c34))
+* NPX dynamic skill loading with cache and hot reload ([633532e](https://github.com/Ivantseng123/agentdock/commit/633532ed014fdbc7d8f4bf40fcd2882fb2f11138))
+* rename type npx→remote, add same-name conflict fail fast ([84aba6d](https://github.com/Ivantseng123/agentdock/commit/84aba6d816ede8b19f98596bb482c86ca85f5e83))
+* replace skills map with SkillProvider interface in Workflow ([2d7de88](https://github.com/Ivantseng123/agentdock/commit/2d7de882faf823a08ce728129fd9c0f3e0d67f7a))
+* wire SkillLoader into app startup and workflow ([81e143e](https://github.com/Ivantseng123/agentdock/commit/81e143e8c0240b89efb26a3b2b7bb2de8a6d8722))
+
+
+### Performance Improvements
+
+* add GHA buildx cache for docker images in release ([94631d5](https://github.com/Ivantseng123/agentdock/commit/94631d5df04ba01e544a3fcf7a61e45a7ecd6196))
+
 ## [0.2.3](https://github.com/Ivantseng123/agentdock/compare/v0.2.2...v0.2.3) (2026-04-14)
 
 
