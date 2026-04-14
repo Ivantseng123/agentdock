@@ -13,6 +13,7 @@ import (
 type SlackPoster interface {
 	PostMessage(channelID, text, threadTS string)
 	UpdateMessage(channelID, messageTS, text string)
+	PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
 }
 
 // IssueCreator abstracts GitHub issue creation for testing.

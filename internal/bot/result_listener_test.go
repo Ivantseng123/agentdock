@@ -13,6 +13,7 @@ import (
 type mockSlackPoster struct {
 	mu       sync.Mutex
 	messages []string
+	buttons  []string
 }
 
 func (m *mockSlackPoster) PostMessage(channelID, text, threadTS string) {
@@ -25,6 +26,14 @@ func (m *mockSlackPoster) UpdateMessage(channelID, messageTS, text string) {
 	m.mu.Lock()
 	m.messages = append(m.messages, text)
 	m.mu.Unlock()
+}
+
+func (m *mockSlackPoster) PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error) {
+	m.mu.Lock()
+	m.buttons = append(m.buttons, actionID+":"+value)
+	m.messages = append(m.messages, text)
+	m.mu.Unlock()
+	return "msg-ts-mock", nil
 }
 
 type mockIssueCreator struct {

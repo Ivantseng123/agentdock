@@ -400,6 +400,10 @@ func (a *slackPosterAdapter) UpdateMessage(channelID, messageTS, text string) {
 	}
 }
 
+func (a *slackPosterAdapter) PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error) {
+	return a.client.PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value)
+}
+
 func parseLogLevel(level string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
