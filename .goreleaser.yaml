@@ -1,8 +1,10 @@
 version: 2
 project_name: agentdock
 
-gomod:
-  proxy: true   # resolve modules via GOPROXY for reproducible builds
+# gomod.proxy is intentionally disabled: go.mod declares `module agentdock`
+# (a bare local name, not a URL), which GOPROXY cannot resolve. If the module
+# path is ever changed to a full URL (e.g. github.com/Ivantseng123/agentdock),
+# add `gomod: { proxy: true }` back for reproducible builds.
 
 builds:
   - id: bot
