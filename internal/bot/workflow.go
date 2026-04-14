@@ -23,6 +23,7 @@ type pendingTriage struct {
 	ChannelID      string
 	ThreadTS       string
 	TriggerTS      string
+	UserID         string
 	Attachments    []string
 	SelectedRepo   string
 	SelectedBranch string
@@ -138,6 +139,7 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		ChannelID:   event.ChannelID,
 		ThreadTS:    event.ThreadTS,
 		TriggerTS:   event.TriggerTS,
+		UserID:      event.UserID,
 		Reporter:    reporter,
 		ChannelName: channelName,
 		CmdArgs:     parseTriggerArgs(event.Text),
@@ -416,6 +418,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		Priority:    w.channelPriority(pt.ChannelID),
 		ChannelID:   pt.ChannelID,
 		ThreadTS:    pt.ThreadTS,
+		UserID:      pt.UserID,
 		Repo:        pt.SelectedRepo,
 		Branch:      pt.SelectedBranch,
 		CloneURL:    w.repoCache.ResolveURL(pt.SelectedRepo),

@@ -26,7 +26,7 @@ agents:
     timeout: 3m
 
 active_agent: claude
-fallback: [claude, opencode]
+providers: [claude, opencode]
 
 prompt:
   language: zh-TW
@@ -99,8 +99,8 @@ repo_cache:
 	if cfg.ActiveAgent != "claude" {
 		t.Errorf("active_agent = %q", cfg.ActiveAgent)
 	}
-	if len(cfg.Fallback) != 2 || cfg.Fallback[0] != "claude" {
-		t.Errorf("fallback = %v", cfg.Fallback)
+	if len(cfg.Providers) != 2 || cfg.Providers[0] != "claude" {
+		t.Errorf("providers = %v", cfg.Providers)
 	}
 
 	// Prompt

@@ -30,8 +30,10 @@ type Job struct {
 	RequestID   string            `json:"request_id"`
 	Attachments []AttachmentMeta  `json:"attachments"`
 	StatusMsgTS string            `json:"status_msg_ts,omitempty"`
-	TaskType    string            `json:"task_type,omitempty"`
-	SubmittedAt time.Time         `json:"submitted_at"`
+	TaskType     string            `json:"task_type,omitempty"`
+	RetryCount   int               `json:"retry_count,omitempty"`
+	RetryOfJobID string            `json:"retry_of_job_id,omitempty"`
+	SubmittedAt  time.Time         `json:"submitted_at"`
 }
 
 type AttachmentMeta struct {

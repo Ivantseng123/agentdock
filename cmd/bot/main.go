@@ -128,10 +128,10 @@ func main() {
 		slog.Info("using in-memory transport")
 	}
 
-	// Collect skill dirs from all agents in fallback chain.
+	// Collect skill dirs from all agents in provider chain.
 	seen := make(map[string]bool)
 	var skillDirs []string
-	for _, name := range cfg.Fallback {
+	for _, name := range cfg.Providers {
 		if agent, ok := cfg.Agents[name]; ok && agent.SkillDir != "" && !seen[agent.SkillDir] {
 			skillDirs = append(skillDirs, agent.SkillDir)
 			seen[agent.SkillDir] = true
@@ -188,23 +188,23 @@ func main() {
 	wf.SetHandler(handler)
 
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
-	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments, &slackPosterAdapter{client: slackClient}, issueClient)
+	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
+		&slackPosterAdapter{client: slackClient}, issueClient,
+		func(channelID, threadTS string) {
+			handler.ClearThreadDedup(channelID, threadTS)
+		})
 	go resultListener.Listen(context.Background())
+
+	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient})
 
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
 	go statusListener.Listen(context.Background())
 
-	// Job watchdog — detect stuck jobs and notify Slack.
-	slackAdapter := &slackPosterAdapter{client: slackClient}
-	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, queue.WatchdogConfig{
+	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
+	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, bundle.Results, queue.WatchdogConfig{
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,
 		PrepareTimeout: cfg.Queue.PrepareTimeout,
-	}, func(job *queue.Job, status queue.JobStatus, reason string) {
-		msg := queue.FormatStuckMessage(job, status, reason)
-		slackAdapter.PostMessage(job.ChannelID, msg, job.ThreadTS)
-		// Also clear dedup so user can re-trigger.
-		handler.ClearThreadDedup(job.ChannelID, job.ThreadTS)
 	})
 	go watchdog.Start(make(chan struct{})) // runs until process exits
 
@@ -330,6 +330,9 @@ func main() {
 					case strings.HasPrefix(action.ActionID, "description_action"):
 						wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
 
+					case action.ActionID == "retry_job":
+						retryHandler.Handle(cb.Channel.ID, action.Value, selectorTS)
+
 					case strings.HasPrefix(action.ActionID, "cancel_job"):
 						jobID := action.Value
 						state, err := jobStore.Get(jobID)
@@ -408,6 +411,10 @@ func (a *slackPosterAdapter) UpdateMessage(channelID, messageTS, text string) {
 	if err := a.client.UpdateMessage(channelID, messageTS, text); err != nil {
 		slog.Warn("failed to update slack message", "channel", channelID, "error", err)
 	}
+}
+
+func (a *slackPosterAdapter) PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error) {
+	return a.client.PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value)
 }
 
 func parseLogLevel(level string) slog.Level {
