@@ -1,6 +1,7 @@
 .git/
 docs/
 *.md
+!agents/skills/**/*.md
 config.yaml
 config.local.yaml
 bot
