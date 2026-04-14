@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/Ivantseng123/agentdock/compare/v0.2.1...v0.2.2) (2026-04-14)
+
+
+### Features
+
+* **bot:** add commit/date version metadata and -version flag ([be441b2](https://github.com/Ivantseng123/agentdock/commit/be441b2ed25743460ad49cb091bfdb9a22fb2fe0))
+
 ## [0.2.1](https://github.com/Ivantseng123/agentdock/compare/v0.2.0...v0.2.1) (2026-04-14)
 
 
