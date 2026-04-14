@@ -81,6 +81,22 @@ Bot 使用 producer/consumer queue 解耦 Slack 事件處理和 agent 執行：
 
 App 不跑 agent。Worker 不需要 Slack token 或 GitHub write token。
 
+#### External Worker 依賴
+
+如果你下載 GitHub Release 附的 binary 在外部機器跑 `bot worker`，**binary 不是 self-contained**。Worker 會 `exec` 以下 CLI，請先自行安裝並確認在 `PATH` 中：
+
+- **至少一個 agent CLI**（config 裡選定的那個）：
+  - `@anthropic-ai/claude-code`（npm）
+  - `@openai/codex`（npm）
+  - `opencode`（見 [anomalyco/opencode](https://github.com/anomalyco/opencode) releases）
+  - `gemini`（如有使用）
+- **`gh` CLI**（建立 GitHub issue 用）
+- **`git`**（clone repo）
+
+若不想自行管理這些依賴，改用 Docker image：`ghcr.io/ivantseng123/agentdock:<version>` 已預裝全部 runtime。
+
+**Windows 備註**：上述 CLI 的 Windows 原生支援由上游廠商提供，若遇相容性問題建議改用 Docker image（需 WSL2 或 Linux VM）。
+
 ## 觸發方式
 
 | 方式 | 範例 | 說明 |
