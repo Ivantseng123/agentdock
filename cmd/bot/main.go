@@ -23,7 +23,11 @@ import (
 	"github.com/slack-go/slack/socketmode"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
 
 func main() {
 	if len(os.Args) > 1 {
@@ -35,7 +39,13 @@ func main() {
 	}
 
 	configPath := flag.String("config", "config.yaml", "path to config file")
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("agentdock %s (commit %s, built %s)\n", version, commit, date)
+		return
+	}
 
 	// Use INFO until config is loaded.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -226,7 +236,7 @@ func main() {
 		slog.Warn("failed to resolve bot identity, auto-bind may not filter correctly", "error", err)
 	}
 
-	slog.Info("starting bot", "version", version)
+	slog.Info("starting bot", "version", version, "commit", commit, "date", date)
 
 	go func() {
 		for evt := range sm.Events {
