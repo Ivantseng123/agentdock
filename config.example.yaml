@@ -96,6 +96,9 @@ logging:
   retention_days: 30
   agent_output_dir: "logs/agent-outputs"
 
+# Skills config (optional, for remote skill loading via ConfigMap)
+# skills_config: "/etc/agentdock/skills.yaml"
+
 # Optional: Mantis integration
 # mantis:
 #   base_url: https://mantis.example.com

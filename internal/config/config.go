@@ -33,6 +33,7 @@ type Config struct {
 	Workers           WorkersConfig            `yaml:"workers"`
 	Attachments       AttachmentsConfig        `yaml:"attachments"`
 	Redis             RedisConfig              `yaml:"redis"`
+	SkillsConfig      string                   `yaml:"skills_config"`
 }
 
 type ServerConfig struct {

@@ -16,6 +16,7 @@ import (
 	"agentdock/internal/logging"
 	"agentdock/internal/mantis"
 	"agentdock/internal/queue"
+	"agentdock/internal/skill"
 	slackclient "agentdock/internal/slack"
 
 	"github.com/slack-go/slack"
@@ -85,14 +86,24 @@ func main() {
 
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
 
-	// Load skills for agent.
-	skills := make(map[string]string)
-	skillPath := "agents/skills/triage-issue/SKILL.md"
-	if data, err := os.ReadFile(skillPath); err == nil {
-		skills["triage-issue"] = string(data)
-		slog.Info("skill loaded", "path", skillPath)
-	} else {
-		slog.Warn("skill not found, agents will run without skill", "path", skillPath, "error", err)
+	// Load skills via SkillLoader.
+	bakedInDir := "agents/skills"
+	if _, err := os.Stat("/opt/agents/skills"); err == nil {
+		bakedInDir = "/opt/agents/skills"
+	}
+	skillLoader, err := skill.NewLoader(cfg.SkillsConfig, bakedInDir)
+	if err != nil {
+		slog.Error("failed to create skill loader", "error", err)
+		os.Exit(1)
+	}
+	skillLoader.Warmup(context.Background())
+	if cfg.SkillsConfig != "" {
+		stopWatcher, err := skillLoader.StartWatcher(cfg.SkillsConfig)
+		if err != nil {
+			slog.Warn("failed to start skill config watcher", "error", err)
+		} else {
+			defer stopWatcher()
+		}
 	}
 
 	mantisClient := mantis.NewClient(
@@ -171,7 +182,7 @@ func main() {
 		}
 	}
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, coordinator, jobStore, bundle.Attachments, skills)
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, coordinator, jobStore, bundle.Attachments, skillLoader)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,

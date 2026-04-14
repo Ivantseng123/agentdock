@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"agentdock/internal/bot"
@@ -103,24 +104,28 @@ func failedResult(job *queue.Job, startedAt time.Time, err error) *queue.JobResu
 	}
 }
 
-func mountSkills(repoPath string, skills map[string]string, skillDir string) error {
+func mountSkills(repoPath string, skills map[string]*queue.SkillPayload, skillDir string) error {
 	if skillDir == "" {
 		return nil
 	}
-	for name, content := range skills {
-		skillSubDir := filepath.Join(repoPath, skillDir, name)
-		if err := os.MkdirAll(skillSubDir, 0755); err != nil {
-			return err
-		}
-		path := filepath.Join(skillSubDir, "SKILL.md")
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			return err
+	for name, payload := range skills {
+		for relPath, content := range payload.Files {
+			if strings.Contains(relPath, "..") || filepath.IsAbs(relPath) {
+				return fmt.Errorf("invalid skill file path: %s", relPath)
+			}
+			fullPath := filepath.Join(repoPath, skillDir, name, relPath)
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(fullPath, content, 0644); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func cleanupSkills(repoPath string, skills map[string]string, skillDir string) {
+func cleanupSkills(repoPath string, skills map[string]*queue.SkillPayload, skillDir string) {
 	if skillDir == "" {
 		return
 	}

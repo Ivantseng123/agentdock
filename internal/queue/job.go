@@ -15,18 +15,22 @@ const (
 	JobFailed    JobStatus = "failed"
 )
 
+type SkillPayload struct {
+	Files map[string][]byte `json:"files"`
+}
+
 type Job struct {
-	ID          string            `json:"id"`
-	Priority    int               `json:"priority"`
-	Seq         uint64            `json:"seq"`
-	ChannelID   string            `json:"channel_id"`
-	ThreadTS    string            `json:"thread_ts"`
-	UserID      string            `json:"user_id"`
-	Repo        string            `json:"repo"`
-	Branch      string            `json:"branch"`
-	CloneURL    string            `json:"clone_url"`
-	Prompt      string            `json:"prompt"`
-	Skills      map[string]string `json:"skills"`
+	ID          string                    `json:"id"`
+	Priority    int                       `json:"priority"`
+	Seq         uint64                    `json:"seq"`
+	ChannelID   string                    `json:"channel_id"`
+	ThreadTS    string                    `json:"thread_ts"`
+	UserID      string                    `json:"user_id"`
+	Repo        string                    `json:"repo"`
+	Branch      string                    `json:"branch"`
+	CloneURL    string                    `json:"clone_url"`
+	Prompt      string                    `json:"prompt"`
+	Skills      map[string]*SkillPayload  `json:"skills"`
 	RequestID   string            `json:"request_id"`
 	Attachments []AttachmentMeta  `json:"attachments"`
 	StatusMsgTS string            `json:"status_msg_ts,omitempty"`

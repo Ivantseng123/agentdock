@@ -48,7 +48,7 @@ type Workflow struct {
 	queue         queue.JobQueue
 	store         queue.JobStore
 	attachments   queue.AttachmentStore
-	skills        map[string]string
+	skillProvider SkillProvider
 
 	mu        sync.Mutex
 	pending   map[string]*pendingTriage
@@ -65,7 +65,7 @@ func NewWorkflow(
 	jobQueue queue.JobQueue,
 	jobStore queue.JobStore,
 	attachStore queue.AttachmentStore,
-	skills map[string]string,
+	skillProvider SkillProvider,
 ) *Workflow {
 	return &Workflow{
 		cfg:           cfg,
@@ -77,7 +77,7 @@ func NewWorkflow(
 		queue:         jobQueue,
 		store:         jobStore,
 		attachments:   attachStore,
-		skills:        skills,
+		skillProvider: skillProvider,
 		pending:       make(map[string]*pendingTriage),
 		autoBound:     make(map[string]bool),
 	}
@@ -423,7 +423,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		Branch:      pt.SelectedBranch,
 		CloneURL:    w.repoCache.ResolveURL(pt.SelectedRepo),
 		Prompt:      prompt,
-		Skills:      w.skills,
+		Skills:      w.loadSkills(ctx),
 		RequestID:   pt.RequestID,
 		Attachments: attachMeta,
 		SubmittedAt: time.Now(),
@@ -457,6 +457,18 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		w.store.Put(job) // update with StatusMsgTS
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.
+}
+
+func (w *Workflow) loadSkills(ctx context.Context) map[string]*queue.SkillPayload {
+	if w.skillProvider == nil {
+		return nil
+	}
+	skills, err := w.skillProvider.LoadAll(ctx)
+	if err != nil {
+		slog.Warn("failed to load skills for job", "error", err)
+		return nil
+	}
+	return skills
 }
 
 func (w *Workflow) storePending(selectorTS string, pt *pendingTriage) {

@@ -39,6 +39,12 @@ internal/
     issue.go                 # CreateIssue(ctx, owner, repo, title, body, labels)
     repo.go                  # RepoCache: full clone, fetch, branch list, checkout
     discovery.go             # GitHub API repo discovery with cache (auto-bind)
+  skill/
+    config.go                # skills.yaml parsing (SkillsFileConfig)
+    validate.go              # File validation (size, whitelist, path safety)
+    npx.go                   # NPM package scanning (FetchPackage, scanPackageSkills)
+    loader.go                # SkillLoader: cache, singleflight, fallback, warmup
+    watcher.go               # fsnotify hot reload for skills.yaml (ConfigMap)
   mantis/                    # Mantis bug tracker URL enrichment
 ```
 
@@ -76,7 +82,7 @@ Bot auto-registers when joining a channel. No static channel config needed.
 ## Testing
 
 ```bash
-go test ./...   # 69 tests
+go test ./...   # 150 tests
 ```
 
 ## Build & Run

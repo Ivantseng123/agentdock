@@ -28,7 +28,7 @@ func TestRetryHandler_CreatesNewJob(t *testing.T) {
 		Branch:    "main",
 		Prompt:    "test prompt",
 		Priority:  50,
-		Skills:    map[string]string{"s1": "content"},
+		Skills:    map[string]*queue.SkillPayload{"s1": {Files: map[string][]byte{"SKILL.md": []byte("content")}}},
 	}
 	store.Put(original)
 	store.UpdateStatus("j1", queue.JobFailed)
