@@ -37,8 +37,18 @@ type jobStatusEntry struct {
 	ThreadTS  string            `json:"thread_ts"`
 }
 
+type workerEntry struct {
+	WorkerID    string   `json:"worker_id"`
+	Name        string   `json:"name"`
+	Agents      []string `json:"agents,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	ConnectedAt string   `json:"connected_at"`
+	Uptime      string   `json:"uptime"`
+}
+
 type jobsResponse struct {
 	QueueDepth int              `json:"queue_depth"`
+	Workers    []workerEntry    `json:"workers"`
 	Total      int              `json:"total"`
 	Jobs       []jobStatusEntry `json:"jobs"`
 }
@@ -98,8 +108,23 @@ func StatusHandler(store JobStore, queue JobQueue) http.HandlerFunc {
 			entries = append(entries, entry)
 		}
 
+		var workers []workerEntry
+		if wl, err := queue.ListWorkers(r.Context()); err == nil {
+			for _, wi := range wl {
+				workers = append(workers, workerEntry{
+					WorkerID:    wi.WorkerID,
+					Name:        wi.Name,
+					Agents:      wi.Agents,
+					Tags:        wi.Tags,
+					ConnectedAt: wi.ConnectedAt.Format(time.RFC3339),
+					Uptime:      now.Sub(wi.ConnectedAt).Truncate(time.Second).String(),
+				})
+			}
+		}
+
 		resp := jobsResponse{
 			QueueDepth: queue.QueueDepth(),
+			Workers:    workers,
 			Total:      len(entries),
 			Jobs:       entries,
 		}
