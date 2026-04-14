@@ -1,6 +1,9 @@
 version: 2
 project_name: agentdock
 
+gomod:
+  proxy: true   # resolve modules via GOPROXY for reproducible builds
+
 builds:
   - id: bot
     main: ./cmd/bot
@@ -26,6 +29,7 @@ archives:
         formats: [zip]
     files:
       - README.md
+      - README.en.md
       - config.example.yaml
 
 checksum:
