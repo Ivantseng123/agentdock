@@ -48,6 +48,8 @@ dockers:
     goarch: amd64
     build_flag_templates:
       - --platform=linux/amd64
+      - --cache-from=type=gha,scope=amd64
+      - --cache-to=type=gha,mode=max,scope=amd64
       - --label=org.opencontainers.image.source=https://github.com/Ivantseng123/agentdock
       - --label=org.opencontainers.image.revision={{ .FullCommit }}
       - --label=org.opencontainers.image.version={{ .Version }}
@@ -63,6 +65,8 @@ dockers:
     goarch: arm64
     build_flag_templates:
       - --platform=linux/arm64
+      - --cache-from=type=gha,scope=arm64
+      - --cache-to=type=gha,mode=max,scope=arm64
       - --label=org.opencontainers.image.source=https://github.com/Ivantseng123/agentdock
       - --label=org.opencontainers.image.revision={{ .FullCommit }}
       - --label=org.opencontainers.image.version={{ .Version }}
