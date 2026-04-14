@@ -1,5 +1,9 @@
 # Runtime image for AgentDock. Binary is supplied by goreleaser; this Dockerfile
 # does NOT compile Go. For local Go builds use `go build` or `./run.sh`.
+#
+# NOTE: direct `docker build -f Dockerfile.release .` from repo root will fail
+# because `.dockerignore` excludes `bot`. Use goreleaser, which stages its own
+# build context under `dist/`.
 FROM node:22-alpine
 
 RUN apk add --no-cache git ca-certificates curl
@@ -16,11 +20,7 @@ ARG TARGETARCH
 RUN curl -sL https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz | \
     tar xz -C /usr/local/bin --strip-components=2 gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh
 
-# Binary produced by goreleaser (must be present in build context at root)
-COPY bot /bot
-RUN chmod +x /bot
-
-# Agent skills (goreleaser extra_files copies the directory into context)
+# Skills and static assets (rarely change — placed above binary for better layer caching)
 COPY agents/skills/ /opt/agents/skills/
 RUN mkdir -p /home/node/.claude/skills && \
     for d in /opt/agents/skills/*/; do \
@@ -29,8 +29,11 @@ RUN mkdir -p /home/node/.claude/skills && \
 
 RUN mkdir -p /data/repos && chown node:node /data/repos
 
-# Default config sample (goreleaser extra_files)
 COPY config.example.yaml /config.yaml
+
+# Binary last — invalidates only this layer per release.
+# COPY preserves the 0755 mode Go's linker writes; no chmod needed.
+COPY bot /bot
 
 USER node
 ENTRYPOINT ["/bot"]
