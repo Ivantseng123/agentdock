@@ -178,7 +178,11 @@ func main() {
 	wf.SetHandler(handler)
 
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
-	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments, &slackPosterAdapter{client: slackClient}, issueClient)
+	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
+		&slackPosterAdapter{client: slackClient}, issueClient,
+		func(channelID, threadTS string) {
+			handler.ClearThreadDedup(channelID, threadTS)
+		})
 	go resultListener.Listen(context.Background())
 
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
