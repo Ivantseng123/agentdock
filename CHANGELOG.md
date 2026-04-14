@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/Ivantseng123/agentdock/compare/v0.2.2...v0.2.3) (2026-04-14)
+
+
+### Bug Fixes
+
+* release pipeline — drop gomod.proxy and chain via reusable workflow ([5396afb](https://github.com/Ivantseng123/agentdock/commit/5396afb8593f737133e75965717d67322ebb74a5))
+
 ## [0.2.2](https://github.com/Ivantseng123/agentdock/compare/v0.2.1...v0.2.2) (2026-04-14)
 
 
