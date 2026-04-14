@@ -90,8 +90,6 @@ dockers:
     goarch: amd64
     build_flag_templates:
       - --platform=linux/amd64
-      - --build-arg=OPENCODE_VERSION=1.4.3
-      - --build-arg=GH_VERSION=2.65.0
     extra_files:
       - agents/skills
       - config.example.yaml
@@ -103,8 +101,6 @@ dockers:
     goarch: arm64
     build_flag_templates:
       - --platform=linux/arm64
-      - --build-arg=OPENCODE_VERSION=1.4.3
-      - --build-arg=GH_VERSION=2.65.0
     extra_files:
       - agents/skills
       - config.example.yaml
@@ -119,12 +115,17 @@ docker_manifests:
       - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
       - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
 
+changelog:
+  disable: true   # release-please owns the CHANGELOG; goreleaser must not contribute
+
 release:
   github:
     owner: Ivantseng123
     name: agentdock
-  mode: append
+  mode: keep-existing   # append assets only; do NOT modify release body (release-please owns it)
 ```
+
+**版本號單一真相**：`OPENCODE_VERSION` / `GH_VERSION` 只在 `Dockerfile.release` 的 `ARG` 預設值裡定義；`.goreleaser.yaml` 刻意不傳 `--build-arg`，由 Dockerfile ARG 預設值生效。本地 `docker build` 與 CI 行為一致，升版只改一處。
 
 ### 2. `Dockerfile.release`（新增；取代舊 Dockerfile）
 
@@ -214,7 +215,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod   # single source of truth;升 Go 版本只改 go.mod
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -233,7 +234,52 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### 5. 刪除清單
+### 5. `.github/workflows/release-validate.yml`（新增；PR-time dry-run）
+
+僅在變更 release infra 的 PR 上跑 `goreleaser --snapshot`，避免 `.goreleaser.yaml` 破壞只在 tag 打出來才被發現。
+
+```yaml
+name: Release Validate
+on:
+  pull_request:
+    paths:
+      - '.goreleaser.yaml'
+      - 'Dockerfile.release'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-validate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --snapshot --clean --skip=publish
+```
+
+日常 PR 不動 release infra → 零成本；碰 infra → full build 當 gate。
+
+### 6. `README.md` 更新（External worker 依賴段）
+
+Binary 非 self-contained：worker 跑起來 `exec` 呼叫 agent CLI。新增一段說明使用者必須自行安裝：
+
+- 至少一個 agent CLI：`@anthropic-ai/claude-code` / `@openai/codex` / `opencode` / `gemini`
+- `gh` CLI（GitHub issue 建立）
+- `git`
+
+附註 Windows 平台的 CLI agent 支援情況取決於上游廠商；若遇問題可改用 Docker image。
+
+### 7. 刪除清單
 
 - `.github/workflows/release-publish.yml`
 - `Dockerfile`（被 `Dockerfile.release` 取代；`run.sh` 是 `go build`，本地開發不依賴 Dockerfile）
@@ -259,13 +305,10 @@ Trigger → goreleaser 單一 job 內完成：
 
 ## Testing Strategy
 
-1. **本地 dry-run（開發階段）**
-   ```bash
-   goreleaser release --snapshot --clean --skip=publish
-   ```
-   驗 `.goreleaser.yaml` 合法、5 個 binary 能編、`Dockerfile.release` 兩個 arch 能 build。不進 CI（太慢）。
+1. **PR dry-run（CI 自動）** — 由 `release-validate.yml` 在碰 release infra 的 PR 跑 `goreleaser release --snapshot --clean --skip=publish`。抓 build 層所有問題。
+2. **Feature PR merge 前本地 gate（人工）** — 開發者在自機跑同樣指令，確認 5 個 binary + 2 個 Docker image 成功。這步是針對 transition 的額外保險（首次 release 沒前例可對）。
 
-2. **首次 release 驗證（手動）**
+3. **首次 release 驗證（手動）**
    合第一個用新 workflow 的 Release PR 後，檢查：
    - [ ] GH Release 頁面有 5 個 archive + `checksums.txt`
    - [ ] `ghcr.io/ivantseng123/agentdock:<version>` 的 manifest inspect 顯示 amd64 + arm64
@@ -273,7 +316,7 @@ Trigger → goreleaser 單一 job 內完成：
    - [ ] `docker pull ghcr.io/ivantseng123/agentdock:<version>` + `docker run --rm ... -version` 與 binary 一致
    - [ ] arm64 image 裡的 `/usr/local/bin/gh` 是 arm64 版本（`file` 檢查）
 
-3. **Rollback**：git 歷史留有舊 `release-publish.yml` + `Dockerfile`，`git revert` 可回滾。不做 feature flag。
+4. **Rollback**：git 歷史留有舊 `release-publish.yml` + `Dockerfile`，`git revert` 可回滾。不做 feature flag。
 
 ## Key Assumptions
 
@@ -286,7 +329,7 @@ Trigger → goreleaser 單一 job 內完成：
 ## Open Questions
 
 - Windows binary 實際使用量未知，MVP 包入但首輪 release 後需回看下載數，無人使用則下輪縮減
-- `Dockerfile.release` 裡的 `OPENCODE_VERSION` / `GH_VERSION` 目前以 `build-arg` 固定版本。goreleaser `build_flag_templates` 硬編值，日後升級要同時改 `.goreleaser.yaml` 與 `Dockerfile.release` 兩處 —— 可接受，重構成集中配置不在 MVP 範圍
+- Windows 上 agent CLI（claude-code / codex / opencode）實際可用性取決於上游廠商；README 揭露此限制，使用者遇問題可改用 Docker image
 
 ## References
 
