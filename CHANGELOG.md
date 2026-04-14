@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/Ivantseng123/react2issue/compare/v0.1.1...v0.2.0) (2026-04-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* Go module renamed from slack-issue-bot to agentdock. All import paths updated. Redis key prefix changed from r2i: to ad:.
+
+### Features
+
+* rename project from react2issue to AgentDock ([b516820](https://github.com/Ivantseng123/react2issue/commit/b5168204b55021d66e4f6c231dfe827a32466286))
+
 ## [0.1.1](https://github.com/Ivantseng123/react2issue/compare/v0.1.0...v0.1.1) (2026-04-12)
 
 
