@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.5](https://github.com/Ivantseng123/agentdock/compare/v0.2.4...v0.2.5) (2026-04-14)
+
+
+### Features
+
+* expose registered workers in /jobs endpoint ([1848f96](https://github.com/Ivantseng123/agentdock/commit/1848f96876b5708c78e34b77ff46220fb433dcd8))
+* expose registered workers in /jobs endpoint ([36a538a](https://github.com/Ivantseng123/agentdock/commit/36a538afc32ab7c2d4e880e15a5f2eab9b0e76da))
+
+
+### Bug Fixes
+
+* allow skill .md files in Docker build ([f5b0b9b](https://github.com/Ivantseng123/agentdock/commit/f5b0b9b64be049afeaf7a261ca6830059371888a))
+* allow skill .md files in Docker build ([042ec3e](https://github.com/Ivantseng123/agentdock/commit/042ec3e92e52e6b62bdb7cc2fc28147f6f367c0d))
+
 ## [0.2.4](https://github.com/Ivantseng123/agentdock/compare/v0.2.3...v0.2.4) (2026-04-14)
 
 
