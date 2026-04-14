@@ -11,11 +11,15 @@ Skills are currently baked into the Docker image at build time. When skills are 
 | Fetch timing | App-side, at job submit | Worker stays stateless |
 | Package convention | `{pkg}/skills/{name}/SKILL.md` | Supports multi-skill packages |
 | Config source | Separate `skills.yaml` via k8s ConfigMap | Admin-managed, hot-reloadable |
-| Caching | TTL cache + singleflight | Balance freshness vs. performance |
+| Caching | In-memory TTL cache + singleflight | Balance freshness vs. performance |
 | Fallback | npx cache → baked-in → skip | Two-layer, graceful degradation |
 | Multi-file skills | Carry entire directory tree | Support examples, references, etc. |
 | Validation timing | At fetch time, not job submit | Avoid repeated log spam + wasted npx calls |
 | Backward compat | Sync deploy, no transition period | No existing workers to support |
+| npx execution | `exec.Command("npx", ...)`, no `sh -c` | Prevent arbitrary shell injection |
+| Cache key | By package, not by skill name | One fetch per package, multiple skills share entry |
+| Skill naming | Package directory names, not config keys | Skill author controls naming |
+| Startup warmup | Prefetch all npx skills at init | First job has no fetch delay |
 
 ## Config Format
 
@@ -41,17 +45,22 @@ skills:
   # NPX dynamic skills
   code-review:
     type: npx
-    command: "npx @someone/skill-code-review@latest"
+    package: "@someone/skill-code-review"
+    version: "latest"
 
   security-audit:
     type: npx
-    command: "npx @team/security-skills@^2.0.0"
+    package: "@team/security-skills"
+    version: "^2.0.0"
     timeout: 60s  # default 30s
 
 cache:
-  dir: "/tmp/agentdock/skill-cache"
   ttl: 5m
 ```
+
+Config keys (e.g. `code-review`) are identifiers for grouping and configuration only.
+Actual skill names are determined by directory names inside the package's `skills/` folder.
+Multiple config entries pointing to the same package only trigger one npx fetch.
 
 ### K8s ConfigMap
 
@@ -68,9 +77,9 @@ data:
         path: agents/skills/triage-issue
       code-review:
         type: npx
-        command: "npx @someone/skill-code-review@latest"
+        package: "@someone/skill-code-review"
+        version: "latest"
     cache:
-      dir: "/tmp/agentdock/skill-cache"
       ttl: 5m
 ```
 
@@ -86,6 +95,10 @@ containers:
         subPath: skills.yaml
 ```
 
+### Private npm registries
+
+Private registries (GitHub Packages, Artifactory, Verdaccio, etc.) require `.npmrc` configuration with registry URL and auth token. This is a deployment concern — mount `.npmrc` to `/home/node/.npmrc` via k8s Secret. SkillLoader does not handle registry authentication.
+
 ### Go structs
 
 ```go
@@ -97,12 +110,12 @@ type SkillsFileConfig struct {
 type SkillConfig struct {
     Type    string        `yaml:"type"`    // "local" | "npx"
     Path    string        `yaml:"path"`    // local: disk path
-    Command string        `yaml:"command"` // npx: full npx command
+    Package string        `yaml:"package"` // npx: npm package name (e.g. "@someone/skill-code-review")
+    Version string        `yaml:"version"` // npx: version spec (default "latest")
     Timeout time.Duration `yaml:"timeout"` // npx: execution timeout (default 30s)
 }
 
 type SkillCacheConfig struct {
-    Dir string        `yaml:"dir"`
     TTL time.Duration `yaml:"ttl"`
 }
 ```
@@ -124,16 +137,16 @@ type SkillFiles struct {
 type Loader struct {
     mu       sync.RWMutex
     config   SkillsFileConfig
-    cache    map[string]*cacheEntry
-    bakedIn  map[string]*SkillFiles
+    cache    map[string]*cacheEntry   // keyed by package name, not skill name
+    bakedIn  map[string]*SkillFiles   // keyed by skill name
     group    singleflight.Group
     watcher  *fsnotify.Watcher
 }
 
 type cacheEntry struct {
-    status    cacheStatus  // ok | failed | invalid
-    files     *SkillFiles  // populated when status=ok
-    reason    string       // populated when status=failed|invalid
+    status    cacheStatus     // ok | failed | invalid
+    skills    []*SkillFiles   // populated when status=ok (one package -> N skills)
+    reason    string          // populated when status=failed|invalid
     fetchedAt time.Time
 }
 
@@ -145,18 +158,34 @@ const (
 )
 ```
 
+### Startup warmup
+
+On `NewLoader()`, after loading config and baked-in skills, prefetch all `type: npx` packages:
+
+```
+for each unique package in config:
+  singleflight execute npx -> validate -> cache
+  success -> log info
+  failure -> log warning, will fallback to baked-in at job time
+```
+
+This ensures the first job has no fetch delay and surfaces broken npx skills at startup.
+
 ### LoadAll flow (called at job submit time)
 
 ```
+RLock -> snapshot config -> RUnlock
+(npx fetch happens outside lock to avoid blocking reload)
+
 for each skill in config:
   if type == local:
     -> return bakedIn (loaded and validated at startup)
 
   if type == npx:
-    -> cache exists and not expired?
-      status=ok      -> use cache
-      status=failed  -> skip, no retry, no log
-      status=invalid -> skip, no retry, no log
+    -> cache entry for this package exists and not expired?
+      status=ok      -> use cached skills
+      status=failed  -> skip all skills from this package, no retry, no log
+      status=invalid -> skip all skills from this package, no retry, no log
     -> cache miss or expired? -> singleflight execute npx
       -> npx success + validation pass  -> cache(ok)
       -> npx success + validation fail  -> cache(invalid), log warning once
@@ -167,11 +196,13 @@ for each skill in config:
 ### NPX execution
 
 ```go
-func (l *Loader) fetchNpx(ctx context.Context, name string, cfg SkillConfig) (*SkillFiles, error) {
+func (l *Loader) fetchNpx(ctx context.Context, pkg, version string) ([]*SkillFiles, error) {
     tmpDir, _ := os.MkdirTemp("", "agentdock-skill-*")
     defer os.RemoveAll(tmpDir)
 
-    cmd := exec.CommandContext(ctx, "sh", "-c", cfg.Command)
+    // No sh -c — only npx allowed
+    arg := pkg + "@" + version
+    cmd := exec.CommandContext(ctx, "npx", arg)
     cmd.Dir = tmpDir
     cmd.Env = append(os.Environ(), "NPM_CONFIG_PREFIX="+tmpDir)
     cmd.Run()
@@ -182,9 +213,8 @@ func (l *Loader) fetchNpx(ctx context.Context, name string, cfg SkillConfig) (*S
 ```
 
 - Executed in isolated temp dir to avoid polluting global node_modules
-- Package name parsed from command: strip `npx ` prefix, strip version suffix (`@latest`, `@^2.0.0`), handle scoped packages (`@scope/name`)
-  - `npx @someone/skill-code-review@latest` -> `@someone/skill-code-review`
-  - `npx skill-simple@^1.0.0` -> `skill-simple`
+- Only `npx` is executed — no `sh -c`, preventing arbitrary shell injection
+- Package and version are separate config fields, no parsing needed
 - Timeout controlled by context (default 30s, configurable per skill)
 
 ### NPM package convention
@@ -199,13 +229,18 @@ node_modules/@someone/skill-code-review/
         example1.md
       references/
         api-spec.yaml
+    another-skill/
+      SKILL.md
 ```
+
+One package can contain multiple skills. Each subdirectory under `skills/` with a `SKILL.md` is treated as a skill. The directory name is the skill name.
 
 ### Validation (at fetch time, not job submit)
 
 Applied immediately after npx fetch succeeds, before writing to cache:
 
 - **Size limit**: single skill directory total < 1MB
+- **Job total limit**: all skills combined < 5MB per job (checked at LoadAll)
 - **File type whitelist**: `.md`, `.txt`, `.yaml`, `.yml`, `.json`, `.example`, `.tmpl`
 - **Path safety**: reject `..`, symlinks, absolute paths (prevent path traversal)
 
@@ -224,7 +259,7 @@ type SkillPayload struct {
 }
 ```
 
-Serialized example:
+Serialized example (JSON, `[]byte` fields auto base64-encoded):
 ```json
 {
   "code-review": {
@@ -264,13 +299,41 @@ on CREATE/WRITE event for skills.yaml:
   -> debounce 500ms
   -> read new skills.yaml
   -> diff against current config:
-    - new skill added     -> add to config, next LoadAll will fetch
-    - skill removed       -> remove from config, clear cache
-    - skill command changed -> clear that skill's cache, force re-fetch
+    - new skill added       -> add to config, next LoadAll will fetch
+    - skill removed         -> remove from config, clear cache for its package
+    - skill package changed -> clear that package's cache, force re-fetch
   -> reload local skills from disk
   -> RWMutex swap config
   -> on parse failure -> keep old config, log error
 ```
+
+## Observability
+
+Structured logging per LoadAll call and per skill:
+
+```go
+// Per-skill log (emitted once per fetch, not per job)
+slog.Warn("skill.fetch_failed",
+    "package", pkg,
+    "error", err,
+    "fallback", "cache|baked-in|skipped",
+)
+
+// Per-job summary (emitted every LoadAll call)
+slog.Info("skill.loaded",
+    "skill", name,
+    "source", "npx|cache|baked-in|skipped",
+    "package", pkg,
+    "duration_ms", elapsed,
+)
+```
+
+- **source=npx**: fresh fetch this call (cache was expired)
+- **source=cache**: served from in-memory cache (cache was valid)
+- **source=baked-in**: npx failed, fell back to baked-in version
+- **source=skipped**: no version available, skill omitted from job
+
+Per-job summary gives visibility into which skills are active and where they came from without log spam.
 
 ## Data flow
 
@@ -279,17 +342,21 @@ APP STARTUP
   1. Read config.yaml -> get skills_config path
   2. Read skills.yaml -> create SkillLoader
   3. Load local skills -> bakedIn map (validated once)
-  4. Start fsnotify watcher -> watch skills.yaml
+  4. Warmup: prefetch all npx packages -> populate cache
+  5. Start fsnotify watcher -> watch skills.yaml
                               |
 SLACK TRIGGER -> Workflow submit job
   1. Call loader.LoadAll()
-  2. For each skill:
+  2. RLock -> snapshot config -> RUnlock
+  3. For each skill (outside lock):
      local -> return bakedIn
      npx   -> cache valid? use it
               cache miss  -> singleflight npx -> validate -> cache
               failed      -> fallback chain -> skip
-  3. Assemble Job.Skills (map[string]*SkillPayload)
-  4. Submit to queue
+  4. Check job total size < 5MB
+  5. Assemble Job.Skills (map[string]*SkillPayload)
+  6. Log per-skill summary
+  7. Submit to queue
                               |
 WORKER EXECUTION
   1. Clone repo
@@ -310,7 +377,7 @@ CONFIG CHANGE (k8s ConfigMap update)
 
 | File | Action | Description |
 |------|--------|-------------|
-| `internal/skill/loader.go` | New | SkillLoader core: LoadAll, cache, fallback |
+| `internal/skill/loader.go` | New | SkillLoader core: LoadAll, cache, fallback, warmup |
 | `internal/skill/npx.go` | New | npx execution + node_modules reading |
 | `internal/skill/validate.go` | New | File validation (size, whitelist, path safety) |
 | `internal/skill/watcher.go` | New | fsnotify hot reload with debounce |
