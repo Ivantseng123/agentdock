@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.1](https://github.com/Ivantseng123/agentdock/compare/v0.2.0...v0.2.1) (2026-04-14)
+
+
+### Features
+
+* add retry handler for button interaction ([0cb813d](https://github.com/Ivantseng123/agentdock/commit/0cb813d30973f3174b13e0e4718255c69b707bbc))
+* include hostname in worker ID for visibility ([5e413d2](https://github.com/Ivantseng123/agentdock/commit/5e413d239ff22e506ea30cd6f7b921341834601d))
+* retry on failure with Slack button ([2905fd5](https://github.com/Ivantseng123/agentdock/commit/2905fd5558a369f5e1eb6b0db84fedfc39f62601))
+* route retry_job button action to RetryHandler ([5984625](https://github.com/Ivantseng123/agentdock/commit/5984625d80e0467514a3815b4ad2d71990b26919))
+* unified failure handling with retry button in result listener ([233eef2](https://github.com/Ivantseng123/agentdock/commit/233eef241bfbd3dbf07e0e6c39ef2fe889b1f044))
+
 ## [0.2.0](https://github.com/Ivantseng123/react2issue/compare/v0.1.1...v0.2.0) (2026-04-12)
 
 
