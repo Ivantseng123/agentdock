@@ -239,7 +239,7 @@ Claude 支援 `--output-format stream-json`，啟用後可即時追蹤：
 
 ### Agent Skills
 
-Skills 隨 Job 發送給 worker（`Job.Skills` 欄位），worker 在 clone 的 repo 裡寫入 skill 檔案，agent CLI 啟動時自動載入。不需要手動安裝。
+Skills 隨 Job 發送給 worker（`Job.Skills` 欄位），worker 在 clone 的 repo 裡寫入 skill 檔案（支援完整目錄樹：SKILL.md + examples + references），agent CLI 啟動時自動載入。不需要手動安裝。
 
 ```
 agents/
@@ -248,6 +248,51 @@ agents/
       SKILL.md           # triage skill — agent 分析 codebase 回傳結構化結果
   setup.sh               # local 開發：建 symlink（run.sh 自動呼叫）
 ```
+
+#### 動態 Skill 加載（NPX）
+
+除了 baked-in skills，可透過獨立的 `skills.yaml` 設定從 npm registry 動態加載 skills：
+
+```yaml
+# skills.yaml（透過 k8s ConfigMap 掛載）
+skills:
+  triage-issue:
+    type: local
+    path: agents/skills/triage-issue
+
+  code-review:
+    type: npx
+    package: "@team/skill-code-review"
+    version: "latest"
+
+cache:
+  ttl: 5m    # NPX skill 的 cache 有效期
+```
+
+在 `config.yaml` 中指定路徑：
+```yaml
+skills_config: "/etc/agentdock/skills.yaml"
+```
+
+**特性：**
+- **TTL cache + singleflight**：避免重複 fetch，cache 過期才重新拉取
+- **兩層 fallback**：npx 失敗 → 用 cache 舊版 → 用 baked-in → 跳過
+- **Negative cache**：失敗的 skill 在 TTL 內不重試
+- **啟動預熱**：App 啟動時預先 fetch 所有 npx skills
+- **Hot reload**：fsnotify 監控 skills.yaml，ConfigMap 更新後自動 reload
+- **檔案驗證**：單一 skill < 1MB，Job 總量 < 5MB，副檔名白名單，path traversal 防護
+
+**NPM package convention：**
+```
+node_modules/@team/skill-code-review/
+  skills/
+    code-review/
+      SKILL.md           # 必要
+      examples/           # 選用
+      references/         # 選用
+```
+
+私有 registry 需另行配置 `.npmrc`（透過 k8s Secret 掛載到 `/home/node/.npmrc`）。
 
 ## Agent 行為
 
@@ -479,6 +524,12 @@ internal/
     pool.go                  # Worker pool with command listener + status reporting
     executor.go              # Single job execution (clone, skill, agent, parse)
     status.go                # statusAccumulator (stream event aggregation)
+  skill/
+    config.go                # skills.yaml parsing (SkillsFileConfig, SkillConfig)
+    validate.go              # File validation (size, whitelist, path safety)
+    npx.go                   # NPM package install + skill directory scanning
+    loader.go                # SkillLoader: cache, singleflight, fallback, warmup
+    watcher.go               # fsnotify hot reload for skills.yaml
   mantis/                    # Mantis bug tracker URL enrichment
 agents/
   skills/
@@ -492,7 +543,7 @@ deploy/
 ## 測試
 
 ```bash
-go test ./...   # 114 tests (Redis tests auto-skip if no Redis)
+go test ./...   # 150 tests (Redis tests auto-skip if no Redis)
 ```
 
 ## HTTP Endpoints
