@@ -3,14 +3,18 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-const attachmentTTL = 30 * time.Minute
+const (
+	attachmentTTL     = 30 * time.Minute
+	maxFileSize int64 = 10 * 1024 * 1024 // 10 MB
+	maxJobSize  int64 = 30 * 1024 * 1024 // 30 MB
+)
 
-// RedisAttachmentStore implements AttachmentStore using Redis SET/GET with polling.
 type RedisAttachmentStore struct {
 	client *redis.Client
 }
@@ -23,17 +27,37 @@ func (s *RedisAttachmentStore) attachmentKey(jobID string) string {
 	return keyPrefix + "jobs:attachments:" + jobID
 }
 
-func (s *RedisAttachmentStore) Prepare(ctx context.Context, jobID string, attachments []AttachmentMeta) error {
-	result := make([]AttachmentReady, len(attachments))
-	for i, a := range attachments {
-		result[i] = AttachmentReady{Filename: a.Filename, URL: ""}
+func (s *RedisAttachmentStore) Prepare(ctx context.Context, jobID string, payloads []AttachmentPayload) error {
+	var result []AttachmentReady
+	var totalSize int64
+
+	for _, p := range payloads {
+		if p.Size > maxFileSize {
+			slog.Warn("附件超過單檔上限，略過",
+				"job_id", jobID, "filename", p.Filename, "size", p.Size, "limit", maxFileSize)
+			continue
+		}
+		if totalSize+p.Size > maxJobSize {
+			slog.Warn("附件超過工作總量上限，略過剩餘檔案",
+				"job_id", jobID, "filename", p.Filename, "total_so_far", totalSize, "limit", maxJobSize)
+			break
+		}
+		totalSize += p.Size
+		result = append(result, AttachmentReady{
+			Filename: p.Filename,
+			Data:     p.Data,
+			MimeType: p.MimeType,
+		})
+	}
+
+	if result == nil {
+		result = []AttachmentReady{}
 	}
 
 	data, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-
 	return s.client.Set(ctx, s.attachmentKey(jobID), data, attachmentTTL).Err()
 }
 
@@ -49,12 +73,9 @@ func (s *RedisAttachmentStore) Resolve(ctx context.Context, jobID string) ([]Att
 			}
 			return result, nil
 		}
-
 		if err != redis.Nil {
 			return nil, err
 		}
-
-		// Key not found — wait 500ms and retry, respecting context cancellation.
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
