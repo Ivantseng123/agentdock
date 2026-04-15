@@ -31,7 +31,7 @@ var appCmd = &cobra.Command{
 	Short:        "Run the main Slack bot",
 	SilenceUsage: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return loadAndStash(cmd, appConfigPath)
+		return loadAndStash(cmd, appConfigPath, ScopeApp)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runApp(cfgFromCtx(cmd.Context()))

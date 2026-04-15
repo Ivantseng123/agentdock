@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,15 +136,16 @@ func deltaFromCtx(ctx context.Context) DeltaInfo {
 	return ctx.Value(ctxKeyDelta).(DeltaInfo)
 }
 
-// loadAndStash resolves the config path, builds the koanf layer chain, and
-// stashes the resulting *config.Config, kSave, and DeltaInfo into
-// cmd.Context. Intended to be wired as PersistentPreRunE on subcommands that
-// need the loaded config.
+// loadAndStash resolves the config path, builds the koanf layer chain, runs
+// scope-aware preflight (prompting for any missing values), persists any
+// delta back to disk, and stashes the resulting *config.Config, kSave, and
+// DeltaInfo into cmd.Context. Intended to be wired as PersistentPreRunE on
+// subcommands that need the loaded config.
 //
 // If the caller explicitly passed a config path that doesn't exist, it
 // returns a guided error pointing at `agentdock init`. Empty path falls back
 // to the default location silently (fine for first-run).
-func loadAndStash(cmd *cobra.Command, configPath string) error {
+func loadAndStash(cmd *cobra.Command, configPath string, scope PreflightScope) error {
 	resolved, err := resolveConfigPath(configPath)
 	if err != nil {
 		return err
@@ -157,12 +160,63 @@ func loadAndStash(cmd *cobra.Command, configPath string) error {
 	if err := validate(cfg); err != nil {
 		return err
 	}
+	prompted, err := runPreflight(cfg, scope)
+	if err != nil {
+		return fmt.Errorf("preflight: %w", err)
+	}
+	if _, err := saveConfig(kSave, resolved, prompted, delta); err != nil {
+		slog.Warn("config save failed", "path", resolved, "error", err)
+	}
+
 	ctx := cmd.Context()
 	ctx = context.WithValue(ctx, ctxKeyConfig, cfg)
 	ctx = context.WithValue(ctx, ctxKeyKSave, kSave)
 	ctx = context.WithValue(ctx, ctxKeyDelta, delta)
 	cmd.SetContext(ctx)
 	return nil
+}
+
+// saveConfig writes kSave to path if any delta condition is met (D13):
+//
+//	A. preflight prompted any value (prompted non-empty), or
+//	B. flag override happened (delta.HadFlagOverride), or
+//	C. config file didn't exist (!delta.FileExisted).
+//
+// Skips the write when the marshaled output is byte-identical to the
+// existing file. Returns (written, error). Save failures are non-fatal; the
+// caller should warn-log and continue.
+func saveConfig(kSave *koanf.Koanf, path string, prompted map[string]any, delta DeltaInfo) (bool, error) {
+	shouldWrite := len(prompted) > 0 || delta.HadFlagOverride || !delta.FileExisted
+	if !shouldWrite {
+		return false, nil
+	}
+
+	for k, v := range prompted {
+		if err := kSave.Set(k, v); err != nil {
+			return false, fmt.Errorf("kSave.Set(%s): %w", k, err)
+		}
+	}
+
+	parser, err := pickParser(path)
+	if err != nil {
+		return false, err
+	}
+	data, err := kSave.Marshal(parser)
+	if err != nil {
+		return false, fmt.Errorf("marshal: %w", err)
+	}
+
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return false, nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return false, fmt.Errorf("mkdir: %w", err)
+	}
+	if err := atomicWrite(path, data, 0600); err != nil {
+		return false, fmt.Errorf("write: %w", err)
+	}
+	return true, nil
 }
 
 // resolveConfigPath expands ~/ and returns an absolute path. Empty input

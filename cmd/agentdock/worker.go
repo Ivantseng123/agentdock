@@ -24,7 +24,7 @@ var workerCmd = &cobra.Command{
 	Short:        "Run a worker process (Redis mode)",
 	SilenceUsage: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return loadAndStash(cmd, workerConfigPath)
+		return loadAndStash(cmd, workerConfigPath, ScopeWorker)
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runWorker(cfgFromCtx(cmd.Context()))
@@ -36,12 +36,8 @@ func init() {
 }
 
 func runWorker(cfg *config.Config) error {
-	// Preflight: validate dependencies, prompt if interactive.
-	if _, err := runPreflight(cfg, ScopeWorker); err != nil {
-		return fmt.Errorf("preflight: %w", err)
-	}
-
-	// slog initialized AFTER preflight to keep interactive output clean.
+	// Preflight runs in PersistentPreRunE. slog initialized AFTER preflight
+	// to keep interactive output clean.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{

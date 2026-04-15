@@ -179,6 +179,103 @@ func TestResolveConfigPath_DefaultsToHome(t *testing.T) {
 	}
 }
 
+func TestSaveConfig_NoDelta_NoWrite(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{Use: "test"}
+	addPersistentFlags(cmd)
+	_, _, kSave, delta, _ := buildKoanf(cmd, path)
+
+	written, err := saveConfig(kSave, path, map[string]any{}, delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written {
+		t.Error("saveConfig should skip when no delta")
+	}
+}
+
+func TestSaveConfig_FlagOverride_Writes(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{Use: "test"}
+	addPersistentFlags(cmd)
+	if err := cmd.ParseFlags([]string{"--workers=5"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, kSave, delta, _ := buildKoanf(cmd, path)
+
+	written, err := saveConfig(kSave, path, map[string]any{}, delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !written {
+		t.Error("saveConfig should write when flag override present")
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "count: 5") {
+		t.Errorf("file should contain count: 5, got: %s", data)
+	}
+}
+
+func TestSaveConfig_PreflightPrompt_Writes(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("workers:\n  count: 3\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{Use: "test"}
+	addPersistentFlags(cmd)
+	_, _, kSave, delta, _ := buildKoanf(cmd, path)
+
+	prompted := map[string]any{"redis.addr": "10.0.0.1:6379"}
+	written, err := saveConfig(kSave, path, prompted, delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !written {
+		t.Error("saveConfig should write when preflight prompted")
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "10.0.0.1:6379") {
+		t.Errorf("file should contain 10.0.0.1:6379, got: %s", data)
+	}
+}
+
+func TestSaveConfig_Chmod0600(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	cmd := &cobra.Command{Use: "test"}
+	addPersistentFlags(cmd)
+	_, _, kSave, delta, _ := buildKoanf(cmd, path)
+
+	delta.FileExisted = false
+	if _, err := saveConfig(kSave, path, map[string]any{}, delta); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("mode = %o, want 0600", info.Mode().Perm())
+	}
+}
+
 func TestResolveConfigPath_ExpandsTilde(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
