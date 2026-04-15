@@ -266,6 +266,47 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
+// EnvOverrideMap returns a koanf-friendly map[string]any of values currently
+// set in env vars. Maps each known env var to its koanf path. Unset env vars
+// are absent from the result. Used by cmd/agentdock to build the env layer in
+// the koanf provider chain (D1: env is its own layer, not persisted).
+func EnvOverrideMap() map[string]any {
+	out := map[string]any{}
+	if v := os.Getenv("SLACK_BOT_TOKEN"); v != "" {
+		out["slack.bot_token"] = v
+	}
+	if v := os.Getenv("SLACK_APP_TOKEN"); v != "" {
+		out["slack.app_token"] = v
+	}
+	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
+		out["github.token"] = v
+	}
+	if v := os.Getenv("MANTIS_API_TOKEN"); v != "" {
+		out["mantis.api_token"] = v
+	}
+	if v := os.Getenv("REDIS_ADDR"); v != "" {
+		out["redis.addr"] = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		out["redis.password"] = v
+	}
+	if v := os.Getenv("ACTIVE_AGENT"); v != "" {
+		out["active_agent"] = v
+	}
+	if v := os.Getenv("PROVIDERS"); v != "" {
+		var providers []string
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				providers = append(providers, p)
+			}
+		}
+		if len(providers) > 0 {
+			out["providers"] = providers
+		}
+	}
+	return out
+}
+
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("SLACK_BOT_TOKEN"); v != "" {
 		cfg.Slack.BotToken = v

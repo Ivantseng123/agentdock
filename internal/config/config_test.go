@@ -416,3 +416,52 @@ agents:
 		t.Errorf("default status_interval = %v, want 5s", cfg.Queue.StatusInterval)
 	}
 }
+
+func TestEnvOverrideMap(t *testing.T) {
+	t.Setenv("REDIS_ADDR", "10.0.0.1:6379")
+	t.Setenv("GITHUB_TOKEN", "ghp_test")
+	t.Setenv("PROVIDERS", "claude,codex")
+
+	m := EnvOverrideMap()
+
+	if got := m["redis.addr"]; got != "10.0.0.1:6379" {
+		t.Errorf("redis.addr = %v, want 10.0.0.1:6379", got)
+	}
+	if got := m["github.token"]; got != "ghp_test" {
+		t.Errorf("github.token = %v, want ghp_test", got)
+	}
+	providers, ok := m["providers"].([]string)
+	if !ok || len(providers) != 2 || providers[0] != "claude" || providers[1] != "codex" {
+		t.Errorf("providers = %v, want [claude codex]", m["providers"])
+	}
+}
+
+func TestEnvOverrideMap_UnsetAbsent(t *testing.T) {
+	t.Setenv("REDIS_ADDR", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("PROVIDERS", "")
+	t.Setenv("SLACK_BOT_TOKEN", "")
+	t.Setenv("SLACK_APP_TOKEN", "")
+	t.Setenv("MANTIS_API_TOKEN", "")
+	t.Setenv("REDIS_PASSWORD", "")
+	t.Setenv("ACTIVE_AGENT", "")
+
+	m := EnvOverrideMap()
+	for _, key := range []string{"redis.addr", "github.token", "providers", "slack.bot_token"} {
+		if _, ok := m[key]; ok {
+			t.Errorf("%s should be absent when env empty, got %v", key, m[key])
+		}
+	}
+}
+
+func TestEnvOverrideMap_ProvidersFiltersEmpty(t *testing.T) {
+	t.Setenv("PROVIDERS", "claude,,codex,")
+	m := EnvOverrideMap()
+	providers, ok := m["providers"].([]string)
+	if !ok {
+		t.Fatalf("providers missing or wrong type: %v", m["providers"])
+	}
+	if len(providers) != 2 || providers[0] != "claude" || providers[1] != "codex" {
+		t.Errorf("providers should filter empty tokens, got %v", providers)
+	}
+}
