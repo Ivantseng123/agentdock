@@ -93,17 +93,15 @@ Redis architecture diagram, external worker dependencies, Docker/K8s deployment 
 
 | Method | Example | Description |
 |--------|---------|-------------|
-| `@bot` mention | `@bot` in thread | Reads all preceding thread messages |
-| `/triage` | `/triage` | Interactive repo selection |
-| `/triage` + repo | `/triage owner/repo` | Skip repo selection |
-| `/triage` + repo + branch | `/triage owner/repo@main` | Start analysis directly |
+| `@bot` mention | `@bot` in thread | Reads all preceding thread messages (primary trigger) |
+| `/triage` | `/triage` | Shows usage hint (Slack limitation: cannot detect thread context) |
 
 Bot only operates in **threads**. Triggering directly in a channel prompts "please use in a thread".
 
 ## Testing
 
 ```bash
-go test ./...   # 150 tests (Redis tests auto-skip if no Redis)
+go test ./...   # 215 tests (Redis tests auto-skip if no Redis)
 ```
 
 ## License
