@@ -45,7 +45,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		var err error
 		attachments, err = deps.attachments.Resolve(ctx, job.ID)
 		if err != nil {
-			return failedResult(job, startedAt, fmt.Errorf("attachments failed: %w", err))
+			return failedResult(job, startedAt, fmt.Errorf("attachments failed: %w", err), "")
 		}
 	}
 
@@ -53,7 +53,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	logger.Info("準備 repo 中", "phase", "處理中", "branch", job.Branch)
 	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch)
 	if err != nil {
-		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err))
+		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err), "")
 	}
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath)
 
@@ -76,7 +76,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		logger.Info("掛載 skill 中", "phase", "處理中", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
 		for _, sd := range deps.skillDirs {
 			if err := mountSkills(repoPath, job.Skills, sd); err != nil {
-				return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err))
+				return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err), repoPath)
 			}
 			defer cleanupSkills(repoPath, job.Skills, sd)
 		}
@@ -89,7 +89,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	logger.Info("執行 agent 中", "phase", "處理中")
 	output, err := deps.runner.Run(ctx, repoPath, prompt, opts)
 	if err != nil {
-		return failedResult(job, startedAt, err)
+		return failedResult(job, startedAt, err, repoPath)
 	}
 	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
 
@@ -101,7 +101,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 			truncated = truncated[:2000] + "…(truncated)"
 		}
 		logger.Warn("解析失敗，輸出原始內容", "phase", "失敗", "output", truncated)
-		return failedResult(job, startedAt, fmt.Errorf("parse failed: %w", err))
+		return failedResult(job, startedAt, fmt.Errorf("parse failed: %w", err), repoPath)
 	}
 	logger.Info("解析成功", "phase", "完成", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
 
@@ -115,6 +115,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		FilesFound: parsed.FilesFound,
 		Questions:  parsed.Questions,
 		RawOutput:  output,
+		RepoPath:   repoPath,
 		StartedAt:  startedAt,
 		FinishedAt: time.Now(),
 	}
@@ -150,11 +151,12 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]bot.At
 	return infos, nil
 }
 
-func failedResult(job *queue.Job, startedAt time.Time, err error) *queue.JobResult {
+func failedResult(job *queue.Job, startedAt time.Time, err error, repoPath string) *queue.JobResult {
 	return &queue.JobResult{
 		JobID:      job.ID,
 		Status:     "failed",
 		Error:      err.Error(),
+		RepoPath:   repoPath,
 		StartedAt:  startedAt,
 		FinishedAt: time.Now(),
 	}

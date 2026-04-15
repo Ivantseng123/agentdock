@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"time"
 
 	"agentdock/internal/bot"
@@ -182,11 +181,10 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	}
 	p.registry.Remove(job.ID)
 
-	// Post-kill cleanup.
-	if result.Status == "failed" {
-		if repoPath, err := p.cfg.RepoCache.Prepare(job.CloneURL, job.Branch); err == nil {
-			exec.Command("git", "-C", repoPath, "checkout", ".").Run()
-			exec.Command("git", "-C", repoPath, "clean", "-fd").Run()
+	// Clean up this job's worktree.
+	if result.RepoPath != "" {
+		if err := p.cfg.RepoCache.RemoveWorktree(result.RepoPath); err != nil {
+			logger.Warn("Worktree 清理失敗", "phase", "失敗", "path", result.RepoPath, "error", err)
 		}
 	}
 
@@ -232,6 +230,10 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 				p.cfg.Queue.Unregister(unregCtx, wID)
 			}
 			cancel()
+			// Clean up all cached repos and worktrees.
+			if err := p.cfg.RepoCache.CleanAll(); err != nil {
+				p.cfg.Logger.Warn("關機時 repo 清理失敗", "phase", "失敗", "error", err)
+			}
 			return
 		}
 	}
