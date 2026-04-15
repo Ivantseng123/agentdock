@@ -48,11 +48,43 @@ func TestBuildPrompt_WithAttachments(t *testing.T) {
 		Prompt: config.PromptConfig{Language: "en"},
 	}
 	result := BuildPrompt(input)
-	if !strings.Contains(result, "screenshot.png") {
-		t.Error("missing image attachment")
+	// BuildPrompt no longer renders attachments — worker handles it.
+	if strings.Contains(result, "## Attachments") {
+		t.Error("BuildPrompt should no longer render attachment section")
 	}
-	if !strings.Contains(result, "error.log") {
-		t.Error("missing text attachment")
+}
+
+func TestAppendAttachmentSection(t *testing.T) {
+	base := "some prompt text"
+	attachments := []AttachmentInfo{
+		{Path: "/tmp/triage-attach-j1/screenshot.png", Name: "screenshot.png", Type: "image"},
+		{Path: "/tmp/triage-attach-j1/error.log", Name: "error.log", Type: "text"},
+		{Path: "/tmp/triage-attach-j1/report.pdf", Name: "report.pdf", Type: "document"},
+	}
+	result := AppendAttachmentSection(base, attachments)
+
+	if !strings.Contains(result, "some prompt text") {
+		t.Error("missing base prompt")
+	}
+	if !strings.Contains(result, "## Attachments") {
+		t.Error("missing attachments header")
+	}
+	if !strings.Contains(result, "screenshot.png (image") {
+		t.Error("missing image hint")
+	}
+	if !strings.Contains(result, "error.log (text") {
+		t.Error("missing text hint")
+	}
+	if !strings.Contains(result, "report.pdf (document)") {
+		t.Error("missing document hint")
+	}
+}
+
+func TestAppendAttachmentSection_Empty(t *testing.T) {
+	base := "prompt"
+	result := AppendAttachmentSection(base, nil)
+	if result != "prompt" {
+		t.Errorf("expected unchanged prompt for nil attachments, got %q", result)
 	}
 }
 

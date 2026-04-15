@@ -400,8 +400,9 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	})
 	pt.Logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
 
-	// 5. Build attachment metadata for queue.
+	// 5. Build attachment metadata and payloads for queue.
 	var attachMeta []queue.AttachmentMeta
+	var attachPayloads []queue.AttachmentPayload
 	for _, d := range downloads {
 		if d.Failed {
 			continue
@@ -409,6 +410,17 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		attachMeta = append(attachMeta, queue.AttachmentMeta{
 			Filename: d.Name,
 			MimeType: d.Type,
+		})
+		data, err := os.ReadFile(d.Path)
+		if err != nil {
+			pt.Logger.Warn("Failed to read attachment for queue", "name", d.Name, "error", err)
+			continue
+		}
+		attachPayloads = append(attachPayloads, queue.AttachmentPayload{
+			Filename: d.Name,
+			MimeType: d.Type,
+			Data:     data,
+			Size:     int64(len(data)),
 		})
 	}
 
@@ -440,8 +452,8 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	}
 
 	// Signal attachment readiness so workers can proceed.
-	if len(attachMeta) > 0 {
-		w.attachments.Prepare(ctx, job.ID, attachMeta)
+	if len(attachPayloads) > 0 {
+		w.attachments.Prepare(ctx, job.ID, attachPayloads)
 	}
 
 	pos, _ := w.queue.QueuePosition(job.ID)

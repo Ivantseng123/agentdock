@@ -55,24 +55,6 @@ func BuildPrompt(input PromptInput) string {
 	}
 	sb.WriteString("\n")
 
-	// Attachments
-	if len(input.Attachments) > 0 {
-		sb.WriteString("## Attachments\n\n")
-		for _, att := range input.Attachments {
-			hint := ""
-			switch att.Type {
-			case "image":
-				hint = " (image — use your file reading tools to view)"
-			case "text":
-				hint = " (text — read directly)"
-			case "document":
-				hint = " (document)"
-			}
-			sb.WriteString(fmt.Sprintf("- %s%s\n", att.Path, hint))
-		}
-		sb.WriteString("\n")
-	}
-
 	// Language + extra rules
 	if input.Prompt.Language != "" {
 		sb.WriteString(fmt.Sprintf("Response language: %s\n", input.Prompt.Language))
@@ -84,5 +66,29 @@ func BuildPrompt(input PromptInput) string {
 		}
 	}
 
+	return sb.String()
+}
+
+// AppendAttachmentSection appends an attachment list to a prompt.
+// Called by the worker after writing files to its local temp dir.
+func AppendAttachmentSection(prompt string, attachments []AttachmentInfo) string {
+	if len(attachments) == 0 {
+		return prompt
+	}
+	var sb strings.Builder
+	sb.WriteString(prompt)
+	sb.WriteString("\n## Attachments\n\n")
+	for _, att := range attachments {
+		hint := ""
+		switch att.Type {
+		case "image":
+			hint = " (image — use your file reading tools to view)"
+		case "text":
+			hint = " (text — read directly)"
+		case "document":
+			hint = " (document)"
+		}
+		sb.WriteString(fmt.Sprintf("- %s%s\n", att.Path, hint))
+	}
 	return sb.String()
 }
