@@ -11,6 +11,7 @@ import (
 	"agentdock/internal/bot"
 	"agentdock/internal/config"
 	ghclient "agentdock/internal/github"
+	"agentdock/internal/logging"
 	"agentdock/internal/queue"
 	"agentdock/internal/worker"
 
@@ -38,7 +39,7 @@ func init() {
 func runWorker(cfg *config.Config) error {
 	// Preflight runs in PersistentPreRunE. slog initialized AFTER preflight
 	// to keep interactive output clean.
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{
 		Addr:     cfg.Redis.Addr,
