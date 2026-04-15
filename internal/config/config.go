@@ -137,64 +137,6 @@ type LoggingConfig struct {
 	AgentOutputDir string `yaml:"agent_output_dir"`
 }
 
-type v1RawCheck struct {
-	Reactions    map[string]any `yaml:"reactions"`
-	Integrations map[string]any `yaml:"integrations"`
-}
-
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var raw v1RawCheck
-	if yaml.Unmarshal(data, &raw) == nil {
-		if raw.Reactions != nil || raw.Integrations != nil {
-			slog.Warn("v1 config detected — reactions, llm, diagnosis, and integrations sections are no longer used in v2. Note: integrations.mantis has moved to top-level mantis.")
-		}
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-
-	applyDefaults(&cfg)
-	applyEnvOverrides(&cfg)
-	return &cfg, nil
-}
-
-// LoadDefaults creates a Config with sensible defaults + env overrides, no YAML file needed.
-// Includes a default claude agent config so workers can run with just env vars.
-func LoadDefaults() (*Config, error) {
-	cfg := Config{
-		Agents: map[string]AgentConfig{
-			"claude": {
-				Command:  "claude",
-				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
-				SkillDir: ".claude/skills",
-				Stream:   true,
-			},
-			"codex": {
-				Command:  "codex",
-				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
-				SkillDir: ".codex/skills",
-				Stream:   true,
-			},
-			"opencode": {
-				Command:  "opencode",
-				Args:     []string{"--prompt", "{prompt}"},
-				SkillDir: ".opencode/skills",
-			},
-		},
-		Providers: []string{"claude"},
-	}
-	applyDefaults(&cfg)
-	applyEnvOverrides(&cfg)
-	return &cfg, nil
-}
-
 func applyDefaults(cfg *Config) {
 	// Workers.Count must be resolved before MaxConcurrent gets its own default,
 	// so that we can distinguish "user set max_concurrent" from "default applied".
@@ -325,29 +267,3 @@ func EnvOverrideMap() map[string]any {
 	return out
 }
 
-func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("SLACK_BOT_TOKEN"); v != "" {
-		cfg.Slack.BotToken = v
-	}
-	if v := os.Getenv("SLACK_APP_TOKEN"); v != "" {
-		cfg.Slack.AppToken = v
-	}
-	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
-		cfg.GitHub.Token = v
-	}
-	if v := os.Getenv("MANTIS_API_TOKEN"); v != "" {
-		cfg.Mantis.APIToken = v
-	}
-	if v := os.Getenv("REDIS_ADDR"); v != "" {
-		cfg.Redis.Addr = v
-	}
-	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
-		cfg.Redis.Password = v
-	}
-	if v := os.Getenv("ACTIVE_AGENT"); v != "" {
-		cfg.ActiveAgent = v
-	}
-	if v := os.Getenv("PROVIDERS"); v != "" {
-		cfg.Providers = strings.Split(v, ",")
-	}
-}
