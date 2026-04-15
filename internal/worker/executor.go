@@ -51,11 +51,13 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 
 	// Clone/fetch repo.
 	logger.Info("準備 repo 中", "phase", "處理中", "branch", job.Branch)
+	prepareStart := time.Now()
 	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch)
 	if err != nil {
 		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err), "")
 	}
-	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath)
+	prepareSeconds := time.Since(prepareStart).Seconds()
+	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath, "prepare_seconds", prepareSeconds)
 
 	// Write attachments into worktree — cleaned up together with RemoveWorktree.
 	prompt := job.Prompt
@@ -105,18 +107,19 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	logger.Info("解析成功", "phase", "完成", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
 
 	return &queue.JobResult{
-		JobID:      job.ID,
-		Status:     "completed",
-		Title:      parsed.Title,
-		Body:       parsed.Body,
-		Labels:     parsed.Labels,
-		Confidence: parsed.Confidence,
-		FilesFound: parsed.FilesFound,
-		Questions:  parsed.Questions,
-		RawOutput:  output,
-		RepoPath:   repoPath,
-		StartedAt:  startedAt,
-		FinishedAt: time.Now(),
+		JobID:          job.ID,
+		Status:         "completed",
+		Title:          parsed.Title,
+		Body:           parsed.Body,
+		Labels:         parsed.Labels,
+		Confidence:     parsed.Confidence,
+		FilesFound:     parsed.FilesFound,
+		Questions:      parsed.Questions,
+		RawOutput:      output,
+		RepoPath:       repoPath,
+		StartedAt:      startedAt,
+		FinishedAt:     time.Now(),
+		PrepareSeconds: prepareSeconds,
 	}
 }
 

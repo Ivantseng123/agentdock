@@ -169,6 +169,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	}
 
 	result := executeJob(jobCtx, job, deps, opts, logger)
+	status.setPrepareSeconds(result.PrepareSeconds)
 
 	// Send final status report (captures cost/tokens from result event).
 	status.alive = false

@@ -19,9 +19,10 @@ type statusAccumulator struct {
 	toolCalls    int
 	filesRead    int
 	outputBytes  int
-	costUSD      float64
-	inputTokens  int
-	outputTokens int
+	costUSD        float64
+	inputTokens    int
+	outputTokens   int
+	prepareSeconds float64
 }
 
 func (s *statusAccumulator) setPID(pid int, cmd string) {
@@ -54,6 +55,12 @@ func (s *statusAccumulator) recordEvent(event queue.StreamEvent) {
 	}
 }
 
+func (s *statusAccumulator) setPrepareSeconds(d float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prepareSeconds = d
+}
+
 func (s *statusAccumulator) toReport() queue.StatusReport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -68,8 +75,9 @@ func (s *statusAccumulator) toReport() queue.StatusReport {
 		ToolCalls:    s.toolCalls,
 		FilesRead:    s.filesRead,
 		OutputBytes:  s.outputBytes,
-		CostUSD:      s.costUSD,
-		InputTokens:  s.inputTokens,
-		OutputTokens: s.outputTokens,
+		CostUSD:        s.costUSD,
+		InputTokens:    s.inputTokens,
+		OutputTokens:   s.outputTokens,
+		PrepareSeconds: s.prepareSeconds,
 	}
 }

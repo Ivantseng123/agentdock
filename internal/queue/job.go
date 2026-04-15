@@ -64,7 +64,8 @@ type JobResult struct {
 	CostUSD      float64   `json:"cost_usd,omitempty"`
 	InputTokens  int       `json:"input_tokens,omitempty"`
 	OutputTokens int       `json:"output_tokens,omitempty"`
-	RepoPath     string    `json:"-"` // local only, not serialized over Redis
+	RepoPath       string    `json:"-"` // local only, not serialized over Redis
+	PrepareSeconds float64   `json:"-"` // local only, not serialized over Redis
 }
 
 type AttachmentReady struct {

@@ -52,8 +52,9 @@ type StatusReport struct {
 	FilesRead    int       `json:"files_read"`
 	OutputBytes  int       `json:"output_bytes"`
 	CostUSD      float64   `json:"cost_usd,omitempty"`
-	InputTokens  int       `json:"input_tokens,omitempty"`
-	OutputTokens int       `json:"output_tokens,omitempty"`
+	InputTokens    int       `json:"input_tokens,omitempty"`
+	OutputTokens   int       `json:"output_tokens,omitempty"`
+	PrepareSeconds float64   `json:"prepare_seconds,omitempty"`
 }
 
 type StatusBus interface {
