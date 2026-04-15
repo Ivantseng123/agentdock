@@ -1,5 +1,78 @@
 # Changelog
 
+## [0.3.0](https://github.com/Ivantseng123/agentdock/compare/v0.2.7...v0.3.0) (2026-04-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* binary renamed bot -> agentdock; subcommand required; default config path moved to ~/.config/agentdock/config.yaml; env priority inverted (YAML now wins over env). See docs/MIGRATION-v1.md.
+
+### Features
+
+* attachment transfer via Redis + worker cleanup ([15eba6d](https://github.com/Ivantseng123/agentdock/commit/15eba6d243838a931cde02dc8ba00244b77bc091))
+* clean up workflow attachment handling and add Prepare error handling ([d6c4d9a](https://github.com/Ivantseng123/agentdock/commit/d6c4d9afc58459a879c29c487ff25c92314d1e5f))
+* **cli:** add checkSlackToken helper for Slack auth.test validation ([2469928](https://github.com/Ivantseng123/agentdock/commit/246992827e61f70a14060535ba3df4b9bf44dcca))
+* **cli:** add init subcommand skeleton ([60c3946](https://github.com/Ivantseng123/agentdock/commit/60c39465e4dd9cd2c51789205c8f67ef58551895))
+* **cli:** add pflag enum types for queue-transport and log-level ([2ca6314](https://github.com/Ivantseng123/agentdock/commit/2ca6314446b95860f4af49a44fde095e4c389220))
+* **cli:** add validate(cfg) cross-field validation in PreRunE ([de05ce3](https://github.com/Ivantseng123/agentdock/commit/de05ce36b34796ad7f299fbd5c237e3a9cb876b0))
+* **cli:** delta-only save-back wired into PreRunE after preflight ([e83793d](https://github.com/Ivantseng123/agentdock/commit/e83793df56de8f15f83180880e1b608dc1bb1448))
+* **cli:** implement init -i interactive prompts (5 fields) ([14a3e81](https://github.com/Ivantseng123/agentdock/commit/14a3e813c5dd164fa87bbdfc687df0953c368d91))
+* **cli:** implement init non-interactive (YAML and JSON) ([8f44f23](https://github.com/Ivantseng123/agentdock/commit/8f44f236f61353559e4c23266a587139488f5651))
+* **cli:** implement koanf two-instance load with built-in agents merge ([effdd11](https://github.com/Ivantseng123/agentdock/commit/effdd118b2d50e74d4b79524c49eaef8e751677e))
+* **cli:** introduce cobra root + app subcommand wrapping main bot ([e0ad634](https://github.com/Ivantseng123/agentdock/commit/e0ad634b9f3dd4960584918210029f29d8d43e3b))
+* **cli:** register persistent and app-specific flags with flagToKey map ([aacd9b8](https://github.com/Ivantseng123/agentdock/commit/aacd9b8bfc26c8d50d145bf4ead191384be7d88c))
+* **cli:** replace config.Load with koanf-based PersistentPreRunE ([68a9572](https://github.com/Ivantseng123/agentdock/commit/68a95728f2b7e93cc3eac6031aad324b83edd288))
+* **cli:** scope-aware preflight (App / Worker) with Slack token checks ([b147b4f](https://github.com/Ivantseng123/agentdock/commit/b147b4f9fb0dbe27c436c33b2b6396607a05af3b))
+* **cli:** warn on unknown config keys (replaces v1 detection) ([abb1401](https://github.com/Ivantseng123/agentdock/commit/abb1401b41685e83d0da11eda231d49da42f9c9d))
+* **config:** add DefaultsMap derived from applyDefaults round-trip ([58e559b](https://github.com/Ivantseng123/agentdock/commit/58e559ba34b2c694335818ebe07df4160b83cccf))
+* **config:** add EnvOverrideMap helper for koanf env layer ([465afc6](https://github.com/Ivantseng123/agentdock/commit/465afc6fd70e5ac8877a3a24a3f1c47992d07884))
+* **config:** extract BuiltinAgents map for runtime fallback ([5b552d3](https://github.com/Ivantseng123/agentdock/commit/5b552d34f2a40b57ae1682ac9de0c8d4219721d4))
+* extract AppendAttachmentSection, remove from BuildPrompt ([bc909b4](https://github.com/Ivantseng123/agentdock/commit/bc909b4e7b15afd6ccddaf574aac3fa5b6345e6c))
+* **logging:** add component/phase constants, attribute keys, and ComponentLogger helper ([8c1ad16](https://github.com/Ivantseng123/agentdock/commit/8c1ad169b9fc0fe64063b4028bbcb40d99d95c1c))
+* **logging:** add StyledTextHandler with [Component][Phase] prefix rendering ([8cd0b2a](https://github.com/Ivantseng123/agentdock/commit/8cd0b2ad30667836b29f267018be30c7351242d3))
+* **logging:** final sweep — verify no remaining English messages or camelCase keys ([62099ce](https://github.com/Ivantseng123/agentdock/commit/62099ce3f581c9f191d242fef84155fe5941f21e))
+* **logging:** migrate cmd/agentdock to Chinese messages with component/phase ([5575337](https://github.com/Ivantseng123/agentdock/commit/557533728553998773e335a197ea5c6a50bd523b))
+* **logging:** migrate config to Chinese messages ([b163c56](https://github.com/Ivantseng123/agentdock/commit/b163c56d163029cb1100dad3be8d5526947bf2d2))
+* **logging:** migrate internal/bot to Chinese messages with component/phase injection ([80e0a0c](https://github.com/Ivantseng123/agentdock/commit/80e0a0c72891bfedd0b01e7e41f1e68d1b35711e))
+* **logging:** migrate internal/github to Chinese messages with component/phase injection ([a82c89f](https://github.com/Ivantseng123/agentdock/commit/a82c89f9b49ff12c7eca4267caa5dcfa522e0e85))
+* **logging:** migrate internal/skill to Chinese messages with component/phase injection ([12e67c3](https://github.com/Ivantseng123/agentdock/commit/12e67c3dfcf352ec842669525189fb3a65c65d66))
+* **logging:** migrate internal/slack to Chinese messages with component/phase injection ([b7c2139](https://github.com/Ivantseng123/agentdock/commit/b7c21393108c0cfd27564716eca6666c02183aaf))
+* **logging:** migrate internal/worker to Chinese messages with component/phase injection ([f4a2fbd](https://github.com/Ivantseng123/agentdock/commit/f4a2fbd63b7e921f110a7e5fc85e14939d60a90c))
+* **logging:** migrate Watchdog to Chinese messages with component/phase injection ([1d7634d](https://github.com/Ivantseng123/agentdock/commit/1d7634da695b224a02ed22c3a984511b65755fd1))
+* **logging:** wire StyledTextHandler as stderr handler in app and worker ([f0c233b](https://github.com/Ivantseng123/agentdock/commit/f0c233b6b5ccd006fc528e0971cf3b1adf7088dc))
+* redesign logging with Chinese messages and component/phase classification ([a20c31b](https://github.com/Ivantseng123/agentdock/commit/a20c31b592120cf912cb68a3734d168998813281))
+* store attachment bytes in Redis with size limits ([c34e2d8](https://github.com/Ivantseng123/agentdock/commit/c34e2d84578ecd3d7c41c1bed42905105e93251d))
+* switch RepoCache to bare clone with worktree support and cleanup methods ([10ce7a6](https://github.com/Ivantseng123/agentdock/commit/10ce7a6520c405eb42748aacf45fdcc701719ad5))
+* update AttachmentReady/AttachmentPayload data model for file transfer ([03a1f29](https://github.com/Ivantseng123/agentdock/commit/03a1f295e18fba414f35040b5ac22a828eeff7c0))
+* update in-memory attachment store for payload bytes ([19b0487](https://github.com/Ivantseng123/agentdock/commit/19b0487bd140ccdda396dcbdda07030481977fa1))
+* wire bare repo + worktree adapter and startup purge ([4e689e5](https://github.com/Ivantseng123/agentdock/commit/4e689e5bce15d354b62ac543e8835284609495cb))
+* worktree cleanup after job completion and on shutdown ([1a734a9](https://github.com/Ivantseng123/agentdock/commit/1a734a9f35e23dd704ee9896899fc8079f4d3ee3))
+* write attachment bytes to disk with filename dedup ([3e97573](https://github.com/Ivantseng123/agentdock/commit/3e975737ed9dc9a6df945eb48680fc9551a8eef4))
+
+
+### Bug Fixes
+
+* addWorktree use branch name directly for bare repos (not origin/ prefix) ([f3cab84](https://github.com/Ivantseng123/agentdock/commit/f3cab8485df91b6450d9332b86d62a331b766929))
+* **cli:** reject init -i when stdin is not a TTY ([9de0171](https://github.com/Ivantseng123/agentdock/commit/9de017148e1f6d5b849e894564d75a0db531f72f))
+* **cli:** remove stale .tmp before atomicWrite to preserve file mode ([507c31f](https://github.com/Ivantseng123/agentdock/commit/507c31f0464896118ff56d38d675af80f61c15cc))
+* **cli:** warn on unknown nested struct keys in config ([7a6ec68](https://github.com/Ivantseng123/agentdock/commit/7a6ec68a435157f2df9013ee87618f19adbd2ccf))
+* detect default branch from HEAD and put it first in branch list ([3718f6d](https://github.com/Ivantseng123/agentdock/commit/3718f6de149e2f23d091a78568337752d1df59ea))
+* listBranches to work with bare repos using for-each-ref ([8f2740d](https://github.com/Ivantseng123/agentdock/commit/8f2740d9aee8cbc770faa28a97355261f31b9770))
+* **logging:** keep domain terms (skill, bus, queue, transport) in English ([e4d2540](https://github.com/Ivantseng123/agentdock/commit/e4d25408ed1439b2bad3326a633804d8823220fb))
+* preserve Authorization header across Slack file download redirects ([383b50d](https://github.com/Ivantseng123/agentdock/commit/383b50d8bc957a803d30e27f9474768fe6d7fcdb))
+* put main/master first in branch list ([6684a7f](https://github.com/Ivantseng123/agentdock/commit/6684a7f5e53e199a30e9b700b61057b625e29ed0))
+* update fakeRepo mock in integration tests for new RepoProvider interface ([e314cbf](https://github.com/Ivantseng123/agentdock/commit/e314cbf659711973761bd34d6a088d99d8790c18))
+
+
+### Reverts
+
+* restore slack-go GetFile for downloads, keep url_private fallback ([4c1e01b](https://github.com/Ivantseng123/agentdock/commit/4c1e01b09d3d7d1c3adfc7ba8ea337c04ab22d1d))
+
+
+### Documentation
+
+* add MIGRATION-v1.md and remove config.example.yaml ([ab248cf](https://github.com/Ivantseng123/agentdock/commit/ab248cf17ed2a8f7da2b1bfe9618d6b3b1e93230))
+
 ## [0.2.7](https://github.com/Ivantseng123/agentdock/compare/v0.2.6...v0.2.7) (2026-04-15)
 
 
