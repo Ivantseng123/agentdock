@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"agentdock/internal/bot"
@@ -25,16 +27,32 @@ type repoCacheAdapter struct {
 }
 
 func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
-	repoPath, err := a.cache.EnsureRepo(cloneURL)
+	barePath, err := a.cache.EnsureRepo(cloneURL)
 	if err != nil {
 		return "", err
 	}
-	if branch != "" {
-		if err := a.cache.Checkout(repoPath, branch); err != nil {
-			return "", err
-		}
+	worktreePath, err := os.MkdirTemp("", "triage-repo-*")
+	if err != nil {
+		return "", fmt.Errorf("create worktree temp dir: %w", err)
 	}
-	return repoPath, nil
+	// MkdirTemp creates the dir; git worktree add needs it to not exist.
+	os.Remove(worktreePath)
+	if err := a.cache.AddWorktree(barePath, branch, worktreePath); err != nil {
+		return "", err
+	}
+	return worktreePath, nil
+}
+
+func (a *repoCacheAdapter) RemoveWorktree(path string) error {
+	return a.cache.RemoveWorktree(path)
+}
+
+func (a *repoCacheAdapter) CleanAll() error {
+	return a.cache.CleanAll()
+}
+
+func (a *repoCacheAdapter) PurgeStale() error {
+	return a.cache.PurgeStale()
 }
 
 // slackPosterAdapter wraps slackclient.Client to satisfy bot.SlackPoster interface.

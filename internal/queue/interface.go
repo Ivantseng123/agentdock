@@ -18,7 +18,7 @@ type JobQueue interface {
 }
 
 type AttachmentStore interface {
-	Prepare(ctx context.Context, jobID string, attachments []AttachmentMeta) error
+	Prepare(ctx context.Context, jobID string, payloads []AttachmentPayload) error
 	Resolve(ctx context.Context, jobID string) ([]AttachmentReady, error)
 	Cleanup(ctx context.Context, jobID string) error
 }

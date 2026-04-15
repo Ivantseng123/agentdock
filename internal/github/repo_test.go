@@ -32,12 +32,9 @@ func TestRepoCache_EnsureRepo_ClonesNewRepo(t *testing.T) {
 		t.Fatalf("EnsureRepo failed: %v", err)
 	}
 
-	content, err := os.ReadFile(filepath.Join(repoPath, "main.go"))
-	if err != nil {
-		t.Fatalf("cloned file not found: %v", err)
-	}
-	if string(content) != "package main" {
-		t.Errorf("unexpected content: %s", string(content))
+	// Bare repo — verify HEAD exists, not working files.
+	if _, err := os.Stat(filepath.Join(repoPath, "HEAD")); err != nil {
+		t.Fatalf("bare repo missing HEAD: %v", err)
 	}
 }
 
@@ -76,11 +73,6 @@ func TestRepoCache_EnsureRepo_PullsExistingRepo(t *testing.T) {
 	if repoPath != repoPath2 {
 		t.Error("expected same path for cached repo")
 	}
-
-	content, _ := os.ReadFile(filepath.Join(repoPath, "main.go"))
-	if string(content) != "v2" {
-		t.Errorf("expected v2 after pull, got %s", string(content))
-	}
 }
 
 func TestSanitizeURL(t *testing.T) {
@@ -99,6 +91,95 @@ func TestSanitizeURL(t *testing.T) {
 		if got := SanitizeURL(tt.input); got != tt.want {
 			t.Errorf("SanitizeURL(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestRepoCache_BareCloneAndWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	// Create a source bare repo with one commit.
+	sourceDir := t.TempDir()
+	run(t, sourceDir, "git", "init", "--bare")
+
+	workDir := t.TempDir()
+	run(t, workDir, "git", "clone", sourceDir, ".")
+	os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main"), 0644)
+	run(t, workDir, "git", "add", ".")
+	run(t, workDir, "git", "-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init")
+	run(t, workDir, "git", "push")
+
+	cacheDir := t.TempDir()
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
+
+	// EnsureRepo should create a bare clone.
+	barePath, err := cache.EnsureRepo("file://" + sourceDir)
+	if err != nil {
+		t.Fatalf("EnsureRepo failed: %v", err)
+	}
+
+	// Bare repo should NOT have working tree files.
+	if _, err := os.Stat(filepath.Join(barePath, "main.go")); !os.IsNotExist(err) {
+		t.Error("bare repo should not have working tree files")
+	}
+	// But should have HEAD (bare repo indicator).
+	if _, err := os.Stat(filepath.Join(barePath, "HEAD")); err != nil {
+		t.Errorf("bare repo missing HEAD: %v", err)
+	}
+
+	// AddWorktree should create a working directory.
+	wtPath := filepath.Join(t.TempDir(), "wt1")
+	if err := cache.AddWorktree(barePath, "", wtPath); err != nil {
+		t.Fatalf("AddWorktree failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(wtPath, "main.go"))
+	if err != nil {
+		t.Fatalf("worktree file not found: %v", err)
+	}
+	if string(content) != "package main" {
+		t.Errorf("unexpected content: %s", string(content))
+	}
+
+	// RemoveWorktree should delete it.
+	if err := cache.RemoveWorktree(wtPath); err != nil {
+		t.Fatalf("RemoveWorktree failed: %v", err)
+	}
+	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
+		t.Error("worktree dir should be deleted")
+	}
+}
+
+func TestRepoCache_CleanAll(t *testing.T) {
+	cacheDir := t.TempDir()
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
+
+	os.WriteFile(filepath.Join(cacheDir, "dummy"), []byte("x"), 0644)
+
+	if err := cache.CleanAll(); err != nil {
+		t.Fatalf("CleanAll failed: %v", err)
+	}
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Error("cache dir should be deleted")
+	}
+}
+
+func TestRepoCache_PurgeStale(t *testing.T) {
+	cacheDir := t.TempDir()
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
+
+	os.WriteFile(filepath.Join(cacheDir, "leftover"), []byte("x"), 0644)
+
+	if err := cache.PurgeStale(); err != nil {
+		t.Fatalf("PurgeStale failed: %v", err)
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected empty cache dir, got %d entries", len(entries))
 	}
 }
 

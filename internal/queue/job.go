@@ -64,11 +64,20 @@ type JobResult struct {
 	CostUSD      float64   `json:"cost_usd,omitempty"`
 	InputTokens  int       `json:"input_tokens,omitempty"`
 	OutputTokens int       `json:"output_tokens,omitempty"`
+	RepoPath     string    `json:"-"` // local only, not serialized over Redis
 }
 
 type AttachmentReady struct {
 	Filename string `json:"filename"`
-	URL      string `json:"url"`
+	Data     []byte `json:"data"`
+	MimeType string `json:"mime_type"`
+}
+
+type AttachmentPayload struct {
+	Filename string
+	MimeType string
+	Data     []byte
+	Size     int64
 }
 
 type JobState struct {

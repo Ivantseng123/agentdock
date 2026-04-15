@@ -61,6 +61,12 @@ func runWorker(cfg *config.Config) error {
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
 
+	// Purge stale repos from previous unclean shutdown.
+	repoAdapter := &repoCacheAdapter{cache: repoCache}
+	if err := repoAdapter.PurgeStale(); err != nil {
+		appLogger.Warn("啟動時清理舊 repo 快取失敗", "phase", "處理中", "error", err)
+	}
+
 	// Collect skill dirs.
 	var skillDirs []string
 	seen := make(map[string]bool)
@@ -83,7 +89,7 @@ func runWorker(cfg *config.Config) error {
 		Results:        bundle.Results,
 		Store:          jobStore,
 		Runner:         &agentRunnerAdapter{runner: agentRunner},
-		RepoCache:      &repoCacheAdapter{cache: repoCache},
+		RepoCache:      repoAdapter,
 		WorkerCount:    cfg.Workers.Count,
 		Hostname:       hostname,
 		SkillDirs:      skillDirs,

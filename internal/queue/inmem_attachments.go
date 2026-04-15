@@ -16,7 +16,7 @@ func NewInMemAttachmentStore() *InMemAttachmentStore {
 	}
 }
 
-func (s *InMemAttachmentStore) Prepare(ctx context.Context, jobID string, attachments []AttachmentMeta) error {
+func (s *InMemAttachmentStore) Prepare(ctx context.Context, jobID string, payloads []AttachmentPayload) error {
 	s.mu.Lock()
 	ch, ok := s.ready[jobID]
 	if !ok {
@@ -24,9 +24,9 @@ func (s *InMemAttachmentStore) Prepare(ctx context.Context, jobID string, attach
 		s.ready[jobID] = ch
 	}
 	s.mu.Unlock()
-	result := make([]AttachmentReady, len(attachments))
-	for i, a := range attachments {
-		result[i] = AttachmentReady{Filename: a.Filename, URL: ""}
+	result := make([]AttachmentReady, len(payloads))
+	for i, p := range payloads {
+		result[i] = AttachmentReady{Filename: p.Filename, Data: p.Data, MimeType: p.MimeType}
 	}
 	ch <- result
 	return nil

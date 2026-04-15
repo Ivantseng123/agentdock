@@ -21,12 +21,30 @@ func (m *mockRunner) Run(ctx context.Context, workDir, prompt string, opts bot.R
 }
 
 type mockRepo struct {
-	path string
-	err  error
+	path             string
+	err              error
+	removedWorktrees []string
+	cleanAllCalled   bool
+	purgedStale      bool
 }
 
 func (m *mockRepo) Prepare(cloneURL, branch string) (string, error) {
 	return m.path, m.err
+}
+
+func (m *mockRepo) RemoveWorktree(path string) error {
+	m.removedWorktrees = append(m.removedWorktrees, path)
+	return nil
+}
+
+func (m *mockRepo) CleanAll() error {
+	m.cleanAllCalled = true
+	return nil
+}
+
+func (m *mockRepo) PurgeStale() error {
+	m.purgedStale = true
+	return nil
 }
 
 func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {

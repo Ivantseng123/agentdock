@@ -137,13 +137,12 @@ func (c *Client) downloadFile(url string) (string, error) {
 	return buf.String(), nil
 }
 
-func (c *Client) downloadBytes(url string) ([]byte, error) {
-	if url == "" {
+func (c *Client) downloadBytes(dlURL string) ([]byte, error) {
+	if dlURL == "" {
 		return nil, fmt.Errorf("empty download URL")
 	}
 	var buf bytes.Buffer
-	err := c.api.GetFile(url, &buf)
-	if err != nil {
+	if err := c.api.GetFile(dlURL, &buf); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -413,7 +412,12 @@ func (c *Client) DownloadAttachments(messages []ThreadRawMessage, tempDir string
 
 	for _, msg := range messages {
 		for _, f := range msg.Files {
-			data, err := c.downloadBytes(f.URLPrivateDownload)
+			dlURL := f.URLPrivateDownload
+			if dlURL == "" {
+				dlURL = f.URLPrivate
+			}
+			c.logger.Debug("下載附件", "phase", "處理中", "name", f.Name, "url_private_download", f.URLPrivateDownload, "url_private", f.URLPrivate, "size", f.Size)
+			data, err := c.downloadBytes(dlURL)
 			if err != nil {
 				c.logger.Warn("附件下載失敗", "phase", "失敗", "name", f.Name, "error", err)
 				attachments = append(attachments, AttachmentDownload{
@@ -423,6 +427,7 @@ func (c *Client) DownloadAttachments(messages []ThreadRawMessage, tempDir string
 				})
 				continue
 			}
+			c.logger.Debug("附件已下載", "phase", "處理中", "name", f.Name, "expected_size", f.Size, "actual_size", len(data))
 
 			path := filepath.Join(tempDir, f.Name)
 			if err := os.WriteFile(path, data, 0644); err != nil {
