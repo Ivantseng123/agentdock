@@ -308,6 +308,50 @@ reactions:
 	}
 }
 
+func TestWarnUnknownKeys_NestedStructKey(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.yaml")
+	// queue.bogus is under a struct (QueueConfig), should warn.
+	// agents.myagent.command is under a map, should NOT warn.
+	yamlBody := `
+queue:
+  capacity: 50
+  bogus: true
+agents:
+  myagent:
+    command: echo
+`
+	if err := os.WriteFile(path, []byte(yamlBody), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{Use: "test"}
+	addPersistentFlags(cmd)
+
+	var logBuf strings.Builder
+	oldHandler := slog.Default().Handler()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(slog.New(oldHandler))
+
+	_, _, _, _, err := buildKoanf(cmd, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logOutput := logBuf.String()
+
+	// queue.bogus must trigger a warning.
+	if !strings.Contains(logOutput, "queue.bogus") {
+		t.Errorf("expected warn about 'queue.bogus', got log:\n%s", logOutput)
+	}
+
+	// agents.myagent.command must NOT trigger a warning (map type).
+	if strings.Contains(logOutput, "agents.myagent") {
+		t.Errorf("should not warn about agents sub-keys, got log:\n%s", logOutput)
+	}
+}
+
 func TestResolveConfigPath_ExpandsTilde(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

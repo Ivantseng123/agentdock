@@ -240,15 +240,16 @@ func resolveConfigPath(in string) (string, error) {
 	return filepath.Abs(in)
 }
 
-// validKoanfKeys returns the set of valid dotted koanf paths derived from
-// config.Config yaml tags.
-func validKoanfKeys() map[string]bool {
-	out := map[string]bool{}
-	walkYAMLPathsKeyOnly(reflect.TypeOf(config.Config{}), "", out)
-	return out
+// validKoanfKeys returns the set of valid dotted koanf paths and the set of
+// top-level keys whose Config type is a map (allowing arbitrary sub-keys).
+func validKoanfKeys() (valid map[string]bool, mapKeys map[string]bool) {
+	valid = map[string]bool{}
+	mapKeys = map[string]bool{}
+	walkYAMLPathsKeyOnly(reflect.TypeOf(config.Config{}), "", valid, mapKeys)
+	return
 }
 
-func walkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool) {
+func walkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool, mapKeys map[string]bool) {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
@@ -270,21 +271,31 @@ func walkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool) {
 		if ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
+		if ft.Kind() == reflect.Map {
+			// Map-typed fields have dynamic sub-keys (e.g. agents, channels).
+			// Record and skip — sub-keys are user-defined, not schema-validated.
+			// NOTE: only top-level maps are handled. If a nested struct ever
+			// contains a map field, extend warnUnknownKeys to check prefixes.
+			mapKeys[path] = true
+			continue
+		}
 		if ft.Kind() == reflect.Struct {
-			walkYAMLPathsKeyOnly(ft, path, out)
+			walkYAMLPathsKeyOnly(ft, path, out, mapKeys)
 		}
 	}
 }
 
 // warnUnknownKeys logs warnings for any koanf key not in the valid Config
-// schema. Map-valued top-level keys (e.g. channels, agents, channel_priority)
-// are allowed to have arbitrary sub-keys — the top-level short-circuit handles
-// that case.
+// schema. Map-valued fields (e.g. channels, agents, channel_priority) allow
+// arbitrary sub-keys and are skipped entirely.
 func warnUnknownKeys(k *koanf.Koanf) {
-	valid := validKoanfKeys()
+	valid, mapKeys := validKoanfKeys()
 	for _, key := range k.Keys() {
 		topLevel := strings.SplitN(key, ".", 2)[0]
-		if !valid[topLevel] && !valid[key] {
+		if mapKeys[topLevel] {
+			continue
+		}
+		if !valid[key] {
 			slog.Warn("unknown config key", "key", key)
 		}
 	}
