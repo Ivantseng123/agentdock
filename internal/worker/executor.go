@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,10 +33,12 @@ type executionDeps struct {
 
 func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions) *queue.JobResult {
 	startedAt := time.Now()
+	logger := slog.With("job_id", job.ID, "repo", job.Repo)
 
 	// Resolve attachments (blocks until Prepare completes on app side).
 	var attachments []queue.AttachmentReady
 	if len(job.Attachments) > 0 {
+		logger.Info("resolving attachments", "count", len(job.Attachments))
 		var err error
 		attachments, err = deps.attachments.Resolve(ctx, job.ID)
 		if err != nil {
@@ -44,10 +47,12 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 
 	// Clone/fetch repo.
+	logger.Info("preparing repo", "branch", job.Branch)
 	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch)
 	if err != nil {
 		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err))
 	}
+	logger.Info("repo ready", "path", repoPath)
 
 	// Copy attachments to repo workspace.
 	for _, att := range attachments {
@@ -58,26 +63,37 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 
 	// Mount skills to all agent skill directories.
 	if len(job.Skills) > 0 {
+		logger.Info("mounting skills", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
 		for _, sd := range deps.skillDirs {
 			if err := mountSkills(repoPath, job.Skills, sd); err != nil {
 				return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err))
 			}
 			defer cleanupSkills(repoPath, job.Skills, sd)
 		}
+	} else {
+		logger.Warn("no skills in job payload")
 	}
 
 	// Execute agent.
 	deps.store.UpdateStatus(job.ID, queue.JobRunning)
+	logger.Info("executing agent")
 	output, err := deps.runner.Run(ctx, repoPath, job.Prompt, opts)
 	if err != nil {
 		return failedResult(job, startedAt, err)
 	}
+	logger.Info("agent finished", "output_len", len(output))
 
 	// Parse agent output.
 	parsed, err := bot.ParseAgentOutput(output)
 	if err != nil {
+		truncated := output
+		if len(truncated) > 2000 {
+			truncated = truncated[:2000] + "…(truncated)"
+		}
+		logger.Warn("parse failed, dumping raw output", "output", truncated)
 		return failedResult(job, startedAt, fmt.Errorf("parse failed: %w", err))
 	}
+	logger.Info("parse succeeded", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
 
 	return &queue.JobResult{
 		JobID:      job.ID,

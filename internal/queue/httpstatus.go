@@ -44,6 +44,8 @@ type workerEntry struct {
 	Tags        []string `json:"tags,omitempty"`
 	ConnectedAt string   `json:"connected_at"`
 	Uptime      string   `json:"uptime"`
+	CurrentJob  string   `json:"current_job,omitempty"`
+	Status      string   `json:"status"`
 }
 
 type jobsResponse struct {
@@ -76,6 +78,8 @@ func StatusHandler(store JobStore, queue JobQueue) http.HandlerFunc {
 			}
 			if state.WorkerID != "" {
 				entry.WorkerID = state.WorkerID
+			} else if state.AgentStatus != nil && state.AgentStatus.WorkerID != "" {
+				entry.WorkerID = state.AgentStatus.WorkerID
 			}
 			if state.WaitTime > 0 {
 				entry.WaitTime = state.WaitTime.Truncate(time.Second).String()
@@ -108,17 +112,31 @@ func StatusHandler(store JobStore, queue JobQueue) http.HandlerFunc {
 			entries = append(entries, entry)
 		}
 
+		// Build worker → active job map from running jobs.
+		activeJobs := make(map[string]string) // workerID → jobID
+		for _, e := range entries {
+			if e.WorkerID != "" && (e.Status == JobRunning || e.Status == JobPending) {
+				activeJobs[e.WorkerID] = e.ID
+			}
+		}
+
 		var workers []workerEntry
 		if wl, err := queue.ListWorkers(r.Context()); err == nil {
 			for _, wi := range wl {
-				workers = append(workers, workerEntry{
+				we := workerEntry{
 					WorkerID:    wi.WorkerID,
 					Name:        wi.Name,
 					Agents:      wi.Agents,
 					Tags:        wi.Tags,
 					ConnectedAt: wi.ConnectedAt.Format(time.RFC3339),
 					Uptime:      now.Sub(wi.ConnectedAt).Truncate(time.Second).String(),
-				})
+					Status:      "idle",
+				}
+				if jobID, ok := activeJobs[wi.WorkerID]; ok {
+					we.CurrentJob = jobID
+					we.Status = "busy"
+				}
+				workers = append(workers, we)
 			}
 		}
 

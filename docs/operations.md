@@ -15,11 +15,19 @@ curl localhost:8180/jobs | jq .
   "queue_depth": 1,
   "workers": [
     {
-      "worker_id": "worker-1713081693342",
+      "worker_id": "my-host/worker-0",
       "name": "my-host",
-      "agents": ["claude"],
       "connected_at": "2026-04-14T17:41:33+08:00",
-      "uptime": "5m30s"
+      "uptime": "5m30s",
+      "current_job": "req-abc123",
+      "status": "busy"
+    },
+    {
+      "worker_id": "my-host/worker-1",
+      "name": "my-host",
+      "connected_at": "2026-04-14T17:41:33+08:00",
+      "uptime": "5m30s",
+      "status": "idle"
     }
   ],
   "total": 2,
@@ -28,6 +36,7 @@ curl localhost:8180/jobs | jq .
       "id": "req-abc123",
       "status": "running",
       "repo": "org/backend",
+      "worker_id": "my-host/worker-0",
       "age": "45s",
       "agent": {
         "pid": 12345,
@@ -54,7 +63,7 @@ curl localhost:8180/jobs | jq .
 
 ### Workers 欄位
 
-`workers` 陣列顯示目前已註冊的 worker。Worker 透過 Redis key（`ad:workers:{id}`，30s TTL）維持心跳，斷線 30 秒後自動消失。
+`workers` 陣列顯示目前已註冊的 worker。Worker 透過 Redis key（`ad:workers:{id}`，30s TTL）維持心跳，斷線 30 秒後自動消失。每個 worker 會顯示 `status`（`busy`/`idle`）及正在處理的 `current_job`。
 
 若 `workers` 為空陣列，代表沒有活著的 worker — pending job 不會被處理。
 

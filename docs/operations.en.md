@@ -13,12 +13,30 @@ Returns:
 ```json
 {
   "queue_depth": 1,
+  "workers": [
+    {
+      "worker_id": "my-host/worker-0",
+      "name": "my-host",
+      "connected_at": "2026-04-14T17:41:33+08:00",
+      "uptime": "5m30s",
+      "current_job": "req-abc123",
+      "status": "busy"
+    },
+    {
+      "worker_id": "my-host/worker-1",
+      "name": "my-host",
+      "connected_at": "2026-04-14T17:41:33+08:00",
+      "uptime": "5m30s",
+      "status": "idle"
+    }
+  ],
   "total": 2,
   "jobs": [
     {
       "id": "req-abc123",
       "status": "running",
       "repo": "org/backend",
+      "worker_id": "my-host/worker-0",
       "age": "45s",
       "agent": {
         "pid": 12345,

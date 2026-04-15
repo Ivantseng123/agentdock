@@ -37,14 +37,14 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
 
 	if _, err := os.Stat(filepath.Join(localPath, ".git")); os.IsNotExist(err) {
-		slog.Info("cloning repo", "repo", repoRef, "path", localPath)
+		slog.Info("cloning repo", "repo", SanitizeURL(repoRef), "path", localPath)
 		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 			return "", fmt.Errorf("mkdir: %w", err)
 		}
 		// Full clone (not shallow) so we can switch branches
 		cmd := exec.Command("git", "clone", cloneURL, localPath)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("git clone: %w\n%s", err, out)
+		if _, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git clone failed: %w", err)
 		}
 		rc.lastPull[repoRef] = time.Now()
 		return localPath, nil
@@ -54,20 +54,20 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 		return localPath, nil
 	}
 
-	slog.Info("fetching repo", "repo", repoRef)
+	slog.Info("fetching repo", "repo", SanitizeURL(repoRef))
 	cmd := exec.Command("git", "-C", localPath, "fetch", "--all", "--prune")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		slog.Warn("git fetch failed", "error", err, "output", string(out))
+		slog.Warn("git fetch failed", "error", err)
 		// Broken repo (e.g. interrupted clone) — remove and re-clone
 		if strings.Contains(string(out), "not a git repository") {
-			slog.Info("removing broken repo dir and re-cloning", "repo", repoRef)
+			slog.Info("removing broken repo dir and re-cloning", "repo", SanitizeURL(repoRef))
 			os.RemoveAll(localPath)
 			if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 				return "", fmt.Errorf("mkdir: %w", err)
 			}
 			cmd = exec.Command("git", "clone", cloneURL, localPath)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return "", fmt.Errorf("git clone (retry): %w\n%s", err, out)
+			if _, err := cmd.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("git clone (retry) failed: %w", err)
 			}
 			rc.lastPull[repoRef] = time.Now()
 			return localPath, nil
@@ -138,4 +138,15 @@ func (rc *RepoCache) ResolveURL(repoRef string) string {
 func (rc *RepoCache) dirName(repoRef string) string {
 	h := sha256.Sum256([]byte(repoRef))
 	return fmt.Sprintf("%x", h[:8])
+}
+
+// SanitizeURL strips embedded credentials from a URL for safe logging.
+func SanitizeURL(raw string) string {
+	// Matches https://TOKEN@github.com/... or https://user:pass@host/...
+	if idx := strings.Index(raw, "@"); idx > 0 {
+		if schemeEnd := strings.Index(raw, "://"); schemeEnd > 0 && schemeEnd < idx {
+			return raw[:schemeEnd+3] + "***@" + raw[idx+1:]
+		}
+	}
+	return raw
 }

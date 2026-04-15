@@ -45,6 +45,10 @@ func (p *Pool) Start(ctx context.Context) {
 	for i := 0; i < p.cfg.WorkerCount; i++ {
 		go p.runWorker(ctx, i)
 	}
+
+	// Register workers with the queue and maintain heartbeat.
+	go p.workerHeartbeat(ctx)
+
 	slog.Info("worker pool started", "count", p.cfg.WorkerCount)
 }
 
@@ -187,6 +191,46 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		logger.Error("failed to publish result", "error", err)
 	}
 	logger.Info("job completed", "status", result.Status)
+}
+
+func (p *Pool) workerHeartbeat(ctx context.Context) {
+	now := time.Now()
+	for i := 0; i < p.cfg.WorkerCount; i++ {
+		info := queue.WorkerInfo{
+			WorkerID:    fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i),
+			Name:        p.cfg.Hostname,
+			ConnectedAt: now,
+		}
+		if err := p.cfg.Queue.Register(ctx, info); err != nil {
+			slog.Warn("worker registration failed", "worker_id", info.WorkerID, "error", err)
+		}
+	}
+
+	// Re-register every 20s to keep the 30s TTL alive.
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			for i := 0; i < p.cfg.WorkerCount; i++ {
+				info := queue.WorkerInfo{
+					WorkerID:    fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i),
+					Name:        p.cfg.Hostname,
+					ConnectedAt: now,
+				}
+				p.cfg.Queue.Register(ctx, info)
+			}
+		case <-ctx.Done():
+			// Best-effort unregister with short timeout; TTL expires in 30s anyway.
+			unregCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			for i := 0; i < p.cfg.WorkerCount; i++ {
+				wID := fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i)
+				p.cfg.Queue.Unregister(unregCtx, wID)
+			}
+			cancel()
+			return
+		}
+	}
 }
 
 func (p *Pool) reportStatus(ctx context.Context, status *statusAccumulator, interval time.Duration, stop <-chan struct{}) {

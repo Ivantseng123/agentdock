@@ -93,6 +93,17 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	job := state.Job
 	owner, repo := splitRepo(job.Repo)
 
+	logger := slog.With("job_id", result.JobID, "repo", job.Repo, "status", result.Status)
+	if result.Status == "failed" {
+		truncated := result.RawOutput
+		if len(truncated) > 2000 {
+			truncated = truncated[:2000] + "…(truncated)"
+		}
+		logger.Warn("job failed", "error", result.Error, "raw_output", truncated)
+	} else {
+		logger.Info("job completed", "title", result.Title, "confidence", result.Confidence, "files_found", result.FilesFound)
+	}
+
 	switch {
 	case result.Status == "failed":
 		r.handleFailure(job, state, result)
@@ -130,15 +141,24 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 		workerInfo = fmt.Sprintf(" | worker: %s", workerID)
 	}
 
+	// Extract short error reason for Slack (before first colon detail, max 80 chars).
+	errMsg := result.Error
+	if idx := strings.Index(errMsg, ":"); idx > 0 {
+		errMsg = errMsg[:idx]
+	}
+	if len(errMsg) > 80 {
+		errMsg = errMsg[:80] + "…"
+	}
+
 	if job.RetryCount < 1 {
 		// Show retry button.
-		text := fmt.Sprintf(":x: 分析失敗: %s\nrepo: `%s`%s", result.Error, job.Repo, workerInfo)
+		text := fmt.Sprintf(":x: 分析失敗: %s\nrepo: `%s` | job: `%s`%s", errMsg, job.Repo, job.ID, workerInfo)
 		r.slack.PostMessageWithButton(job.ChannelID, text, job.ThreadTS,
 			"retry_job", "🔄 重試", job.ID)
 		// Do NOT clear dedup — user should use retry button.
 	} else {
 		// Retry exhausted, no button.
-		text := fmt.Sprintf(":x: 分析失敗（重試後仍失敗）: %s\nrepo: `%s`%s", result.Error, job.Repo, workerInfo)
+		text := fmt.Sprintf(":x: 分析失敗（重試後仍失敗）: %s\nrepo: `%s` | job: `%s`%s", errMsg, job.Repo, job.ID, workerInfo)
 		r.updateStatus(job, text)
 		r.clearDedup(job)
 	}

@@ -82,6 +82,25 @@ func TestRepoCache_EnsureRepo_PullsExistingRepo(t *testing.T) {
 	}
 }
 
+func TestSanitizeURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"https://ghp_abc123@github.com/org/repo.git", "https://***@github.com/org/repo.git"},
+		{"https://user:pass@github.com/org/repo.git", "https://***@github.com/org/repo.git"},
+		{"https://github.com/org/repo.git", "https://github.com/org/repo.git"},
+		{"git@github.com:org/repo.git", "git@github.com:org/repo.git"},
+		{"file:///tmp/repo", "file:///tmp/repo"},
+		{"org/repo", "org/repo"},
+	}
+	for _, tt := range tests {
+		if got := SanitizeURL(tt.input); got != tt.want {
+			t.Errorf("SanitizeURL(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func run(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)

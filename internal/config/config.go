@@ -173,18 +173,21 @@ func LoadDefaults() (*Config, error) {
 			"claude": {
 				Command:  "claude",
 				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
+				Timeout:  15 * time.Minute,
 				SkillDir: ".claude/skills",
 				Stream:   true,
 			},
 			"codex": {
 				Command:  "codex",
 				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
+				Timeout:  15 * time.Minute,
 				SkillDir: ".codex/skills",
 				Stream:   true,
 			},
 			"opencode": {
 				Command:  "opencode",
 				Args:     []string{"--prompt", "{prompt}"},
+				Timeout:  15 * time.Minute,
 				SkillDir: ".opencode/skills",
 			},
 		},

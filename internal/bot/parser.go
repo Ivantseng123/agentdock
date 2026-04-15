@@ -45,8 +45,9 @@ func ParseAgentOutput(output string) (TriageResult, error) {
 
 	// Try JSON format first.
 	if strings.HasPrefix(result, "{") {
+		jsonStr := extractJSON(result)
 		var tr TriageResult
-		if err := json.Unmarshal([]byte(result), &tr); err == nil && tr.Status != "" {
+		if err := json.Unmarshal([]byte(jsonStr), &tr); err == nil && tr.Status != "" {
 			return tr, nil
 		}
 	}
@@ -71,6 +72,45 @@ func ParseAgentOutput(output string) (TriageResult, error) {
 	}
 
 	return TriageResult{}, fmt.Errorf("unknown triage result: %s", result)
+}
+
+// extractJSON finds the first top-level JSON object in text by matching braces.
+// This handles cases where the agent appends extra content after the JSON.
+func extractJSON(text string) string {
+	depth := 0
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return text
+	}
+	inString := false
+	escaped := false
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
+	return text // unbalanced, return as-is
 }
 
 // extractIssueURL finds a GitHub issue URL in text.

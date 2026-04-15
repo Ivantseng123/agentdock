@@ -122,3 +122,35 @@ func TestParseAgentOutput_NoResult(t *testing.T) {
 		t.Error("expected error when no result")
 	}
 }
+
+func TestParseAgentOutput_JSONWithTrailingContent(t *testing.T) {
+	output := "Investigation complete.\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "CREATED",
+  "title": "Bug title",
+  "body": "Issue body",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 4,
+  "open_questions": 1
+}
+
+---
+
+## Summary
+
+Some extra markdown the agent added after the JSON.`
+
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if result.Status != "CREATED" {
+		t.Errorf("status = %q, want CREATED", result.Status)
+	}
+	if result.Title != "Bug title" {
+		t.Errorf("title = %q", result.Title)
+	}
+	if result.FilesFound != 4 {
+		t.Errorf("files_found = %d, want 4", result.FilesFound)
+	}
+}
