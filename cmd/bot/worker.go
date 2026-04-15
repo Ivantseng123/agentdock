@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -20,23 +21,30 @@ func runWorker() {
 	configPath := fs.String("config", "", "path to worker config file (optional, can use env vars only)")
 	fs.Parse(os.Args[2:])
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
-
 	var cfg *config.Config
 	var err error
 	if *configPath != "" {
 		cfg, err = config.Load(*configPath)
 		if err != nil {
-			slog.Error("failed to load config", "error", err)
+			fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m failed to load config: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
 		cfg, err = config.LoadDefaults()
 		if err != nil {
-			slog.Error("failed to load defaults", "error", err)
+			fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m failed to load defaults: %v\n", err)
 			os.Exit(1)
 		}
 	}
+
+	// Preflight: validate dependencies, prompt if interactive.
+	if err := runPreflight(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "  Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// slog initialized AFTER preflight to keep interactive output clean.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{
 		Addr:     cfg.Redis.Addr,
