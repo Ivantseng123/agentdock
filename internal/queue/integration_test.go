@@ -36,6 +36,10 @@ func (f *fakeRepo) Prepare(cloneURL, branch string) (string, error) {
 	return "/tmp/fake-repo", nil
 }
 
+func (f *fakeRepo) RemoveWorktree(path string) error { return nil }
+func (f *fakeRepo) CleanAll() error                  { return nil }
+func (f *fakeRepo) PurgeStale() error                { return nil }
+
 func TestFullFlow_SubmitToResult(t *testing.T) {
 	store := queue.NewMemJobStore()
 	bundle := queue.NewInMemBundle(10, 3, store)
