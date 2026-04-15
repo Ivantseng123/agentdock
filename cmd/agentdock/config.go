@@ -154,6 +154,9 @@ func loadAndStash(cmd *cobra.Command, configPath string) error {
 	if configPath != "" && !delta.FileExisted {
 		return fmt.Errorf("config file not found: %s; run 'agentdock init -c %s' first", resolved, resolved)
 	}
+	if err := validate(cfg); err != nil {
+		return err
+	}
 	ctx := cmd.Context()
 	ctx = context.WithValue(ctx, ctxKeyConfig, cfg)
 	ctx = context.WithValue(ctx, ctxKeyKSave, kSave)
