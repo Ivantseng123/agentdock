@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"agentdock/internal/metrics"
 	"agentdock/internal/queue"
 )
 
@@ -93,6 +96,8 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 		return
 	}
 
+	r.recordMetrics(state, result)
+
 	job := state.Job
 	owner, repo := splitRepo(job.Repo)
 
@@ -112,6 +117,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 		r.handleFailure(job, state, result)
 
 	case result.Confidence == "low":
+		metrics.IssueRejectedTotal.WithLabelValues("low_confidence").Inc()
 		r.updateStatus(job, ":warning: 判斷不屬於此 repo，已跳過")
 		r.clearDedup(job)
 
@@ -126,6 +132,77 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 
 	// Cleanup attachments.
 	r.attachments.Cleanup(ctx, result.JobID)
+}
+
+func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobResult) {
+	job := state.Job
+
+	// End-to-end duration (app clock only — avoids clock skew with remote workers).
+	if !job.SubmittedAt.IsZero() {
+		elapsed := time.Since(job.SubmittedAt).Seconds()
+		metrics.RequestDuration.Observe(elapsed)
+		metrics.QueueJobDuration.WithLabelValues(result.Status).Observe(elapsed)
+	}
+
+	// Queue wait time (computed by MemJobStore when status transitions to Running).
+	if state.WaitTime > 0 {
+		metrics.QueueWait.Observe(state.WaitTime.Seconds())
+	}
+
+	// Agent metrics from StatusReport (relayed by StatusListener from worker's StatusBus).
+	if as := state.AgentStatus; as != nil {
+		provider := as.AgentCmd
+		if provider == "" {
+			provider = "unknown"
+		}
+
+		// Prepare duration.
+		if as.PrepareSeconds > 0 {
+			metrics.AgentPrepare.Observe(as.PrepareSeconds)
+		}
+
+		// Execution time ≈ total - wait - prepare.
+		if !job.SubmittedAt.IsZero() {
+			total := time.Since(job.SubmittedAt).Seconds()
+			exec := total - state.WaitTime.Seconds() - as.PrepareSeconds
+			if exec > 0 {
+				metrics.AgentExecution.WithLabelValues(provider).Observe(exec)
+			}
+		}
+
+		// Execution outcome.
+		status := "success"
+		if result.Status == "failed" {
+			if strings.Contains(result.Error, "timeout") {
+				status = "timeout"
+			} else {
+				status = "error"
+			}
+		}
+		metrics.AgentExecutionsTotal.WithLabelValues(provider, status).Inc()
+
+		// Tool calls and files read.
+		if as.ToolCalls > 0 {
+			metrics.AgentToolCalls.WithLabelValues(provider).Observe(float64(as.ToolCalls))
+		}
+		if as.FilesRead > 0 {
+			metrics.AgentFilesRead.WithLabelValues(provider).Observe(float64(as.FilesRead))
+		}
+
+		// Cost and tokens.
+		if as.CostUSD > 0 {
+			metrics.AgentCostUSD.WithLabelValues(provider).Add(as.CostUSD)
+		}
+		if as.InputTokens > 0 {
+			metrics.AgentTokensTotal.WithLabelValues(provider, "input").Add(float64(as.InputTokens))
+		}
+		if as.OutputTokens > 0 {
+			metrics.AgentTokensTotal.WithLabelValues(provider, "output").Add(float64(as.OutputTokens))
+		}
+	} else if result.Status == "failed" {
+		// No agent status — job failed before agent started.
+		metrics.AgentExecutionsTotal.WithLabelValues("unknown", "error").Inc()
+	}
 }
 
 func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, result *queue.JobResult) {
@@ -161,6 +238,7 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 		// Do NOT clear dedup — user should use retry button.
 	} else {
 		// Retry exhausted, no button.
+		metrics.IssueRetryTotal.WithLabelValues("exhausted").Inc()
 		text := fmt.Sprintf(":x: 分析失敗（重試後仍失敗）: %s\nrepo: `%s` | job: `%s`%s", errMsg, job.Repo, job.ID, workerInfo)
 		r.updateStatus(job, text)
 		r.clearDedup(job)
@@ -169,6 +247,7 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 
 func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job, owner, repo string, result *queue.JobResult, degraded bool) {
 	if r.github == nil {
+		metrics.IssueRejectedTotal.WithLabelValues("no_github").Inc()
 		r.slack.PostMessage(job.ChannelID,
 			":warning: GitHub client not configured", job.ThreadTS)
 		return
@@ -189,6 +268,12 @@ func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job,
 		r.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
 		return
 	}
+
+	confidence := result.Confidence
+	if confidence == "" {
+		confidence = "unknown"
+	}
+	metrics.IssueCreatedTotal.WithLabelValues(confidence, strconv.FormatBool(degraded)).Inc()
 
 	r.updateStatus(job, fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url))
 }
