@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"agentdock/internal/metrics"
+
 	gh "github.com/google/go-github/v60/github"
 )
 
@@ -34,7 +36,9 @@ func (ic *IssueClient) CreateIssue(ctx context.Context, owner, repo, title, body
 	}
 
 	issue, _, err := ic.client.Issues.Create(ctx, owner, repo, req)
+	metrics.ExternalDuration.WithLabelValues("github", "create_issue").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("github", "create_issue").Inc()
 		ic.logger.Error("Issue 建立失敗", "phase", "失敗", "owner", owner, "repo", repo, "error", err)
 		return "", fmt.Errorf("create issue: %w", err)
 	}

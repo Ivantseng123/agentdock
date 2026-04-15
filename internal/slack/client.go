@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"agentdock/internal/metrics"
+
 	"github.com/slack-go/slack"
 )
 
@@ -51,6 +53,10 @@ func (c *Client) API() *slack.Client {
 // Text files are downloaded and inlined. Vision images are downloaded for LLM use.
 // xlsx files are parsed to TSV. All other files are noted with filename + permalink.
 func (c *Client) FetchMessage(channelID, messageTS string) (FetchedMessage, error) {
+	start := time.Now()
+	defer func() {
+		metrics.ExternalDuration.WithLabelValues("slack", "fetch_message").Observe(time.Since(start).Seconds())
+	}()
 	params := &slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
 		Latest:    messageTS,
@@ -59,9 +65,11 @@ func (c *Client) FetchMessage(channelID, messageTS string) (FetchedMessage, erro
 	}
 	history, err := c.api.GetConversationHistory(params)
 	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "fetch_message").Inc()
 		return FetchedMessage{}, fmt.Errorf("fetch message: %w", err)
 	}
 	if len(history.Messages) == 0 {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "fetch_message").Inc()
 		return FetchedMessage{}, fmt.Errorf("message not found at ts=%s", messageTS)
 	}
 
@@ -184,12 +192,15 @@ func (c *Client) ResolveUser(userID string) string {
 
 // PostMessage sends a text message. If threadTS is non-empty, replies in that thread.
 func (c *Client) PostMessage(channelID, text, threadTS string) error {
+	start := time.Now()
 	opts := []slack.MsgOption{slack.MsgOptionText(text, false)}
 	if threadTS != "" {
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
 	_, _, err := c.api.PostMessage(channelID, opts...)
+	metrics.ExternalDuration.WithLabelValues("slack", "post_message").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "post_message").Inc()
 		return fmt.Errorf("post message: %w", err)
 	}
 	return nil
@@ -316,8 +327,11 @@ func (c *Client) PostMessageWithButton(channelID, text, threadTS, actionID, butt
 	if threadTS != "" {
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
+	start := time.Now()
 	_, ts, err := c.api.PostMessage(channelID, opts...)
+	metrics.ExternalDuration.WithLabelValues("slack", "post_message").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "post_message").Inc()
 		return "", fmt.Errorf("post message with button: %w", err)
 	}
 	return ts, nil
@@ -325,10 +339,13 @@ func (c *Client) PostMessageWithButton(channelID, text, threadTS, actionID, butt
 
 // UpdateMessage replaces an existing message (used to clear buttons after selection).
 func (c *Client) UpdateMessage(channelID, messageTS, text string) error {
+	start := time.Now()
 	_, _, _, err := c.api.UpdateMessage(channelID, messageTS,
 		slack.MsgOptionText(text, false),
 	)
+	metrics.ExternalDuration.WithLabelValues("slack", "post_message").Observe(time.Since(start).Seconds())
 	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "post_message").Inc()
 		return fmt.Errorf("update message: %w", err)
 	}
 	return nil

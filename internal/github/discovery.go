@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"agentdock/internal/metrics"
+
 	gh "github.com/google/go-github/v60/github"
 )
 
@@ -38,6 +40,7 @@ func (d *RepoDiscovery) ListRepos(ctx context.Context) ([]string, error) {
 	}
 	d.mu.Unlock()
 
+	start := time.Now()
 	var allRepos []string
 	opts := &gh.RepositoryListOptions{
 		Sort:        "updated",
@@ -48,6 +51,7 @@ func (d *RepoDiscovery) ListRepos(ctx context.Context) ([]string, error) {
 	for {
 		repos, resp, err := d.client.Repositories.List(ctx, "", opts)
 		if err != nil {
+			metrics.ExternalErrorsTotal.WithLabelValues("github", "list_repos").Inc()
 			return nil, err
 		}
 		for _, r := range repos {
@@ -59,6 +63,7 @@ func (d *RepoDiscovery) ListRepos(ctx context.Context) ([]string, error) {
 		opts.Page = resp.NextPage
 	}
 
+	metrics.ExternalDuration.WithLabelValues("github", "list_repos").Observe(time.Since(start).Seconds())
 	d.logger.Info("探索到 GitHub repos", "phase", "完成", "count", len(allRepos))
 
 	d.mu.Lock()
