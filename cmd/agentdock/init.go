@@ -121,7 +121,124 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 // initPromptAll runs the 5 prompts (Slack bot, Slack app, GitHub, Redis, Providers).
-// Implemented in Task 19; for Task 18 stub returns error.
 func initPromptAll(cfg *config.Config, prompted map[string]any) error {
-	return fmt.Errorf("init -i not yet implemented; coming in next task")
+	fmt.Fprintln(stderr)
+
+	// Slack bot token
+	fmt.Fprintln(stderr, "  Slack bot token (xoxb-...):")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := promptHidden("Token: ")
+		if token == "" {
+			printFail("Slack bot token is required")
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Slack bot token")
+			}
+			continue
+		}
+		userID, err := checkSlackToken(token)
+		if err != nil {
+			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Slack bot token")
+			}
+			continue
+		}
+		cfg.Slack.BotToken = token
+		prompted["slack.bot_token"] = token
+		printOK("Slack bot token valid (user_id: %s)", userID)
+		break
+	}
+
+	// Slack app token
+	fmt.Fprintln(stderr)
+	fmt.Fprintln(stderr, "  Slack app-level token (xapp-...):")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := promptHidden("Token: ")
+		if token == "" || !strings.HasPrefix(token, "xapp-") {
+			printFail("must start with xapp- (attempt %d/%d)", attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Slack app token")
+			}
+			continue
+		}
+		cfg.Slack.AppToken = token
+		prompted["slack.app_token"] = token
+		printOK("Slack app token format OK")
+		break
+	}
+
+	// GitHub token
+	fmt.Fprintln(stderr)
+	fmt.Fprintln(stderr, "  GitHub token (ghp_... or github_pat_...):")
+	fmt.Fprintln(stderr, "  Generate at: https://github.com/settings/tokens")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := promptHidden("Token: ")
+		if token == "" {
+			printFail("GitHub token is required")
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for GitHub token")
+			}
+			continue
+		}
+		username, err := checkGitHubToken(token)
+		if err != nil {
+			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for GitHub token")
+			}
+			continue
+		}
+		cfg.GitHub.Token = token
+		prompted["github.token"] = token
+		printOK("GitHub token valid (user: %s)", username)
+		break
+	}
+
+	// Redis address
+	fmt.Fprintln(stderr)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		addr := promptLine("Redis address: ")
+		if addr == "" {
+			printFail("Redis address is required")
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Redis address")
+			}
+			continue
+		}
+		if err := checkRedis(addr); err != nil {
+			printFail("Redis connect failed: %v (attempt %d/%d)", err, attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Redis")
+			}
+			continue
+		}
+		cfg.Redis.Addr = addr
+		prompted["redis.addr"] = addr
+		printOK("Redis connected")
+		break
+	}
+
+	// Providers
+	fmt.Fprintln(stderr)
+	agents := sortedAgentNames(cfg)
+	fmt.Fprintln(stderr, "  Available providers:")
+	for i, name := range agents {
+		fmt.Fprintf(stderr, "    %d) %s\n", i+1, name)
+	}
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		input := promptLine("Select (comma-separated, e.g. 1,2): ")
+		selected := parseSelection(input, agents)
+		if len(selected) == 0 {
+			printFail("At least one provider is required (attempt %d/%d)", attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for providers")
+			}
+			continue
+		}
+		cfg.Providers = selected
+		prompted["providers"] = selected
+		break
+	}
+
+	return nil
 }
