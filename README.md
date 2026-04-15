@@ -93,17 +93,15 @@ Redis 架構圖、External Worker 依賴、Docker/K8s 部署步驟見 [docs/depl
 
 | 方式 | 範例 | 說明 |
 |------|------|------|
-| `@bot` 提及 | 在 thread 中 `@bot` | 讀取 thread 所有前序訊息 |
-| `/triage` | `/triage` | 互動選 repo |
-| `/triage` + repo | `/triage owner/repo` | 跳過 repo 選擇 |
-| `/triage` + repo + branch | `/triage owner/repo@main` | 直接開始分析 |
+| `@bot` 提及 | 在 thread 中 `@bot` | 讀取 thread 所有前序訊息，主要觸發方式 |
+| `/triage` | `/triage` | 顯示使用提示（因 Slack 限制無法偵測 thread context） |
 
 Bot 只在 **thread 中** 運作。在 channel 直接觸發會提示「請在對話串中使用」。
 
 ## 測試
 
 ```bash
-go test ./...   # 150 tests (Redis tests auto-skip if no Redis)
+go test ./...   # 215 tests (Redis tests auto-skip if no Redis)
 ```
 
 ## License
