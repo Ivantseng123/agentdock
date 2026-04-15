@@ -15,66 +15,86 @@ AgentDock currently has `/healthz` (liveness) and `/jobs` (JSON status) endpoint
 - **Endpoint**: `/metrics` on the existing HTTP server (port 8080), alongside `/healthz` and `/jobs`.
 - **Dashboard delivery**: Grafana ConfigMap with `grafana_dashboard: "1"` label for sidecar auto-loading (GitOps).
 - **Scrape config**: Both ServiceMonitor CRD and pod annotations provided; user selects based on cluster setup.
+- **App-only collection**: ALL metrics are collected on the app pod. Workers have zero prometheus dependency — they may run on coworkers' machines and must stay lean. Worker data reaches the app via existing StatusBus/ResultBus/JobStore mechanisms.
+- **GaugeFunc for state gauges**: `queue_depth`, `worker_active`, `worker_idle` use `prometheus.GaugeFunc` — computed on scrape from `JobQueue.QueueDepth()` and `JobQueue.ListWorkers()` + `JobStore.ListAll()`. No Inc/Dec drift risk.
+- **Clock skew avoidance**: All duration calculations use app pod's clock only. `request_duration = time.Now() - job.SubmittedAt` in ResultListener. Never subtract worker-side timestamps from app-side timestamps.
+- **No Redis metrics**: Redis transport latency is the infra layer's concern (redis_exporter). `external_duration_seconds` only covers `service="slack"` and `service="github"`.
+- **PrepareSeconds in StatusReport**: Worker computes repo prepare time locally and sends it via the existing `StatusReport` struct. App reads it from `state.AgentStatus.PrepareSeconds`.
 
 ## Architecture
 
 ```
 internal/metrics/metrics.go
-  ├── Register()              # called once from main
+  ├── Register(queue, store)  # called once from app.go, receives deps for GaugeFunc
   ├── Request* counters/histograms
-  ├── Queue* gauges/histograms
+  ├── Queue* GaugeFunc/histograms
   ├── Agent* counters/histograms
   ├── Issue* counters
-  ├── Handler* counters/gauges
+  ├── Handler* counters
   ├── Watchdog* counters
   ├── External* histograms/counters
-  └── Worker* gauges
+  └── Worker* GaugeFunc
 
 cmd/agentdock/app.go
   └── http.Handle("/metrics", promhttp.Handler())
 
-Instrumentation points:
-  slack/handler.go      → request_total, dedup, rate_limit, concurrent
-  bot/workflow.go        → request_duration (end-to-end timer started here)
-  bot/result_listener.go → issue_created, issue_rejected, issue_retry, request_duration (observed here)
-  worker/pool.go         → worker_active, worker_idle
-  worker/executor.go     → agent_execution, prepare_duration, agent cost/tokens
+Instrumentation points (ALL on app pod):
+  slack/handler.go       → request_total, dedup_rejections, rate_limit
+  bot/result_listener.go → request_duration, issue_created, issue_rejected,
+                           agent metrics (from state.AgentStatus),
+                           queue_wait (from state.WaitTime),
+                           queue_job_duration (time.Now() - job.SubmittedAt)
+  bot/retry_handler.go   → issue_retry
+  queue/coordinator.go   → queue_submitted
   queue/watchdog.go      → watchdog_kills
-  queue/*.go             → queue_depth, queue_submitted, queue_wait, job_duration
-  slack/client.go        → external_duration (slack)
-  github/issue.go        → external_duration (github)
-  queue/redis_*.go       → external_duration (redis)
+  slack/client.go        → external_duration/errors (slack)
+  github/issue.go        → external_duration/errors (github)
 ```
 
-## Metrics Definition (24 custom metrics)
+## Wire Format Change
+
+### StatusReport (internal/queue/interface.go)
+
+Add one field:
+
+```go
+type StatusReport struct {
+    // ... existing fields ...
+    PrepareSeconds float64 `json:"prepare_seconds,omitempty"` // NEW: repo clone/fetch duration
+}
+```
+
+Worker sets this in `executor.go` after `deps.repoCache.Prepare()` returns, before sending the first StatusReport.
+
+## Metrics Definition (23 custom metrics)
 
 ### Request Pipeline (subsystem: `request`)
 
 | Metric | Type | Labels | Source | Description |
 |--------|------|--------|--------|-------------|
 | `agentdock_request_total` | Counter | `status` (accepted/dedup/rate_limited) | `slack/handler.go` HandleTrigger | Incoming triage requests |
-| `agentdock_request_duration_seconds` | Histogram | - | `bot/result_listener.go` handleResult computes `result.FinishedAt - job.SubmittedAt` | End-to-end time from Slack trigger to issue creation |
+| `agentdock_request_duration_seconds` | Histogram | - | `bot/result_listener.go` handleResult: `time.Now() - job.SubmittedAt` | End-to-end system processing time |
 
 ### Queue (subsystem: `queue`)
 
 | Metric | Type | Labels | Source | Description |
 |--------|------|--------|--------|-------------|
-| `agentdock_queue_depth` | Gauge | - | `queue/inmem_jobqueue.go` Submit/Ack, `queue/redis_jobqueue.go` Submit/Ack | Current pending job count |
+| `agentdock_queue_depth` | GaugeFunc | - | `JobQueue.QueueDepth()` on scrape | Current pending job count |
 | `agentdock_queue_submitted_total` | Counter | `priority` | `queue/coordinator.go` Submit | Jobs submitted to queue |
-| `agentdock_queue_wait_seconds` | Histogram | - | `worker/pool.go` executeWithTracking (now - job.SubmittedAt) | Time from submission to worker pickup |
-| `agentdock_queue_job_duration_seconds` | Histogram | `status` (completed/failed) | `worker/pool.go` executeWithTracking (after executeJob returns) | Total job execution time |
+| `agentdock_queue_wait_seconds` | Histogram | - | `bot/result_listener.go` from `state.WaitTime` | Time from submission to worker pickup |
+| `agentdock_queue_job_duration_seconds` | Histogram | `status` (completed/failed) | `bot/result_listener.go`: `time.Now() - job.SubmittedAt` | Total job lifecycle time |
 
 ### Agent (subsystem: `agent`)
 
 | Metric | Type | Labels | Source | Description |
 |--------|------|--------|--------|-------------|
-| `agentdock_agent_execution_seconds` | Histogram | `provider` | `worker/executor.go` executeJob (FinishedAt - StartedAt) | Agent process runtime |
-| `agentdock_agent_executions_total` | Counter | `provider`, `status` (success/timeout/error/fallback) | `bot/agent.go` Run (per provider attempt) | Agent execution outcomes |
-| `agentdock_agent_prepare_seconds` | Histogram | - | `worker/executor.go` executeJob (repo prepare phase) | Time spent cloning/fetching repo |
-| `agentdock_agent_tool_calls` | Histogram | `provider` | `worker/pool.go` from StatusReport.ToolCalls at job completion | Tool calls per execution |
-| `agentdock_agent_files_read` | Histogram | `provider` | `worker/pool.go` from StatusReport.FilesRead at job completion | Files read per execution |
-| `agentdock_agent_cost_usd` | Counter | `provider` | `worker/pool.go` from StatusReport.CostUSD at job completion | Cumulative LLM spend (USD) |
-| `agentdock_agent_tokens_total` | Counter | `provider`, `type` (input/output) | `worker/pool.go` from StatusReport at job completion | Cumulative token usage |
+| `agentdock_agent_execution_seconds` | Histogram | `provider` | `bot/result_listener.go` from `state.AgentStatus`: `result arrived - state.StartedAt - prepareSeconds` | Agent process runtime (excluding prepare) |
+| `agentdock_agent_executions_total` | Counter | `provider`, `status` (success/error/timeout) | `bot/result_listener.go` from `state.AgentStatus.AgentCmd` + result status | Agent execution outcomes |
+| `agentdock_agent_prepare_seconds` | Histogram | - | `bot/result_listener.go` from `state.AgentStatus.PrepareSeconds` | Time spent cloning/fetching repo |
+| `agentdock_agent_tool_calls` | Histogram | `provider` | `bot/result_listener.go` from `state.AgentStatus.ToolCalls` | Tool calls per execution |
+| `agentdock_agent_files_read` | Histogram | `provider` | `bot/result_listener.go` from `state.AgentStatus.FilesRead` | Files read per execution |
+| `agentdock_agent_cost_usd` | Counter | `provider` | `bot/result_listener.go` from `state.AgentStatus.CostUSD` | Cumulative LLM spend (USD) |
+| `agentdock_agent_tokens_total` | Counter | `provider`, `type` (input/output) | `bot/result_listener.go` from `state.AgentStatus` | Cumulative token usage |
 
 ### Issue (subsystem: `issue`)
 
@@ -90,7 +110,6 @@ Instrumentation points:
 |--------|------|--------|--------|-------------|
 | `agentdock_handler_dedup_rejections_total` | Counter | - | `slack/handler.go` HandleTrigger (isDuplicate=true) | Dedup rejections |
 | `agentdock_handler_rate_limit_total` | Counter | `type` (user/channel) | `slack/handler.go` HandleTrigger (allow=false) | Rate limit rejections |
-| `agentdock_handler_concurrent_requests` | Gauge | - | `bot/workflow.go` HandleTrigger entry/exit | In-flight triage requests |
 
 ### Watchdog (subsystem: `watchdog`)
 
@@ -102,15 +121,24 @@ Instrumentation points:
 
 | Metric | Type | Labels | Source | Description |
 |--------|------|--------|--------|-------------|
-| `agentdock_external_duration_seconds` | Histogram | `service` (slack/github/redis), `operation` | Call sites in `slack/client.go`, `github/issue.go`, `queue/redis_*.go` | External API latency |
+| `agentdock_external_duration_seconds` | Histogram | `service` (slack/github), `operation` | `slack/client.go`, `github/issue.go` | External API latency |
 | `agentdock_external_errors_total` | Counter | `service`, `operation` | Same call sites, on error | External API errors |
+
+**Operation label values (bounded, 4 total):**
+
+| service | operation | Methods |
+|---------|-----------|---------|
+| `slack` | `fetch_message` | FetchMessage (incl. file downloads) |
+| `slack` | `post_message` | PostMessage / UpdateMessage / PostMessageWithButton |
+| `github` | `create_issue` | CreateIssue |
+| `github` | `list_repos` | ListRepos |
 
 ### Worker (subsystem: `worker`)
 
 | Metric | Type | Labels | Source | Description |
 |--------|------|--------|--------|-------------|
-| `agentdock_worker_active` | Gauge | - | `worker/pool.go` executeWithTracking enter/exit | Busy workers |
-| `agentdock_worker_idle` | Gauge | - | Derived: WorkerCount - active | Idle workers |
+| `agentdock_worker_active` | GaugeFunc | - | On scrape: count jobs with status Running from `JobStore.ListAll()` | Busy workers |
+| `agentdock_worker_idle` | GaugeFunc | - | On scrape: `len(ListWorkers()) - active` | Idle workers |
 
 ### Go Runtime (built-in, no custom code)
 
@@ -172,7 +200,7 @@ Instrumentation points:
 |-------|------|-------|
 | Execution Time by Provider | Time series | P50/P95 of `agentdock_agent_execution_seconds` by `provider` |
 | Provider Success Rate | Time series | `sum by (provider) (rate(agentdock_agent_executions_total{status="success"}[$__rate_interval])) / sum by (provider) (rate(agentdock_agent_executions_total[$__rate_interval]))` |
-| Fallback Count | Time series | `sum by (provider) (rate(agentdock_agent_executions_total{status="fallback"}[$__rate_interval]))` |
+| Provider Distribution | Time series | `sum by (provider) (rate(agentdock_agent_executions_total[$__rate_interval]))` |
 | Avg Tool Calls | Time series | `sum by (provider) (rate(agentdock_agent_tool_calls_sum[$__rate_interval])) / sum by (provider) (rate(agentdock_agent_tool_calls_count[$__rate_interval]))` |
 | Cumulative Cost | Stat | `sum by (provider) (agentdock_agent_cost_usd)` |
 | Token Usage | Time series | `sum by (provider, type) (rate(agentdock_agent_tokens_total[$__rate_interval]))` |
@@ -238,7 +266,7 @@ Both provided — use whichever matches the cluster's Prometheus discovery metho
 
 | File | Purpose |
 |------|---------|
-| `internal/metrics/metrics.go` | All metric definitions + `Register()` |
+| `internal/metrics/metrics.go` | All metric definitions + `Register(queue, store)` |
 | `deploy/metrics/servicemonitor.yaml` | Prometheus Operator CRD |
 | `deploy/grafana/agentdock-dashboard.json` | Grafana dashboard JSON |
 | `deploy/grafana/dashboard-configmap.yaml` | ConfigMap wrapping dashboard JSON |
@@ -248,20 +276,17 @@ Both provided — use whichever matches the cluster's Prometheus discovery metho
 | File | Change |
 |------|--------|
 | `go.mod` | Add `github.com/prometheus/client_golang` |
-| `cmd/agentdock/app.go` | Import metrics, call `Register()`, add `/metrics` handler |
+| `cmd/agentdock/app.go` | Import metrics, call `Register(queue, store)`, add `/metrics` handler |
+| `internal/queue/interface.go` | Add `PrepareSeconds float64` to StatusReport |
+| `internal/worker/executor.go` | Compute PrepareSeconds after repo prepare, set on first StatusReport |
 | `internal/slack/handler.go` | Instrument: request_total, dedup_rejections, rate_limit |
-| `internal/bot/workflow.go` | Instrument: request_duration timer start, concurrent_requests gauge |
-| `internal/bot/result_listener.go` | Instrument: issue_created, issue_rejected, request_duration observe |
+| `internal/bot/result_listener.go` | Instrument: request_duration, queue_wait, job_duration, agent metrics (from state.AgentStatus), issue_created, issue_rejected |
 | `internal/bot/retry_handler.go` | Instrument: issue_retry |
-| `internal/bot/agent.go` | Instrument: agent_executions_total (per provider attempt) |
-| `internal/worker/pool.go` | Instrument: worker_active/idle, queue_wait, job_duration, agent cost/tokens from StatusReport |
-| `internal/worker/executor.go` | Instrument: agent_execution_seconds, agent_prepare_seconds |
-| `internal/queue/watchdog.go` | Instrument: watchdog_kills |
 | `internal/queue/coordinator.go` | Instrument: queue_submitted |
-| `internal/queue/inmem_jobqueue.go` | Instrument: queue_depth (Inc on Submit, Dec on Ack) |
-| `internal/queue/redis_jobqueue.go` | Instrument: queue_depth + external_duration (redis) |
-| `internal/slack/client.go` | Instrument: external_duration (slack operations) |
-| `internal/github/issue.go` | Instrument: external_duration (github) |
+| `internal/queue/watchdog.go` | Instrument: watchdog_kills |
+| `internal/slack/client.go` | Instrument: external_duration/errors (slack: fetch_message, post_message) |
+| `internal/github/issue.go` | Instrument: external_duration/errors (github: create_issue) |
+| `internal/github/discovery.go` | Instrument: external_duration/errors (github: list_repos) |
 | `deploy/base/deployment.yaml` | Add prometheus annotations |
 
 ## Testing
@@ -276,3 +301,5 @@ Both provided — use whichever matches the cluster's Prometheus discovery metho
 - Distributed tracing (OpenTelemetry) — future work
 - Custom Prometheus pushgateway for batch jobs — not needed, scrape-based is sufficient
 - Metrics cardinality management — label set is bounded by design (no unbounded labels like channel_id or user_id)
+- Redis transport metrics — delegated to redis_exporter (infra layer)
+- Worker-side metrics collection — workers are lean binaries with zero prometheus dependency
