@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.7](https://github.com/Ivantseng123/agentdock/compare/v0.2.6...v0.2.7) (2026-04-15)
+
+
+### Features
+
+* add latest and major-only docker tags ([91c6139](https://github.com/Ivantseng123/agentdock/commit/91c6139fd1cbb3fc90f9e3f2ecf136b423f0f2f6))
+
+
+### Bug Fixes
+
+* address review feedback from grill-me session ([657fe7a](https://github.com/Ivantseng123/agentdock/commit/657fe7aba12981cf7f74d3081107254983784bde))
+* improve worker observability, security, and reliability ([4eaf9da](https://github.com/Ivantseng123/agentdock/commit/4eaf9dace161b413137ba8977b63cbeb8104b3a9))
+* improve worker observability, security, and reliability ([8a52d05](https://github.com/Ivantseng123/agentdock/commit/8a52d05d629ffa040b333afbc2f0402c295c612d))
+
 ## [0.2.6](https://github.com/Ivantseng123/agentdock/compare/v0.2.5...v0.2.6) (2026-04-15)
 
 
