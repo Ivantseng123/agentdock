@@ -114,6 +114,7 @@ func marshalYAMLWithComments(cfg *config.Config) ([]byte, error) {
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	tmp := path + ".tmp"
+	os.Remove(tmp) // Ensure WriteFile creates a new file so mode takes effect.
 	if err := os.WriteFile(tmp, data, mode); err != nil {
 		return err
 	}

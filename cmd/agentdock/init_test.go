@@ -74,3 +74,31 @@ func TestInitNonInteractive_ForceOverwrites(t *testing.T) {
 		t.Error("existing content should have been overwritten")
 	}
 }
+
+func TestAtomicWrite_RemovesStaleTmp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	tmp := path + ".tmp"
+
+	// Simulate stale .tmp from a previous failed write with lax permissions.
+	if err := os.WriteFile(tmp, []byte("stale"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := atomicWrite(path, []byte("fresh"), 0600); err != nil {
+		t.Fatalf("atomicWrite: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Errorf("file mode = %o, want 0600", info.Mode().Perm())
+	}
+
+	// .tmp should not linger.
+	if _, err := os.Stat(tmp); err == nil {
+		t.Error(".tmp file should not exist after successful atomicWrite")
+	}
+}
