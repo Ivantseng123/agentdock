@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7](https://github.com/Ivantseng123/agentdock/compare/v0.2.6...v0.2.7) (2026-04-15)
+
+
+### Features
+
+* add latest and major-only docker tags ([91c6139](https://github.com/Ivantseng123/agentdock/commit/91c6139fd1cbb3fc90f9e3f2ecf136b423f0f2f6))
+
 ## [0.2.6](https://github.com/Ivantseng123/agentdock/compare/v0.2.5...v0.2.6) (2026-04-15)
 
 
