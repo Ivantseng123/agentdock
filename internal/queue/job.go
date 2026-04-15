@@ -68,7 +68,15 @@ type JobResult struct {
 
 type AttachmentReady struct {
 	Filename string `json:"filename"`
-	URL      string `json:"url"`
+	Data     []byte `json:"data"`
+	MimeType string `json:"mime_type"`
+}
+
+type AttachmentPayload struct {
+	Filename string
+	MimeType string
+	Data     []byte
+	Size     int64
 }
 
 type JobState struct {
