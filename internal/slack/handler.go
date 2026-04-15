@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"agentdock/internal/metrics"
 )
 
 // TriggerEvent represents an @bot mention or /triage command.
@@ -48,20 +50,27 @@ func NewHandler(cfg HandlerConfig) *Handler {
 
 func (h *Handler) HandleTrigger(event TriggerEvent) bool {
 	if h.threadDedup.isDuplicate(event.ChannelID, event.ThreadTS) {
+		metrics.RequestTotal.WithLabelValues("dedup").Inc()
+		metrics.HandlerDedupRejectionsTotal.Inc()
 		return false
 	}
 	if !h.userLimit.allow(event.UserID) {
+		metrics.RequestTotal.WithLabelValues("rate_limited").Inc()
+		metrics.HandlerRateLimitTotal.WithLabelValues("user").Inc()
 		if h.onRejected != nil {
 			h.onRejected(event, "rate limit exceeded")
 		}
 		return false
 	}
 	if !h.channelLimit.allow(event.ChannelID) {
+		metrics.RequestTotal.WithLabelValues("rate_limited").Inc()
+		metrics.HandlerRateLimitTotal.WithLabelValues("channel").Inc()
 		if h.onRejected != nil {
 			h.onRejected(event, "channel rate limit exceeded")
 		}
 		return false
 	}
+	metrics.RequestTotal.WithLabelValues("accepted").Inc()
 	go h.onEvent(event)
 	return true
 }
