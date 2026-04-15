@@ -48,9 +48,16 @@ type Loader struct {
 // NewLoader builds a Loader from a config file path and an optional baked-in
 // skill directory. Pass an empty bakedInDir to skip baked-in loading.
 func NewLoader(configPath, bakedInDir string) (*Loader, error) {
-	cfg, err := LoadSkillsConfig(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("load skills config: %w", err)
+	var cfg *SkillsFileConfig
+	if configPath == "" {
+		cfg = &SkillsFileConfig{}
+		applySkillsDefaults(cfg)
+	} else {
+		var err error
+		cfg, err = LoadSkillsConfig(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("load skills config: %w", err)
+		}
 	}
 
 	bakedIn := make(map[string]*SkillFiles)
