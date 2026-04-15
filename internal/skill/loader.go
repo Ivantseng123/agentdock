@@ -43,11 +43,12 @@ type Loader struct {
 	bakedIn map[string]*SkillFiles // keyed by skill name
 	fetcher fetchFunc
 	group   singleflight.Group
+	logger  *slog.Logger
 }
 
 // NewLoader builds a Loader from a config file path and an optional baked-in
 // skill directory. Pass an empty bakedInDir to skip baked-in loading.
-func NewLoader(configPath, bakedInDir string) (*Loader, error) {
+func NewLoader(configPath, bakedInDir string, logger *slog.Logger) (*Loader, error) {
 	var cfg *SkillsFileConfig
 	if configPath == "" {
 		cfg = &SkillsFileConfig{}
@@ -62,7 +63,7 @@ func NewLoader(configPath, bakedInDir string) (*Loader, error) {
 
 	bakedIn := make(map[string]*SkillFiles)
 	if bakedInDir != "" {
-		bakedIn = loadBakedInSkills(bakedInDir)
+		bakedIn = loadBakedInSkills(bakedInDir, logger)
 	}
 
 	return &Loader{
@@ -70,6 +71,7 @@ func NewLoader(configPath, bakedInDir string) (*Loader, error) {
 		cache:   make(map[string]*cacheEntry),
 		bakedIn: bakedIn,
 		fetcher: FetchPackage,
+		logger:  logger,
 	}, nil
 }
 
@@ -129,7 +131,7 @@ func (l *Loader) LoadAll(ctx context.Context) (map[string]*queue.SkillPayload, e
 			}
 
 		default:
-			slog.Warn("skill: unknown type", "type", sc.Type)
+			l.logger.Warn("未知技能類型", "phase", "失敗", "type", sc.Type)
 		}
 	}
 
@@ -194,7 +196,7 @@ func (l *Loader) loadLocal(sc *SkillConfig, result map[string]*queue.SkillPayloa
 
 	sf, ok := l.bakedIn[skillName]
 	if !ok {
-		slog.Warn("skill: local skill not found in baked-in map", "name", skillName)
+		l.logger.Warn("本地技能未找到", "phase", "失敗", "name", skillName)
 		return nil
 	}
 	return addSkill(result, sf.Name, "local:"+sc.Path, sf, sources)
@@ -252,7 +254,7 @@ func (l *Loader) loadRemote(ctx context.Context, sc *SkillConfig, cacheKey strin
 	})
 
 	if fetchErr != nil {
-		slog.Warn("skill: fetch failed, recording negative cache", "pkg", cacheKey, "err", fetchErr)
+		l.logger.Warn("技能下載失敗，記錄負向快取", "phase", "失敗", "pkg", cacheKey, "error", fetchErr)
 		l.setCacheEntry(cacheKey, &cacheEntry{
 			status:    cacheFailed,
 			reason:    fetchErr.Error(),
@@ -266,7 +268,7 @@ func (l *Loader) loadRemote(ctx context.Context, sc *SkillConfig, cacheKey strin
 
 	// Validate each skill's files.
 	if valErr := l.validateSkillsBatch(sfr.skills); valErr != nil {
-		slog.Warn("skill: validation failed, recording negative cache", "pkg", cacheKey, "err", valErr)
+		l.logger.Warn("技能驗證失敗，記錄負向快取", "phase", "失敗", "pkg", cacheKey, "error", valErr)
 		l.setCacheEntry(cacheKey, &cacheEntry{
 			status:    cacheInvalid,
 			reason:    valErr.Error(),
@@ -322,12 +324,12 @@ func (l *Loader) validateSkillsBatch(skills []*SkillFiles) error {
 
 // loadBakedInSkills scans dir for subdirectories, each expected to be one
 // skill (must contain SKILL.md). Returns a name → SkillFiles map.
-func loadBakedInSkills(dir string) map[string]*SkillFiles {
+func loadBakedInSkills(dir string, logger *slog.Logger) map[string]*SkillFiles {
 	result := make(map[string]*SkillFiles)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		slog.Warn("skill: cannot read baked-in dir", "dir", dir, "err", err)
+		logger.Warn("無法讀取內建技能目錄", "phase", "失敗", "dir", dir, "error", err)
 		return result
 	}
 
@@ -338,7 +340,7 @@ func loadBakedInSkills(dir string) map[string]*SkillFiles {
 		skillDir := filepath.Join(dir, entry.Name())
 		sf, err := loadSingleBakedIn(skillDir)
 		if err != nil {
-			slog.Warn("skill: skip baked-in skill", "dir", skillDir, "err", err)
+			logger.Warn("跳過內建技能", "phase", "失敗", "dir", skillDir, "error", err)
 			continue
 		}
 		result[sf.Name] = sf

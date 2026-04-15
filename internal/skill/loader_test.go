@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,7 @@ func newTestLoader(cfg *SkillsFileConfig, fetcher fetchFunc, bakedIn map[string]
 		cache:   make(map[string]*cacheEntry),
 		bakedIn: bakedIn,
 		fetcher: fetcher,
+		logger:  slog.Default(),
 	}
 	return l
 }

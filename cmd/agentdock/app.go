@@ -85,7 +85,8 @@ func runApp(cfg *config.Config) error {
 	if _, err := os.Stat("/opt/agents/skills"); err == nil {
 		bakedInDir = "/opt/agents/skills"
 	}
-	skillLoader, err := skill.NewLoader(cfg.SkillsConfig, bakedInDir)
+	skillLogger := logging.ComponentLogger(slog.Default(), logging.CompSkill)
+	skillLoader, err := skill.NewLoader(cfg.SkillsConfig, bakedInDir, skillLogger)
 	if err != nil {
 		return fmt.Errorf("failed to create skill loader: %w", err)
 	}

@@ -2,6 +2,7 @@ package skill
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,7 @@ cache:
 		fetcher: func(ctx context.Context, pkg, version string) ([]*SkillFiles, error) {
 			return nil, nil
 		},
+		logger: slog.Default(),
 	}
 
 	stop, err := loader.StartWatcher(cfgPath)

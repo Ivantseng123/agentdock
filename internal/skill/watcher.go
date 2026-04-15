@@ -2,7 +2,6 @@ package skill
 
 import (
 	"context"
-	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -68,9 +67,9 @@ func (l *Loader) watchLoop(ctx context.Context, watcher *fsnotify.Watcher, confi
 			}
 			debounceTimer = time.AfterFunc(debounceDuration, func() {
 				if err := l.ReloadConfig(configPath); err != nil {
-					slog.Error("skill.config_reload_failed", "path", configPath, "error", err)
+					l.logger.Error("技能設定重新載入失敗", "phase", "失敗", "path", configPath, "error", err)
 				} else {
-					slog.Info("skill.config_reloaded", "path", configPath)
+					l.logger.Info("技能設定已重新載入", "phase", "完成", "path", configPath)
 				}
 			})
 
@@ -78,7 +77,7 @@ func (l *Loader) watchLoop(ctx context.Context, watcher *fsnotify.Watcher, confi
 			if !ok {
 				return
 			}
-			slog.Error("skill.watcher_error", "error", err)
+			l.logger.Error("技能監視器錯誤", "phase", "失敗", "error", err)
 		}
 	}
 }
