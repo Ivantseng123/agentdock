@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.6](https://github.com/Ivantseng123/agentdock/compare/v0.2.5...v0.2.6) (2026-04-15)
+
+
+### Features
+
+* add preflight check functions (redis, github, agent cli) ([edda6bf](https://github.com/Ivantseng123/agentdock/commit/edda6bf1b4372967dd419cb657ffb3b25f1e6cc4))
+* add preflight prompt helpers and runPreflight orchestrator ([c8c27ce](https://github.com/Ivantseng123/agentdock/commit/c8c27ceb80a007344bc31511f6907ff403e845b7))
+* wire preflight into worker startup ([3ee8d36](https://github.com/Ivantseng123/agentdock/commit/3ee8d36ea1727c213f735ef3f51a4b1a545e2c65))
+
+
+### Bug Fixes
+
+* add HTTP timeout and non-2xx status handling to checkGitHubToken ([666be4f](https://github.com/Ivantseng123/agentdock/commit/666be4fb702e64e98be0dd5221b18a0097cccee3))
+* handle empty skills_config path in NewLoader ([cbacaf3](https://github.com/Ivantseng123/agentdock/commit/cbacaf31cf3fd1f5d9179a6d6436e5d6b571496d))
+* handle empty skills_config path in NewLoader ([28d43e5](https://github.com/Ivantseng123/agentdock/commit/28d43e52b59d12719e043431d1a805765d9c412f))
+
 ## [0.2.5](https://github.com/Ivantseng123/agentdock/compare/v0.2.4...v0.2.5) (2026-04-14)
 
 
