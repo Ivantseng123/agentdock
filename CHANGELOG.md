@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0](https://github.com/Ivantseng123/agentdock/compare/v0.3.0...v1.0.0) (2026-04-16)
+
+
+### Features
+
+* add Grafana dashboard ConfigMap for sidecar auto-loading ([995df33](https://github.com/Ivantseng123/agentdock/commit/995df333279019877d3d3ea156d9d6e359b0ebba))
+* add Grafana dashboard JSON (6 rows, 27 panels) ([be3af34](https://github.com/Ivantseng123/agentdock/commit/be3af344670e61c57af2e43e59f098d533f1fb89))
+* add internal/metrics package with 23 Prometheus metric definitions ([98090aa](https://github.com/Ivantseng123/agentdock/commit/98090aaa2dccdcf45b168d3361aa3149adc5521d))
+* add PrepareSeconds to StatusReport and JobResult ([02421fe](https://github.com/Ivantseng123/agentdock/commit/02421fedee73e708e53ae9c6777d957ee612e017))
+* add Prometheus scrape annotations and ServiceMonitor ([c2ee84c](https://github.com/Ivantseng123/agentdock/commit/c2ee84c75dcb880bf306d1a8709c1fa7628cf26e))
+* instrument handler with request_total, dedup, rate_limit metrics ([1a161a9](https://github.com/Ivantseng123/agentdock/commit/1a161a9eaf9c95ca3b186ed75e02c3390bf46218))
+* instrument result_listener with duration, agent, and issue metrics ([62fd510](https://github.com/Ivantseng123/agentdock/commit/62fd51028b6fc735733bd5426b157aa7c4bfcc08))
+* instrument retry, queue_submitted, and watchdog_kills metrics ([e384621](https://github.com/Ivantseng123/agentdock/commit/e384621c7026be8b605c618ebfadb6e8b94e7d16))
+* instrument Slack and GitHub API calls with external_duration metrics ([6ca9157](https://github.com/Ivantseng123/agentdock/commit/6ca91570f643d0eb9a779f0bdfa89b1dac4fc847))
+* wire /metrics endpoint with promhttp.Handler() ([bb47ba4](https://github.com/Ivantseng123/agentdock/commit/bb47ba4158872eb9e6e85078447c117d07064243))
+
 ## [0.3.0](https://github.com/Ivantseng123/agentdock/compare/v0.2.7...v0.3.0) (2026-04-15)
 
 
