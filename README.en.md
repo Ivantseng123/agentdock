@@ -19,7 +19,20 @@ Single Go binary, supports both in-memory and Redis transports. Workers can run 
 
 ## Quick Start
 
-First time? Generate a starter config with `init`:
+**macOS / Linux (Homebrew, recommended for team developers):**
+
+```bash
+brew tap Ivantseng123/tap
+brew install agentdock
+agentdock init -i   # interactive prompts for Slack / GitHub tokens
+agentdock app -c config.yaml
+```
+
+Upgrade: `brew upgrade agentdock`.
+
+> Homebrew installs only the binary. The `app`/`worker` subcommands still need a config and external CLIs (`claude`, `opencode`, `codex`, `gemini`). For production deployment, use the Docker image `ghcr.io/ivantseng123/agentdock`.
+
+**From source:**
 
 ```bash
 go build -o agentdock ./cmd/agentdock/
