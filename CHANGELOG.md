@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/Ivantseng123/agentdock/compare/v1.1.0...v1.1.1) (2026-04-16)
+
+
+### Bug Fixes
+
+* **release:** correct brews PR flow — head on feature branch, base on main ([332bf9a](https://github.com/Ivantseng123/agentdock/commit/332bf9a260b63f515bf4e9be6f87dfcdd70021c8)), closes [#29](https://github.com/Ivantseng123/agentdock/issues/29)
+
 ## [1.1.0](https://github.com/Ivantseng123/agentdock/compare/v1.0.1...v1.1.0) (2026-04-16)
 
 
