@@ -92,6 +92,30 @@ docker_manifests:
       - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
       - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
 
+brews:
+  - name: agentdock
+    repository:
+      owner: Ivantseng123
+      name: homebrew-tap
+      branch: main
+      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+      pull_request:
+        enabled: true
+        branch: "bump-agentdock-{{.Tag}}"
+    directory: Formula
+    commit_author:
+      name: Ivantseng123
+      email: 170440613+Ivantseng123@users.noreply.github.com
+    commit_msg_template: 'chore: bump agentdock to {{ .Tag }}'
+    description: AgentDock — Slack-driven LLM agent orchestrator
+    homepage: https://github.com/Ivantseng123/agentdock
+    license: MIT
+    install: |
+      bin.install "agentdock"
+    test: |
+      system "#{bin}/agentdock", "--version"
+    skip_upload: auto
+
 release:
   github:
     owner: Ivantseng123
