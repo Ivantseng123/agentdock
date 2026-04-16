@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/Ivantseng123/agentdock/compare/v1.0.0...v1.0.1) (2026-04-16)
+
+
+### Bug Fixes
+
+* **validate:** skip workers.count check when transport is redis ([f1a5212](https://github.com/Ivantseng123/agentdock/commit/f1a5212f8d478f73ae72d0aff51af9114164eb6b)), closes [#42](https://github.com/Ivantseng123/agentdock/issues/42)
+
 ## [1.0.0](https://github.com/Ivantseng123/agentdock/compare/v0.3.0...v1.0.0) (2026-04-16)
 
 
