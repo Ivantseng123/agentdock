@@ -101,7 +101,6 @@ brews:
       token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
       pull_request:
         enabled: true
-        branch: "bump-agentdock-{{.Tag}}"
     directory: Formula
     commit_author:
       name: Ivantseng123
