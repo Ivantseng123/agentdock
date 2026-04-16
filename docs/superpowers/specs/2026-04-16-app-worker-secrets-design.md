@@ -101,11 +101,11 @@ type RunOptions struct {
 │  ├ secret_key: "aes-key"   │
 │  ├ secrets:                │
 │  │   GH_TOKEN: "ghp_xxx"  │
-│  │   K8S_TOKEN: "${K8S_T}" │  ← env var expansion
+│  │   K8S_TOKEN: "from-cfg" │  ← or via SECRET_K8S_TOKEN env (EnvOverrideMap)
 │  └ github.token: "ghp_x"  │  ← backward compat → secrets["GH_TOKEN"]
 │                            │
 │  Submit Job:               │
-│  1. Expand ${...}          │
+│  1. Resolve secrets map    │
 │  2. JSON marshal secrets   │
 │  3. AES-GCM encrypt        │
 │  4. Job.EncryptedSecrets   │
