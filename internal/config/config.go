@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -200,8 +201,18 @@ func applyDefaults(cfg *Config) {
 	if cfg.Queue.StatusInterval <= 0 {
 		cfg.Queue.StatusInterval = 5 * time.Second
 	}
+	if cfg.RepoCache.Dir == "" {
+		if cacheDir, err := os.UserCacheDir(); err == nil {
+			cfg.RepoCache.Dir = filepath.Join(cacheDir, "agentdock", "repos")
+		} else {
+			cfg.RepoCache.Dir = filepath.Join(os.TempDir(), "agentdock", "repos")
+		}
+	}
+	if cfg.RepoCache.MaxAge <= 0 {
+		cfg.RepoCache.MaxAge = 10 * time.Minute
+	}
 	if cfg.Attachments.TempDir == "" {
-		cfg.Attachments.TempDir = "/tmp/triage-attachments"
+		cfg.Attachments.TempDir = filepath.Join(os.TempDir(), "triage-attachments")
 	}
 	if cfg.Attachments.TTL <= 0 {
 		cfg.Attachments.TTL = 30 * time.Minute

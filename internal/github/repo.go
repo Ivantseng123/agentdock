@@ -158,6 +158,12 @@ func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
 	return nil
 }
 
+// WorktreeDir returns the base directory for worktrees, adjacent to the bare
+// repo cache. Callers should create subdirectories under this path.
+func (rc *RepoCache) WorktreeDir() string {
+	return filepath.Join(rc.dir, "worktrees")
+}
+
 // RemoveWorktree removes a worktree directory.
 func (rc *RepoCache) RemoveWorktree(worktreePath string) error {
 	cmd := exec.Command("git", "worktree", "remove", "--force", worktreePath)

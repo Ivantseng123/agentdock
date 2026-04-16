@@ -31,7 +31,11 @@ func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	worktreePath, err := os.MkdirTemp("", "triage-repo-*")
+	wtBase := a.cache.WorktreeDir()
+	if err := os.MkdirAll(wtBase, 0755); err != nil {
+		return "", fmt.Errorf("create worktree base dir: %w", err)
+	}
+	worktreePath, err := os.MkdirTemp(wtBase, "triage-repo-*")
 	if err != nil {
 		return "", fmt.Errorf("create worktree temp dir: %w", err)
 	}
