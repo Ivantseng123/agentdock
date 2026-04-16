@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/Ivantseng123/agentdock/compare/v1.0.1...v1.1.0) (2026-04-16)
+
+
+### Features
+
+* **release:** publish Homebrew formula to Ivantseng123/homebrew-tap ([30609f2](https://github.com/Ivantseng123/agentdock/commit/30609f2ddb3d5990f7a00846eda3d9303d87d129)), closes [#29](https://github.com/Ivantseng123/agentdock/issues/29)
+
+
+### Bug Fixes
+
+* **release:** drop unsupported pull_request.branch field ([0337514](https://github.com/Ivantseng123/agentdock/commit/03375146327e3f5bf74d13550a15324141b45d67))
+
 ## [1.0.1](https://github.com/Ivantseng123/agentdock/compare/v1.0.0...v1.0.1) (2026-04-16)
 
 
