@@ -32,6 +32,7 @@ archives:
     files:
       - README.md
       - README.en.md
+      - LICENSE
       - docs/MIGRATION-v1.md
 
 checksum:
