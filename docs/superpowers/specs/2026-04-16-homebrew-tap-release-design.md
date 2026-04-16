@@ -108,11 +108,12 @@ brews:
     repository:
       owner: Ivantseng123
       name: homebrew-tap
-      branch: main
+      branch: "bump-agentdock-{{.Tag}}"
       token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
       pull_request:
         enabled: true
-        branch: "bump-agentdock-{{.Tag}}"
+        base:
+          branch: main
     directory: Formula
     commit_author:
       name: Ivantseng123
@@ -129,7 +130,8 @@ brews:
 ```
 
 設計要點:
-- `pull_request.branch` 顯式指定 `bump-agentdock-{{.Tag}}`,與 tap auto-merge workflow 的 `startsWith(head.ref, 'bump-')` 條件對齊
+- **`repository.branch` 是 HEAD**(goreleaser push 檔案的 feature branch),**`pull_request.base.branch` 是 BASE**(PR 目標)。初版曾誤將兩者都設為 `main`,goreleaser 直推 main 後嘗試 main → main PR 失敗(`422 No commits between main and main`),audit trail 與 auto-merge 雙雙被旁路。源碼 reference:`goreleaser/goreleaser:internal/pipe/brew/brew.go`。
+- `repository.branch` 以 `{{.Tag}}` template 讓每次 release 都是獨立 branch,避免 race。
 - `commit_author.email` 使用 GitHub noreply 格式,數字 170440613 為 `Ivantseng123` 的 user ID(`gh api users/Ivantseng123 --jq '.id'` 已驗)
 - `skip_upload: auto` 於 tag 帶 prerelease 標記(如 `-rc1`)時跳過 brew 發佈
 - `install` 顯式寫一行可讀;`test` 依 issue 要求最小化
@@ -237,21 +239,21 @@ concurrency:
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
-    if: >-
-      github.event.pull_request.user.login == 'Ivantseng123'
-      && startsWith(github.event.pull_request.head.ref, 'bump-')
+    if: github.event.pull_request.user.login == 'Ivantseng123'
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
       - uses: Homebrew/actions/setup-homebrew@master
-      - name: Audit changed formulas
+      - name: Identify formula/cask changes and audit
+        id: audit
         run: |
           changed=$(gh pr view ${{ github.event.pull_request.number }} \
             --json files --jq '.files[].path' \
             | grep -E '^(Formula|Casks)/' || true)
           if [ -z "$changed" ]; then
-            echo "No formula or cask changes; skipping audit"
+            echo "No formula or cask changes; skipping auto-merge"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           for f in $changed; do
@@ -259,9 +261,11 @@ jobs:
             brew audit --strict --online "$f"
             echo "::endgroup::"
           done
+          echo "ok=true" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Merge
+        if: steps.audit.outputs.ok == 'true'
         run: gh pr merge ${{ github.event.pull_request.number }} --squash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -269,8 +273,8 @@ jobs:
 
 設計要點:
 - `pull_request_target`(非 `pull_request`)確保 workflow 從 base branch 執行,PR 改不動自己的 trust 邏輯
-- `if:` 兩條件 AND,過濾「非 Ivantseng123」與「非 `bump-` prefix」的 PR(人手動開的 review PR 不會被吞)
-- 無匹配 formula 檔時 clean exit,不阻擋
+- `if:` 只檢查 actor == `Ivantseng123`。**原本還有 `startsWith(head.ref, 'bump-')` 做第二道粗濾網,但因為 goreleaser 的 head branch 名是外部決定的,以 branch 名當 gate 太脆,改用 path gate(見下)**
+- Audit step 同時扮演「path 過濾」和「brew audit gate」:無 Formula/Casks 改動時 `ok=false` 且 clean exit,merge step 條件跳過。這同時擋掉「Ivantseng123 手動開 README-only PR 會被 auto-merge」的 logic bug
 - Fail-open 策略:任何步驟失敗均 leave PR open,workflow 紅臉通知你即可
 - 使用 `GITHUB_TOKEN`(自動配發)不需任何外掛 PAT 儲存於 tap
 
@@ -299,11 +303,13 @@ Settings → Branches → Add rule for `main`:
 
 **效果矩陣:**
 
-| PR 類型 | 路徑 | CODEOWNER gate | 誰 merge |
-|---|---|---|---|
-| goreleaser 的 formula bump | `Formula/agentdock.rb` | 不觸發 | auto-merge workflow |
-| 手動 formula 修改 | `Formula/*.rb` 或 `Casks/*.rb`(branch 非 `bump-*`) | 不觸發 | 你自己手動 merge |
-| Trust / workflow 變更 | `.github/**` | 觸發 → 需 Ivantseng123 approve | 只有 Ivantseng123 能 approve |
+| PR 類型 | 路徑 | auto-merge path gate | CODEOWNER gate | 誰 merge |
+|---|---|---|---|---|
+| goreleaser 的 formula bump(actor = Ivantseng123) | `Formula/agentdock.rb` | ✅ 觸發,audit 後自動 merge | 不觸發 | auto-merge workflow |
+| 手動 formula 修改(actor = Ivantseng123) | `Formula/*.rb` 或 `Casks/*.rb` | ✅ 觸發,audit 過即自動 merge(brew audit 是唯一 gate) | 不觸發 | auto-merge workflow(若 actor 對) |
+| 手動 README / workflow / config 變更(actor = Ivantseng123) | 非 `Formula/`、非 `Casks/` | ❌ 不觸發,workflow clean-exit 不 merge | 視路徑 | 你手動 merge |
+| Trust / workflow 變更 | `.github/**` | — | 觸發 → 需 Ivantseng123 approve | 只有 Ivantseng123 能 approve |
+| 任何非 Ivantseng123 的 PR | — | actor check 就先被擋 | 視路徑 | 人工 review
 
 ## Order of Operations
 
@@ -368,30 +374,29 @@ Settings → Branches → Add rule for `main`:
 - [ ] 輸出含 `vX.Y.Z`、`commit <hash>`、`built <date>` 三欄
 - [ ] `brew info agentdock` 顯示正確 description / homepage / license
 
-## Implementation-time Unknowns(高風險,實作時第一次跑必須緊盯)
+## Implementation-time Unknowns(已於首次 v1.1.0 release 實測驗證)
 
-| 假設 | 為何不確定 | 如何驗證 |
-|---|---|---|
-| goreleaser v2 `brews.repository.pull_request.enabled: true` schema 如上範例 | v2 docs 的 brews 頁面未權威抓到,Casks 頁面確認該 schema 對 casks 適用,brews 應同構但需實測 | goreleaser step 若 config parse 失敗會在 step 5 之前的 `release-validate.yml` 暴露 |
-| `pull_request.branch` 欄位接受 goreleaser template `{{.Tag}}` | 多數 goreleaser 欄位支援 template,但此欄位文件未明確列出 | 首次 release 看 tap PR head ref 是否為 `bump-agentdock-vX.Y.Z` |
-| `release-validate.yml` 以 `--snapshot --skip=publish` 跑時不會 eager-resolve `{{ .Env.HOMEBREW_TAP_TOKEN }}` 而失敗 | goreleaser v2 template 應為 lazy 評估,`--skip=publish` 跳過 brews step 即不觸發 | 觀察 release-validate 於 step 5 PR 是否 pass |
-| `Homebrew/actions/setup-homebrew@master` 於 `pull_request_target` context 執行正常 | `pull_request_target` 使用頻率低於 `pull_request` | 首次 tap PR 進來看 workflow log |
-| `brew audit --strict --online` 對 goreleaser 預設產出的 Formula 直接過 | formula template 由 goreleaser 產,欄位格式細節可能挑刺(description 大小寫、license 格式等) | 首次 audit 失敗訊息為主要診斷來源 |
-| Branch protection `Include administrators` + `Require review from Code Owners` 不阻擋 GITHUB_TOKEN 在 Formula 路徑上的 auto-merge | GitHub branch protection 對 Apps 的豁免行為偶有變動 | 首次 tap PR merge 步驟若卡住即為此原因 |
+| 假設 | 實測結果 |
+|---|---|
+| goreleaser v2 `brews.repository.pull_request.enabled: true` schema 如上範例 | ✅ `goreleaser check` v2.15 pass。但 schema 語意**不同於直覺**:`repository.branch` 是 HEAD(goreleaser push 檔案的 feature branch),不是 target。首次 v1.1.0 誤設 `repository.branch: main` 導致直推 main。修正為顯式 HEAD + `pull_request.base.branch: main` 後才正確。 |
+| ~~`pull_request.branch` 欄位接受 template~~ | ❌ **該欄位不存在**於 v2.15 的 `PullRequest` struct(只有 `{enabled, base, draft}`)。HEAD branch 應透過 `repository.branch` 指定,接受 template(例:`"bump-agentdock-{{.Tag}}"`)。 |
+| `release-validate.yml` 以 `--snapshot --skip=publish` 跑不會 eager-resolve `{{ .Env.HOMEBREW_TAP_TOKEN }}` 失敗 | ✅ 確認。snapshot mode 跳過 brews publisher,template 從未被 evaluate,secret 缺席也沒影響。 |
+| `Homebrew/actions/setup-homebrew@master` 於 `pull_request_target` 執行正常 | ⏳ 首次 v1.1.0 因 PR 從未實際產生,此假設尚未驗證;改 fix 後下次 release 才會實測。 |
+| `brew audit --strict --online` 對 goreleaser 預設 Formula 過 | ⏳ 首次因 PR 未觸發 workflow 而未執行 audit;修 fix 後下次驗證。 |
+| Branch protection + `Include administrators` 不阻擋 GITHUB_TOKEN 的 auto-merge | ⏳ 首次因未設 branch protection(Ivantseng123 UI 動作尚未完成)而跳過;需補配後重驗。 |
 
-**策略:上述任一破掉皆非 blocker**,設計已保留調整空間(`.goreleaser.yaml` 欄位調整、workflow `if:` 微調、protection 臨時關 `Include administrators`)。
+**教訓**:goreleaser `brews:` schema 的 `branch` 欄位名稱直覺誤導度高(自然會讀成「目標 branch」),實際是「push 到哪個 feature branch」。遇到類似未明文的 schema 設計,應先翻 goreleaser source(`internal/pipe/brew/brew.go`)或用 snapshot + dry-run 驗證,不要單靠 `goreleaser check` 的語法過關當作語意正確。
 
 ## Known Residual Risks
 
-- **PAT 外洩**:fine-grained PAT 若外洩,攻擊者可以 `Ivantseng123` 身份開 PR 到 tap,branch 命為 `bump-*`,auto-merge 會過 `actor + branch_pattern` 檢查。最後一道防線是 `brew audit --strict --online`,對精心偽造的 formula 仍可能被繞過。
+- **PAT 外洩**:fine-grained PAT 若外洩,攻擊者可以 `Ivantseng123` 身份開 PR 到 tap 並讓 PR 改動 `Formula/*.rb`,auto-merge 會過 `actor + path gate + brew audit` 三層檢查。最後一道防線是 `brew audit --strict --online`,對精心偽造的 formula 仍可能被繞過。
   - **接受理由**:此 threat model 需要 PAT 外洩 + 攻擊者有時間 craft 能過 audit 的 formula,頻率低。既有替代強化(OIDC workflow_run 出處驗證)在 Q4 grill 時被取捨掉,不在本輪 scope。
   - **緩解**:PAT 最長 1 年過期,strong rotation discipline。
 - **PAT 過期忘了 rotate**:release 會紅,手動更新 secret 後 `gh workflow run release.yml` 重跑即可。
   - **緩解**:將 rotation 日期寫進個人 calendar + GitHub 到期前自動 email 提醒。
 - **Async coupling**:agentdock release.yml 於 goreleaser 打開 tap PR 那刻即 success;tap auto-merge 若 audit 失敗,release page 顯示 vX.Y.Z 已發但 brew 通道尚未更新。用戶 `brew upgrade` 仍為舊版。
   - **緩解**:GitHub 預設會對 workflow 失敗寄 email 通知 repo owner。接到即手動救援。
-- **pinsnap 手動 bump 改走 PR**:branch protection 啟用後,未來 pinsnap cask 更新需開 PR。Commits 作者為 `Ivantseng123`、branch 非 `bump-*` → auto-merge workflow 的 `if:` 不過 → 需手動 merge。
-  - **非 bug,是流程改變**。未來若要 pinsnap 也 auto-merge,改其 bump 流程讓 branch 命為 `bump-pinsnap-*` 即可自動涵蓋。
+- **pinsnap 手動 bump 改走 PR**:branch protection 啟用後,未來 pinsnap cask 更新需開 PR。由於 trust gate 已改為 path-based,pinsnap PR(觸及 `Casks/pinsnap.rb`)若作者為 `Ivantseng123` 且 `brew audit` 過,會自動 merge — 這算 bonus。作者若為其他人(例如手動從不同帳號修),則需手動 merge。
 
 ## Prerequisites(清單)
 
