@@ -15,8 +15,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:     "agentdock",
-	Short:   "AgentDock — Slack to GitHub issue triage",
-	Long:    "AgentDock turns Slack threads into structured GitHub issues with AI-assisted triage.",
+	Short:   "AgentDock — Slack-driven LLM agent orchestrator",
+	Long:    "AgentDock listens to Slack events, dispatches work to external LLM agents, and delivers results back to your team.",
 	Version: fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 }
 
