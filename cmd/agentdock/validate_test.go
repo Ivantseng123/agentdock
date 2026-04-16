@@ -24,6 +24,15 @@ func TestValidate_WorkersZero(t *testing.T) {
 	}
 }
 
+func TestValidate_WorkersZero_RedisTransport(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Workers.Count = 0
+	cfg.Queue.Transport = "redis"
+	if err := validate(cfg); err != nil {
+		t.Errorf("redis transport should allow workers.count=0, got %v", err)
+	}
+}
+
 func TestValidate_MultipleErrors_ListedAtOnce(t *testing.T) {
 	cfg := goodConfig()
 	cfg.Workers.Count = 0
