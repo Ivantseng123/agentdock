@@ -248,6 +248,50 @@ func (c *Client) PostSelector(channelID, prompt, actionPrefix string, options []
 	return ts, nil
 }
 
+// PostSelectorWithBack sends a button selector with an optional trailing back
+// button. If backActionID is empty, behaves identically to PostSelector. The
+// back button is rendered rightmost (farthest from main option buttons) and
+// uses default button style.
+func (c *Client) PostSelectorWithBack(
+	channelID, prompt, actionPrefix string,
+	options []string,
+	threadTS string,
+	backActionID, backLabel string,
+) (string, error) {
+	var buttons []slack.BlockElement
+	for i, opt := range options {
+		buttons = append(buttons, slack.NewButtonBlockElement(
+			fmt.Sprintf("%s_%d", actionPrefix, i),
+			opt,
+			slack.NewTextBlockObject(slack.PlainTextType, opt, false, false),
+		))
+	}
+	if backActionID != "" {
+		buttons = append(buttons, slack.NewButtonBlockElement(
+			backActionID,
+			backActionID, // value equals actionID so router doesn't need SelectedOption
+			slack.NewTextBlockObject(slack.PlainTextType, backLabel, false, false),
+		))
+	}
+
+	section := slack.NewSectionBlock(
+		slack.NewTextBlockObject(slack.MarkdownType, prompt, false, false),
+		nil, nil,
+	)
+	actions := slack.NewActionBlock(actionPrefix, buttons...)
+
+	opts := []slack.MsgOption{slack.MsgOptionBlocks(section, actions)}
+	if threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+
+	_, ts, err := c.api.PostMessage(channelID, opts...)
+	if err != nil {
+		return "", fmt.Errorf("post selector with back: %w", err)
+	}
+	return ts, nil
+}
+
 // PostExternalSelector sends a message with a type-ahead searchable dropdown.
 // Returns the message timestamp.
 func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error) {
