@@ -35,7 +35,7 @@ type postSelectorCall struct {
 }
 type postSelectorWithBackCall struct {
 	ChannelID, Prompt, ActionPrefix, ThreadTS, BackActionID, BackLabel string
-	Options                                                             []string
+	Options                                                            []string
 }
 type postExternalSelectorCall struct {
 	ChannelID, Prompt, ActionID, Placeholder, ThreadTS string
@@ -50,6 +50,19 @@ func (s *stubSlack) PostMessage(channelID, text, threadTS string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.PostMessageCalls = append(s.PostMessageCalls, postMessageCall{channelID, text, threadTS})
+	return nil
+}
+func (s *stubSlack) PostMessageWithTS(channelID, text, threadTS string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PostMessageCalls = append(s.PostMessageCalls, postMessageCall{channelID, text, threadTS})
+	return "STATUS_TS", nil
+}
+func (s *stubSlack) UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.UpdateMessageCalls = append(s.UpdateMessageCalls,
+		updateMessageCall{channelID, messageTS, text})
 	return nil
 }
 func (s *stubSlack) PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error) {

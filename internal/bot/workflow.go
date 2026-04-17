@@ -25,7 +25,9 @@ const pendingTimeout = 1 * time.Minute
 // satisfies it; tests implement it with a stub.
 type slackAPI interface {
 	PostMessage(channelID, text, threadTS string) error
+	PostMessageWithTS(channelID, text, threadTS string) (string, error)
 	PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
+	UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value string) error
 	PostSelector(channelID, prompt, actionPrefix string, options []string, threadTS string) (string, error)
 	PostSelectorWithBack(channelID, prompt, actionPrefix string, options []string, threadTS, backActionID, backLabel string) (string, error)
 	PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error)
@@ -388,7 +390,14 @@ func (w *Workflow) HandleDescriptionSubmit(selectorMsgTS, extraText string) {
 func (w *Workflow) runTriage(pt *pendingTriage) {
 	ctx := context.Background()
 
-	w.slack.PostMessage(pt.ChannelID, ":mag: 正在排入處理佇列...", pt.ThreadTS)
+	// Post the lifecycle status message once; later stages edit it in place
+	// instead of posting new messages. If posting fails we fall back to a
+	// second post after submit (rare — Slack outage etc.).
+	statusMsgTS, err := w.slack.PostMessageWithTS(pt.ChannelID, ":mag: 正在排入處理佇列...", pt.ThreadTS)
+	if err != nil {
+		pt.Logger.Warn("狀態訊息發送失敗，後續改為另起新訊息", "phase", "失敗", "error", err)
+		statusMsgTS = ""
+	}
 
 	// 1. Read thread context.
 	botUserID := ""
@@ -536,9 +545,25 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	} else {
 		statusMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
 	}
-	if msgTS, err := w.slack.PostMessageWithButton(pt.ChannelID,
-		statusMsg, pt.ThreadTS, "cancel_job", "取消", job.ID); err == nil {
-		job.StatusMsgTS = msgTS
+
+	// Prefer editing the earlier ":mag: 排入..." message so the thread has a
+	// single lifecycle message (排入 → 處理中 → 已建立 issue). Fall back to a
+	// fresh post if the earlier one failed.
+	if statusMsgTS != "" {
+		if err := w.slack.UpdateMessageWithButton(pt.ChannelID, statusMsgTS,
+			statusMsg, "cancel_job", "取消", job.ID); err != nil {
+			pt.Logger.Warn("狀態訊息更新失敗，改為另起新訊息", "phase", "失敗", "error", err)
+			statusMsgTS = ""
+		}
+	}
+	if statusMsgTS == "" {
+		if msgTS, err := w.slack.PostMessageWithButton(pt.ChannelID,
+			statusMsg, pt.ThreadTS, "cancel_job", "取消", job.ID); err == nil {
+			statusMsgTS = msgTS
+		}
+	}
+	if statusMsgTS != "" {
+		job.StatusMsgTS = statusMsgTS
 		w.store.Put(job) // update with StatusMsgTS
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.

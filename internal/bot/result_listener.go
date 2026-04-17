@@ -26,13 +26,13 @@ type IssueCreator interface {
 }
 
 type ResultListener struct {
-	results       queue.ResultBus
-	store         queue.JobStore
-	attachments   queue.AttachmentStore
-	slack         SlackPoster
-	github        IssueCreator
-	onDedupClear  func(channelID, threadTS string)
-	logger        *slog.Logger
+	results      queue.ResultBus
+	store        queue.JobStore
+	attachments  queue.AttachmentStore
+	slack        SlackPoster
+	github       IssueCreator
+	onDedupClear func(channelID, threadTS string)
+	logger       *slog.Logger
 
 	mu                 sync.Mutex
 	processedJobs      map[string]bool
@@ -302,7 +302,66 @@ func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job,
 	metrics.IssueCreatedTotal.WithLabelValues(confidence, strconv.FormatBool(degraded)).Inc()
 
 	r.store.UpdateStatus(job.ID, queue.JobCompleted)
-	r.updateStatus(job, fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url))
+
+	// Preserve worker diagnostics (worker id, elapsed, tool calls, files read,
+	// cost) on the final message so the thread captures what the job actually
+	// consumed. StatusReport only lives in the store while the job ran.
+	line := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url)
+	if diag := r.formatDiagnostics(job, result); diag != "" {
+		line = line + "\n" + diag
+	}
+	r.updateStatus(job, line)
+}
+
+// formatDiagnostics renders "worker-0 · 5m 12s · 工具呼叫 42 · 讀檔 18 · $0.23".
+// Each segment is omitted when the underlying value is zero/empty so the line
+// stays compact for short jobs. Returns "" when nothing useful is available.
+func (r *ResultListener) formatDiagnostics(job *queue.Job, result *queue.JobResult) string {
+	var parts []string
+	var agent *queue.StatusReport
+	if state, err := r.store.Get(job.ID); err == nil && state != nil {
+		agent = state.AgentStatus
+	}
+	if agent != nil {
+		if id := shortWorkerID(agent.WorkerID); id != "" {
+			parts = append(parts, id)
+		}
+	}
+	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
+		parts = append(parts, humanDuration(elapsed))
+	}
+	if agent != nil {
+		if n := agent.ToolCalls; n > 0 {
+			parts = append(parts, fmt.Sprintf("工具呼叫 %d", n))
+		}
+		if n := agent.FilesRead; n > 0 {
+			parts = append(parts, fmt.Sprintf("讀檔 %d", n))
+		}
+	}
+	if result.CostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.2f", result.CostUSD))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func shortWorkerID(id string) string {
+	if i := strings.LastIndex(id, "/"); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
+func humanDuration(d time.Duration) string {
+	s := int(d.Seconds())
+	if s < 60 {
+		return fmt.Sprintf("%ds", s)
+	}
+	m := s / 60
+	s = s % 60
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm %ds", m, s)
 }
 
 // SetStatusJobClearer installs a hook called after a result is fully handled,

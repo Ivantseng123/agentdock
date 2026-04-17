@@ -192,18 +192,25 @@ func (c *Client) ResolveUser(userID string) string {
 
 // PostMessage sends a text message. If threadTS is non-empty, replies in that thread.
 func (c *Client) PostMessage(channelID, text, threadTS string) error {
+	_, err := c.PostMessageWithTS(channelID, text, threadTS)
+	return err
+}
+
+// PostMessageWithTS posts a message and returns its timestamp so callers can
+// later UpdateMessage/UpdateMessageWithButton to edit it in place.
+func (c *Client) PostMessageWithTS(channelID, text, threadTS string) (string, error) {
 	start := time.Now()
 	opts := []slack.MsgOption{slack.MsgOptionText(text, false)}
 	if threadTS != "" {
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
-	_, _, err := c.api.PostMessage(channelID, opts...)
+	_, ts, err := c.api.PostMessage(channelID, opts...)
 	metrics.ExternalDuration.WithLabelValues("slack", "post_message").Observe(time.Since(start).Seconds())
 	if err != nil {
 		metrics.ExternalErrorsTotal.WithLabelValues("slack", "post_message").Inc()
-		return fmt.Errorf("post message: %w", err)
+		return "", fmt.Errorf("post message: %w", err)
 	}
-	return nil
+	return ts, nil
 }
 
 func (c *Client) GetChannelName(channelID string) string {
