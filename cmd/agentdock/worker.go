@@ -39,7 +39,16 @@ func init() {
 func runWorker(cfg *config.Config) error {
 	// Preflight runs in PersistentPreRunE. slog initialized AFTER preflight
 	// to keep interactive output clean.
-	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})
+
+	rotator, err := logging.NewRotator(cfg.Logging.Dir)
+	if err != nil {
+		return fmt.Errorf("log rotator: %w", err)
+	}
+	rotator.StartCleanup(cfg.Logging.RetentionDays)
+
+	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: parseLogLevel(cfg.Logging.Level)})
+	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{
