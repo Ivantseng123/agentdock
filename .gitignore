@@ -25,4 +25,5 @@ deploy/overlays/*/
 .DS_Store
 dump.rdb
 worker.yaml
+skills.yaml
 dist

@@ -173,6 +173,10 @@ func applyDefaults(cfg *Config) {
 		}
 	}
 
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
+	}
+
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = 3
 	}

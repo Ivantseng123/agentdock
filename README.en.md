@@ -117,6 +117,21 @@ Bot only operates in **threads**. Triggering directly in a channel prompts "plea
 go test ./...   # 215 tests (Redis tests auto-skip if no Redis)
 ```
 
+## Log Levels
+
+Two independent levels:
+
+- `log_level` (top-level): console / stderr output, default **info**
+- `logging.level` (inside `logging:` block): file `logs/YYYY-MM-DD.jsonl`, default **debug**
+
+Accepted: `debug` / `info` / `warn` / `error`. Set via:
+
+```yaml
+log_level: debug     # in config.yaml
+```
+
+Or CLI: `./agentdock app --log-level debug`. See [docs/configuration.en.md#log-levels](docs/configuration.en.md) for details.
+
 ## License
 
 MIT

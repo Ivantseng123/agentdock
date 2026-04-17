@@ -5,6 +5,8 @@
 Run `agentdock init -c /tmp/sample.yaml` to generate a template with all fields (add `-i` for interactive prompts). Full schema below:
 
 ```yaml
+log_level: info                       # console / stderr log level: debug | info | warn | error (default: info)
+
 auto_bind: true
 
 channel_defaults:
@@ -66,6 +68,42 @@ prompt:
   output_rules: []                    # app-level output rules (default empty; doesn't render section)
   allow_worker_rules: true            # whether to apply worker.prompt.extra_rules for this job
 ```
+
+## Log Levels
+
+Two independent log levels control console and file output:
+
+| Field | Destination | Default |
+|---|---|---|
+| `log_level` | console / stderr (`./agentdock app` output) | `info` |
+| `logging.level` | rotating files `logs/YYYY-MM-DD.jsonl` | `debug` |
+
+Accepted values: `debug` / `info` / `warn` / `error`.
+
+### Three ways to set
+
+```yaml
+# 1. YAML (persistent)
+log_level: debug
+```
+
+```bash
+# 2. CLI flag (one-shot)
+./agentdock app -c ./config.yaml --log-level debug
+```
+
+```bash
+# 3. Environment variable (when mapped via koanf)
+LOG_LEVEL=debug ./agentdock app -c ./config.yaml
+```
+
+### When to enable debug
+
+- Inspecting prompt assembly: worker dumps "Prompt XML 內容" (full XML); app dumps "Prompt context 詳細內容" (structured context)
+- Tracing Slack attachment downloads
+- Debugging skill loading
+
+Debug logs are noisy. `info` is enough for normal operation. The file side defaults to `debug` (jsonl can be queried post-hoc with `jq -r`), while the console side defaults to `info` to keep signal clean.
 
 ## Secret Management
 

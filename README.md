@@ -117,6 +117,21 @@ Bot 只在 **thread 中** 運作。在 channel 直接觸發會提示「請在對
 go test ./...   # 215 tests (Redis tests auto-skip if no Redis)
 ```
 
+## Log 層級
+
+兩個獨立層級：
+
+- `log_level`（config 頂層）：console / stderr 輸出，預設 **info**
+- `logging.level`（`logging:` 區塊）：檔案 `logs/YYYY-MM-DD.jsonl`，預設 **debug**
+
+支援值：`debug` / `info` / `warn` / `error`。調法：
+
+```yaml
+log_level: debug     # 寫進 config.yaml
+```
+
+或 CLI：`./agentdock app --log-level debug`。細節見 [docs/configuration.md#log-層級](docs/configuration.md)。
+
 ## License
 
 MIT
