@@ -19,6 +19,7 @@ type LocalAdapterConfig struct {
 	Capabilities   []string
 	Store          queue.JobStore
 	Logger         *slog.Logger
+	ExtraRules     []string
 }
 
 // LocalAdapter runs agents locally via worker.Pool.
@@ -49,6 +50,7 @@ func (a *LocalAdapter) Start(deps queue.AdapterDeps) error {
 		Status:         deps.Status,
 		StatusInterval: a.cfg.StatusInterval,
 		Logger:         a.cfg.Logger,
+		ExtraRules:     a.cfg.ExtraRules,
 	})
 	a.pool.Start(context.Background())
 	return nil

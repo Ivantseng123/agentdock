@@ -106,6 +106,7 @@ func runWorker(cfg *config.Config) error {
 		Logger:         workerLogger,
 		SecretKey:      secretKey,
 		WorkerSecrets:  cfg.Secrets,
+		ExtraRules:     cfg.Worker.Prompt.ExtraRules,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

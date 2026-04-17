@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -69,7 +70,12 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 		ID:       "j1",
 		Priority: 50,
 		Repo:     "owner/repo",
-		Prompt:   "test prompt",
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test prompt"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -103,9 +109,9 @@ func TestFullFlow_PriorityOrdering(t *testing.T) {
 	bundle.Attachments.Prepare(ctx, "high", nil)
 	bundle.Attachments.Prepare(ctx, "mid", nil)
 
-	bundle.Queue.Submit(ctx, &queue.Job{ID: "low", Priority: 10, Prompt: "low"})
-	bundle.Queue.Submit(ctx, &queue.Job{ID: "high", Priority: 100, Prompt: "high"})
-	bundle.Queue.Submit(ctx, &queue.Job{ID: "mid", Priority: 50, Prompt: "mid"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "low", Priority: 10, PromptContext: &queue.PromptContext{ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "low"}}, Channel: "test", Reporter: "tester", Goal: "test goal"}})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "high", Priority: 100, PromptContext: &queue.PromptContext{ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "high"}}, Channel: "test", Reporter: "tester", Goal: "test goal"}})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "mid", Priority: 50, PromptContext: &queue.PromptContext{ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "mid"}}, Channel: "test", Reporter: "tester", Goal: "test goal"}})
 
 	var mu sync.Mutex
 	var order []string
@@ -141,9 +147,9 @@ func TestFullFlow_PriorityOrdering(t *testing.T) {
 	if len(order) != 3 {
 		t.Fatalf("expected 3 executions, got %d", len(order))
 	}
-	// First should be "high" (priority 100)
-	if order[0] != "high" {
-		t.Errorf("first execution = %q, want high", order[0])
+	// First should be "high" (priority 100) — prompt is now XML-wrapped so check substring
+	if !strings.Contains(order[0], "high") {
+		t.Errorf("first execution prompt = %q, want to contain 'high'", order[0])
 	}
 }
 

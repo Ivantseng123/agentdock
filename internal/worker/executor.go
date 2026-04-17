@@ -36,6 +36,7 @@ type executionDeps struct {
 	skillDirs     []string
 	secretKey     []byte
 	workerSecrets map[string]string
+	extraRules    []string
 }
 
 func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions, logger *slog.Logger) *queue.JobResult {
@@ -96,18 +97,28 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	prepareSeconds := time.Since(prepareStart).Seconds()
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath, "prepare_seconds", prepareSeconds)
 
+	// Defensive: new schema requires PromptContext. drain-and-cut means old
+	// Job.Prompt-only jobs shouldn't exist, but fail clearly if one slips through.
+	if job.PromptContext == nil {
+		return failedResult(job, startedAt, fmt.Errorf("malformed job: missing prompt_context"), repoPath)
+	}
+
 	// Write attachments into worktree — cleaned up together with RemoveWorktree.
-	prompt := job.Prompt
+	var attachInfos []AttachmentInfo
 	if len(attachments) > 0 {
 		attachDir := filepath.Join(repoPath, ".attachments")
-		attachInfos, err := writeAttachments(attachments, attachDir)
+		var err error
+		attachInfos, err = writeAttachments(attachments, attachDir)
 		if err != nil {
 			logger.Warn("附件寫入失敗，繼續執行", "phase", "處理中", "error", err)
 		} else {
-			prompt = bot.AppendAttachmentSection(prompt, attachInfos)
 			logger.Info("附件已寫入", "phase", "處理中", "count", len(attachInfos), "dir", attachDir)
 		}
 	}
+
+	// Build XML prompt from structured context + worker-owned extra rules.
+	prompt := BuildPrompt(*job.PromptContext, deps.extraRules, attachInfos)
+	logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
 
 	// Mount skills to all agent skill directories.
 	if len(job.Skills) > 0 {
@@ -190,13 +201,13 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 }
 
-func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]bot.AttachmentInfo, error) {
+func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]AttachmentInfo, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create attachment dir: %w", err)
 	}
 
 	seen := make(map[string]int)
-	var infos []bot.AttachmentInfo
+	var infos []AttachmentInfo
 
 	for _, att := range attachments {
 		filename := att.Filename
@@ -211,7 +222,7 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]bot.At
 		if err := os.WriteFile(path, att.Data, 0644); err != nil {
 			return nil, fmt.Errorf("write attachment %s: %w", filename, err)
 		}
-		infos = append(infos, bot.AttachmentInfo{
+		infos = append(infos, AttachmentInfo{
 			Path: path,
 			Name: filename,
 			Type: att.MimeType,

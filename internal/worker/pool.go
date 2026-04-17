@@ -26,6 +26,7 @@ type Config struct {
 	Logger         *slog.Logger
 	SecretKey      []byte
 	WorkerSecrets  map[string]string
+	ExtraRules     []string // from cfg.Worker.Prompt.ExtraRules
 }
 
 type Pool struct {
@@ -198,6 +199,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		skillDirs:     p.cfg.SkillDirs,
 		secretKey:     p.cfg.SecretKey,
 		workerSecrets: p.cfg.WorkerSecrets,
+		extraRules:    p.cfg.ExtraRules,
 	}
 
 	result := executeJob(jobCtx, job, deps, opts, logger)

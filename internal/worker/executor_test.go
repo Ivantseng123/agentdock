@@ -108,7 +108,16 @@ func TestClassifyResult_NoErrorRoutesToFailed(t *testing.T) {
 // lane fires instead of trying to create an issue with an empty title.
 func TestExecuteJob_AgentRejectedRoutesToLowConfidence(t *testing.T) {
 	store := queue.NewMemJobStore()
-	job := &queue.Job{ID: "jrej", Repo: "o/r"}
+	job := &queue.Job{
+		ID:   "jrej",
+		Repo: "o/r",
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
+	}
 	store.Put(job)
 
 	output := "done.\n\n===TRIAGE_RESULT===\n" + `{"status":"REJECTED","message":"not our repo"}`
@@ -140,7 +149,16 @@ func TestExecuteJob_AgentRejectedRoutesToLowConfidence(t *testing.T) {
 // user sees the reason and gets a retry button, not a 422 "title blank".
 func TestExecuteJob_AgentErrorRoutesToFailed(t *testing.T) {
 	store := queue.NewMemJobStore()
-	job := &queue.Job{ID: "jerr", Repo: "o/r"}
+	job := &queue.Job{
+		ID:   "jerr",
+		Repo: "o/r",
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
+	}
 	store.Put(job)
 
 	output := "done.\n\n===TRIAGE_RESULT===\n" + `{"status":"ERROR","message":"gh exploded"}`

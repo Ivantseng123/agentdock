@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"agentdock/internal/queue"
 	"agentdock/internal/worker"
+	"github.com/redis/go-redis/v9"
 )
 
 func redisClient(t *testing.T) *redis.Client {
@@ -59,8 +59,13 @@ func TestRedisFullFlow_SubmitToResult(t *testing.T) {
 		ID:       "j1",
 		Priority: 50,
 		Repo:     "owner/repo",
-		Prompt:   "test prompt",
 		TaskType: "triage",
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test prompt"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
 	})
 
 	// Wait for result.

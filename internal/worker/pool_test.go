@@ -93,7 +93,12 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 		ID:       "j1",
 		Priority: 50,
 		Repo:     "owner/repo",
-		Prompt:   "test prompt",
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test prompt"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
 	})
 
 	ch, _ := bundle.Results.Subscribe(ctx)
@@ -145,7 +150,7 @@ func TestPool_WorkerIDIncludesHostname(t *testing.T) {
 
 	pool.Start(ctx)
 	bundle.Attachments.Prepare(ctx, "j1", nil)
-	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, Prompt: "test"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, PromptContext: &queue.PromptContext{ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}}, Channel: "test", Reporter: "tester", Goal: "test goal"}})
 
 	ch, _ := bundle.Results.Subscribe(ctx)
 	select {
@@ -183,7 +188,7 @@ func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 
 	pool.Start(ctx)
 	bundle.Attachments.Prepare(ctx, "j1", nil)
-	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, Prompt: "test"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, PromptContext: &queue.PromptContext{ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}}, Channel: "test", Reporter: "tester", Goal: "test goal"}})
 
 	ch, _ := bundle.Results.Subscribe(ctx)
 	select {
@@ -246,6 +251,12 @@ func TestExecuteJob_DecryptsAndMergesSecrets(t *testing.T) {
 		ID:               "test-job",
 		CloneURL:         "https://github.com/owner/repo.git",
 		EncryptedSecrets: encrypted,
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
 	}
 
 	deps := executionDeps{
@@ -406,7 +417,17 @@ func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
 	bundle := queue.NewInMemBundle(10, 3, store)
 	defer bundle.Close()
 
-	job := &queue.Job{ID: "jprep", Repo: "o/r", SubmittedAt: time.Now()}
+	job := &queue.Job{
+		ID:          "jprep",
+		Repo:        "o/r",
+		SubmittedAt: time.Now(),
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
+	}
 
 	runner := &prepBlockingRunner{started: make(chan struct{})}
 	pool := NewPool(Config{
@@ -456,9 +477,9 @@ func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 	statusBus := queue.NewInMemStatusBus(16)
 
 	var (
-		mu           sync.Mutex
-		reports      []queue.StatusReport
-		reportReady  = make(chan struct{}, 1)
+		mu          sync.Mutex
+		reports     []queue.StatusReport
+		reportReady = make(chan struct{}, 1)
 	)
 
 	// Collect StatusReports in background.
@@ -484,7 +505,17 @@ func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 	// so we can verify the prep-phase report arrives before the agent starts.
 	runner := &prepBlockingRunner{started: make(chan struct{})}
 
-	job := &queue.Job{ID: "jprep2", Repo: "o/r", SubmittedAt: time.Now()}
+	job := &queue.Job{
+		ID:          "jprep2",
+		Repo:        "o/r",
+		SubmittedAt: time.Now(),
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
+	}
 
 	pool := NewPool(Config{
 		Queue:       bundle.Queue,
@@ -549,7 +580,17 @@ func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
 	bundle := queue.NewInMemBundle(10, 3, store)
 	defer bundle.Close()
 
-	job := &queue.Job{ID: "jrun", Repo: "o/r", SubmittedAt: time.Now()}
+	job := &queue.Job{
+		ID:          "jrun",
+		Repo:        "o/r",
+		SubmittedAt: time.Now(),
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
+	}
 
 	runner := &blockingRunner{started: make(chan struct{})}
 	pool := NewPool(Config{
@@ -650,7 +691,7 @@ func TestPool_StatusReportsIncludeJobStatus(t *testing.T) {
 
 	pool.Start(ctx)
 	bundle.Attachments.Prepare(ctx, "j1", nil)
-	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, Prompt: "test"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, PromptContext: &queue.PromptContext{ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}}, Channel: "test", Reporter: "tester", Goal: "test goal"}})
 
 	resCh, _ := bundle.Results.Subscribe(ctx)
 	select {

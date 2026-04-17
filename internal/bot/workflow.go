@@ -69,7 +69,7 @@ type Workflow struct {
 	attachments   queue.AttachmentStore
 	results       queue.ResultBus
 	skillProvider SkillProvider
-	secretKey    []byte // decoded AES key, nil if not configured
+	secretKey     []byte // decoded AES key, nil if not configured
 
 	mu        sync.Mutex
 	pending   map[string]*pendingTriage
@@ -401,17 +401,23 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	pt.Logger.Info("訊息串已讀取", "phase", "處理中", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
 
 	// 2. Enrich messages.
-	var threadMsgs []ThreadMessage
+	var threadMsgs []queue.ThreadMessage
 	for _, m := range rawMsgs {
 		text := m.Text
 		if w.mantisClient != nil {
 			text = enrichMessage(text, w.mantisClient)
 		}
-		threadMsgs = append(threadMsgs, ThreadMessage{
+		threadMsgs = append(threadMsgs, queue.ThreadMessage{
 			User:      w.slack.ResolveUser(m.User),
 			Timestamp: m.Timestamp,
 			Text:      text,
 		})
+	}
+
+	if len(threadMsgs) == 0 {
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Thread has no messages to process")
+		w.clearDedup(pt)
+		return
 	}
 
 	// 3. Collect attachment metadata.
@@ -425,16 +431,19 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
 
-	// 4. Build prompt.
-	prompt := BuildPrompt(PromptInput{
-		ThreadMessages:   threadMsgs,
-		ExtraDescription: pt.ExtraDesc,
-		Branch:           pt.SelectedBranch,
-		Channel:          pt.ChannelName,
-		Reporter:         pt.Reporter,
-		Prompt:           w.cfg.Prompt,
-	})
-	pt.Logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
+	// 4. Assemble structured prompt context (worker renders the actual prompt).
+	promptCtx := AssemblePromptContext(
+		threadMsgs,
+		pt.ExtraDesc,
+		pt.ChannelName,
+		pt.Reporter,
+		pt.SelectedBranch,
+		w.cfg.Prompt,
+	)
+	pt.Logger.Info("Prompt context 已組裝", "phase", "處理中",
+		"thread_messages", len(promptCtx.ThreadMessages),
+		"has_extra_desc", promptCtx.ExtraDescription != "",
+	)
 
 	// 5. Build attachment metadata and payloads for queue.
 	var attachMeta []queue.AttachmentMeta
@@ -462,19 +471,19 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	// 6. Submit to queue.
 	job := &queue.Job{
-		ID:          pt.RequestID,
-		Priority:    w.channelPriority(pt.ChannelID),
-		ChannelID:   pt.ChannelID,
-		ThreadTS:    pt.ThreadTS,
-		UserID:      pt.UserID,
-		Repo:        pt.SelectedRepo,
-		Branch:      pt.SelectedBranch,
-		CloneURL:    cleanCloneURL(pt.SelectedRepo),
-		Prompt:      prompt,
-		Skills:      w.loadSkills(ctx),
-		RequestID:   pt.RequestID,
-		Attachments: attachMeta,
-		SubmittedAt: time.Now(),
+		ID:            pt.RequestID,
+		Priority:      w.channelPriority(pt.ChannelID),
+		ChannelID:     pt.ChannelID,
+		ThreadTS:      pt.ThreadTS,
+		UserID:        pt.UserID,
+		Repo:          pt.SelectedRepo,
+		Branch:        pt.SelectedBranch,
+		CloneURL:      cleanCloneURL(pt.SelectedRepo),
+		PromptContext: &promptCtx,
+		Skills:        w.loadSkills(ctx),
+		RequestID:     pt.RequestID,
+		Attachments:   attachMeta,
+		SubmittedAt:   time.Now(),
 	}
 
 	if len(w.secretKey) > 0 && len(w.cfg.Secrets) > 0 {

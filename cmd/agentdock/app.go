@@ -187,6 +187,7 @@ func runApp(cfg *config.Config) error {
 			Capabilities:   []string{"triage"},
 			Store:          jobStore,
 			Logger:         workerLogger,
+			ExtraRules:     cfg.Worker.Prompt.ExtraRules,
 		})
 		if err := localAdapter.Start(queue.AdapterDeps{
 			Jobs:        bundle.Queue,
