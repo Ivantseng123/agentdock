@@ -144,6 +144,35 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 	logger.Info("解析成功", "phase", "完成", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
 
+	// Agent said "not our bug" — short-circuit into the existing "low
+	// confidence skipped" lane in result_listener. Dropping parsed.Status
+	// here is what caused empty-title 422s: the worker turned every parse
+	// success into Status="completed" with empty Title, and the listener
+	// then tried to create an issue with that.
+	if parsed.Status == "REJECTED" {
+		return &queue.JobResult{
+			JobID:          job.ID,
+			Status:         "completed",
+			Confidence:     "low",
+			Message:        parsed.Message,
+			RawOutput:      output,
+			RepoPath:       repoPath,
+			StartedAt:      startedAt,
+			FinishedAt:     time.Now(),
+			PrepareSeconds: prepareSeconds,
+		}
+	}
+
+	// Agent self-reported ERROR — route to failure so the user gets a retry
+	// button and a clear reason instead of a silent 422.
+	if parsed.Status == "ERROR" {
+		msg := parsed.Message
+		if msg == "" {
+			msg = "agent reported ERROR without message"
+		}
+		return failedResult(job, startedAt, fmt.Errorf("agent error: %s", msg), repoPath)
+	}
+
 	return &queue.JobResult{
 		JobID:          job.ID,
 		Status:         "completed",

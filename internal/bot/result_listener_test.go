@@ -200,6 +200,44 @@ func TestResultListener_LowConfidenceRejects(t *testing.T) {
 	}
 }
 
+// REJECTED results carry the agent's reason in Message — the listener must
+// surface it so the user knows *why* we skipped, not just that we did.
+func TestResultListener_LowConfidenceIncludesMessage(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jmsg", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1"})
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID:      "jmsg",
+		Status:     "completed",
+		Confidence: "low",
+		Message:    "repo has no login page code",
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	slackMock.mu.Lock()
+	defer slackMock.mu.Unlock()
+	found := false
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "repo has no login page code") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected message in Slack text, got %v", slackMock.messages)
+	}
+}
+
 func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", RetryCount: 0})
