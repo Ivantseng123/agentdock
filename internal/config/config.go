@@ -60,9 +60,6 @@ type AgentConfig struct {
 	Timeout  time.Duration `yaml:"timeout"`
 	SkillDir string        `yaml:"skill_dir"`
 	Stream   bool          `yaml:"stream"`
-	// StreamFormat picks the stdout parser: "claude" (stream-json), "opencode"
-	// (--format json), or "" (raw). Empty + Stream=true legacy-maps to "claude".
-	StreamFormat string `yaml:"stream_format"`
 }
 
 type QueueConfig struct {

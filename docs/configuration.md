@@ -21,10 +21,9 @@ agents:
     stream: true                      # 啟用即時事件追蹤
   opencode:
     command: opencode
-    args: ["run", "--format", "json", "{prompt}"]
+    args: ["run", "{prompt}"]
     timeout: 5m
     skill_dir: ".opencode/skills"
-    stream_format: "opencode"         # 解析 opencode NDJSON，只取 text events
 
 active_agent: claude
 providers: [claude, opencode]

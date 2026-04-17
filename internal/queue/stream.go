@@ -94,55 +94,6 @@ func ReadStreamJSON(r io.Reader, eventCh chan<- StreamEvent) string {
 	return reassembled.String()
 }
 
-// ReadOpenCodeJSON reads NDJSON from `opencode run --format json`.
-// Event shape: {"type":"<event>","timestamp":...,"sessionID":"...", part/error: ...}.
-// Strategy: accumulate every "text" event's part.text; emit tool_use for visibility.
-// Tool output and CLI chrome that normally pollute stdout are ignored.
-func ReadOpenCodeJSON(r io.Reader, eventCh chan<- StreamEvent) string {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	var buf strings.Builder
-	for scanner.Scan() {
-		line := scanner.Text()
-		var raw map[string]any
-		if json.Unmarshal([]byte(line), &raw) != nil {
-			continue
-		}
-		eventType, _ := raw["type"].(string)
-		switch eventType {
-		case "text":
-			part, _ := raw["part"].(map[string]any)
-			if part == nil {
-				continue
-			}
-			text, _ := part["text"].(string)
-			if text == "" {
-				continue
-			}
-			if buf.Len() > 0 {
-				buf.WriteString("\n\n")
-			}
-			buf.WriteString(text)
-			select {
-			case eventCh <- StreamEvent{Type: "message_delta", TextBytes: len(text)}:
-			default:
-			}
-		case "tool_use":
-			part, _ := raw["part"].(map[string]any)
-			if part == nil {
-				continue
-			}
-			tool, _ := part["tool"].(string)
-			select {
-			case eventCh <- StreamEvent{Type: "tool_use", ToolName: tool}:
-			default:
-			}
-		}
-	}
-	return buf.String()
-}
-
 // ReadRawOutput reads plain text stdout (non-stream agents).
 func ReadRawOutput(r io.Reader) string {
 	scanner := bufio.NewScanner(r)

@@ -168,16 +168,12 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 	logger.Info("Agent process 已啟動", "phase", "處理中", "command", agent.Command, "pid", cmd.Process.Pid)
 
 	// Read stdout in a goroutine; wait for it before cmd.Wait().
-	format := agent.StreamFormat
-	if format == "" && agent.Stream {
-		format = "claude"
-	}
 	var output string
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		output = readOutput(ctx, stdoutPipe, format, opts.OnEvent)
+		output = readOutput(ctx, stdoutPipe, agent.Stream, opts.OnEvent)
 	}()
 	wg.Wait()
 
@@ -201,10 +197,9 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 	return strings.TrimSpace(output), nil
 }
 
-// readOutput routes stdout through the appropriate reader based on format.
-// "" => raw text; "claude" => claude stream-json; "opencode" => opencode --format json.
-func readOutput(ctx context.Context, r io.Reader, format string, onEvent func(queue.StreamEvent)) string {
-	if format == "" {
+// readOutput routes stdout through the appropriate reader based on stream config.
+func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queue.StreamEvent)) string {
+	if !stream {
 		return queue.ReadRawOutput(r)
 	}
 
@@ -234,12 +229,7 @@ func readOutput(ctx context.Context, r io.Reader, format string, onEvent func(qu
 		}
 	}()
 
-	switch format {
-	case "opencode":
-		result = queue.ReadOpenCodeJSON(r, eventCh)
-	default:
-		result = queue.ReadStreamJSON(r, eventCh)
-	}
+	result = queue.ReadStreamJSON(r, eventCh)
 	close(eventCh)
 	wg.Wait()
 	return result

@@ -23,10 +23,9 @@ var BuiltinAgents = map[string]AgentConfig{
 		SkillDir: ".codex/skills",
 	},
 	"opencode": {
-		Command:      "opencode",
-		Args:         []string{"run", "--format", "json", "{prompt}"},
-		Timeout:      15 * time.Minute,
-		SkillDir:     ".opencode/skills",
-		StreamFormat: "opencode",
+		Command:  "opencode",
+		Args:     []string{"run", "{prompt}"},
+		Timeout:  15 * time.Minute,
+		SkillDir: ".opencode/skills",
 	},
 }
