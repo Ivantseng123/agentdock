@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/Ivantseng123/agentdock/compare/v1.2.0...v1.2.1) (2026-04-17)
+
+
+### Bug Fixes
+
+* **github:** inject token into cleaned https github.com URL ([673245a](https://github.com/Ivantseng123/agentdock/commit/673245a5ad1a9e398b2a146d0bd30a6b909b6a21))
+* **github:** inject token into cleaned https github.com URL ([bf8488c](https://github.com/Ivantseng123/agentdock/commit/bf8488ca44187914bc294d7400694429d5b8ac98))
+
 ## [1.2.0](https://github.com/Ivantseng123/agentdock/compare/v1.1.2...v1.2.0) (2026-04-17)
 
 
