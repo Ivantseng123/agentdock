@@ -180,6 +180,31 @@ func TestExecuteJob_AgentErrorRoutesToFailed(t *testing.T) {
 	}
 }
 
+// Spec §9: Job with nil PromptContext must fail loudly with a clear error,
+// not silently render an empty prompt. Drain-and-cut makes this path
+// unreachable in production, but the defense is worth verifying.
+func TestExecuteJob_NilPromptContextFailsMalformed(t *testing.T) {
+	store := queue.NewMemJobStore()
+	job := &queue.Job{ID: "jnil", Repo: "o/r"} // no PromptContext
+	store.Put(job)
+
+	deps := executionDeps{
+		attachments: queue.NewInMemAttachmentStore(),
+		repoCache:   &mockRepo{path: "/tmp/r"},
+		runner:      &mockRunner{},
+		store:       store,
+	}
+
+	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+
+	if result.Status != "failed" {
+		t.Errorf("status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Error, "missing prompt_context") {
+		t.Errorf("error = %q, want substring 'missing prompt_context'", result.Error)
+	}
+}
+
 // Scenario B-race — Pre-Prepare ctx guard: store set to JobCancelled before Prepare runs
 // → Prepare is not invoked and the result is cancelled.
 func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
