@@ -32,15 +32,24 @@ func NewRepoCache(dir string, maxAge time.Duration, githubPAT string, logger *sl
 }
 
 // resolveURLWithToken builds a clone URL. Uses perCallToken if non-empty,
-// otherwise falls back to rc.githubPAT. Full URLs (http/git@/file://) pass
-// through unchanged — callers must ensure they don't contain stale tokens.
+// otherwise falls back to rc.githubPAT. For bare slugs (owner/repo), builds a
+// github.com HTTPS URL and injects the token. For full github.com HTTPS URLs
+// without userinfo, injects the token in place. URLs that already carry
+// credentials, non-github hosts, git@ SSH, and file:// all pass through.
 func (rc *RepoCache) resolveURLWithToken(repoRef, perCallToken string) string {
-	if strings.HasPrefix(repoRef, "http") || strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
-		return repoRef
-	}
 	token := perCallToken
 	if token == "" {
 		token = rc.githubPAT
+	}
+	if strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
+		return repoRef
+	}
+	const githubPrefix = "https://github.com/"
+	if strings.HasPrefix(repoRef, "http") {
+		if token != "" && strings.HasPrefix(repoRef, githubPrefix) {
+			return "https://" + token + "@github.com/" + strings.TrimPrefix(repoRef, githubPrefix)
+		}
+		return repoRef
 	}
 	if token != "" {
 		return fmt.Sprintf("https://%s@github.com/%s.git", token, repoRef)

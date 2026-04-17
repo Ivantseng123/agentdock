@@ -210,6 +210,62 @@ func TestRepoCache_ResolveURLWithToken_NoToken(t *testing.T) {
 	}
 }
 
+func TestRepoCache_ResolveURLWithToken_FullGithubURLInjectsToken(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "", slog.Default())
+	url := rc.resolveURLWithToken("https://github.com/owner/repo.git", "ghp_percall")
+	if url != "https://ghp_percall@github.com/owner/repo.git" {
+		t.Errorf("got %q", url)
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_FullGithubURLFallbackPAT(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "ghp_default", slog.Default())
+	url := rc.resolveURLWithToken("https://github.com/owner/repo.git", "")
+	if url != "https://ghp_default@github.com/owner/repo.git" {
+		t.Errorf("got %q", url)
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_FullGithubURLNoTokenPassthrough(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "", slog.Default())
+	url := rc.resolveURLWithToken("https://github.com/owner/repo.git", "")
+	if url != "https://github.com/owner/repo.git" {
+		t.Errorf("got %q", url)
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_URLWithExistingUserinfoPassthrough(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "ghp_default", slog.Default())
+	url := rc.resolveURLWithToken("https://ghp_old@github.com/owner/repo.git", "ghp_new")
+	if url != "https://ghp_old@github.com/owner/repo.git" {
+		t.Errorf("got %q", url)
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_NonGithubHostPassthrough(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "ghp_default", slog.Default())
+	url := rc.resolveURLWithToken("https://gitlab.com/owner/repo.git", "ghp_percall")
+	if url != "https://gitlab.com/owner/repo.git" {
+		t.Errorf("got %q", url)
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_SSHAndFilePassthrough(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "ghp_default", slog.Default())
+	if got := rc.resolveURLWithToken("git@github.com:owner/repo.git", "ghp_x"); got != "git@github.com:owner/repo.git" {
+		t.Errorf("git@: got %q", got)
+	}
+	if got := rc.resolveURLWithToken("file:///tmp/repo", "ghp_x"); got != "file:///tmp/repo" {
+		t.Errorf("file://: got %q", got)
+	}
+}
+
 func run(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
