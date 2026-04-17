@@ -36,3 +36,67 @@ func TestSkillPayload_JSONRoundTrip(t *testing.T) {
 		t.Errorf("examples/ex1.md = %q", string(sp.Files["examples/ex1.md"]))
 	}
 }
+
+func TestPromptContext_JSONRoundTrip(t *testing.T) {
+	orig := PromptContext{
+		ThreadMessages: []ThreadMessage{
+			{User: "Alice", Timestamp: "2026-04-09 10:30", Text: "login broken"},
+		},
+		ExtraDescription: "after 3 retries",
+		Channel:          "general",
+		Reporter:         "Alice",
+		Branch:           "main",
+		Language:         "zh-TW",
+		Goal:             "Use the /triage-issue skill ...",
+		OutputRules:      []string{"一句話", "< 100 字"},
+		AllowWorkerRules: true,
+	}
+
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got PromptContext
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got.ThreadMessages[0].User != "Alice" {
+		t.Errorf("User = %q, want Alice", got.ThreadMessages[0].User)
+	}
+	if got.Goal != orig.Goal {
+		t.Errorf("Goal = %q, want %q", got.Goal, orig.Goal)
+	}
+	if len(got.OutputRules) != 2 {
+		t.Errorf("OutputRules len = %d, want 2", len(got.OutputRules))
+	}
+	if !got.AllowWorkerRules {
+		t.Error("AllowWorkerRules = false, want true")
+	}
+}
+
+func TestJob_PromptContextField_JSONRoundTrip(t *testing.T) {
+	job := Job{
+		ID: "test-1",
+		PromptContext: &PromptContext{
+			Channel:  "general",
+			Reporter: "Bob",
+			Goal:     "triage",
+		},
+	}
+	data, err := json.Marshal(&job)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Job
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.PromptContext == nil {
+		t.Fatal("PromptContext is nil after round-trip")
+	}
+	if got.PromptContext.Goal != "triage" {
+		t.Errorf("Goal = %q, want triage", got.PromptContext.Goal)
+	}
+}

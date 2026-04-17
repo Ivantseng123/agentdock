@@ -38,6 +38,7 @@ type Job struct {
 	TaskType     string            `json:"task_type,omitempty"`
 	RetryCount   int               `json:"retry_count,omitempty"`
 	RetryOfJobID string            `json:"retry_of_job_id,omitempty"`
+	PromptContext    *PromptContext    `json:"prompt_context,omitempty"`
 	SubmittedAt  time.Time         `json:"submitted_at"`
 	EncryptedSecrets []byte    `json:"encrypted_secrets,omitempty"`
 }
@@ -48,6 +49,24 @@ type AttachmentMeta struct {
 	Size        int64  `json:"size"`
 	MimeType    string `json:"mime_type"`
 	DownloadURL string `json:"download_url"`
+}
+
+type ThreadMessage struct {
+	User      string `json:"user"`
+	Timestamp string `json:"timestamp"`
+	Text      string `json:"text"`
+}
+
+type PromptContext struct {
+	ThreadMessages   []ThreadMessage `json:"thread_messages"`
+	ExtraDescription string          `json:"extra_description,omitempty"`
+	Channel          string          `json:"channel"`
+	Reporter         string          `json:"reporter"`
+	Branch           string          `json:"branch,omitempty"`
+	Language         string          `json:"language"`
+	Goal             string          `json:"goal"`
+	OutputRules      []string        `json:"output_rules"`
+	AllowWorkerRules bool            `json:"allow_worker_rules"`
 }
 
 type JobResult struct {
