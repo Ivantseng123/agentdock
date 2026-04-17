@@ -127,7 +127,11 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	case result.Confidence == "low":
 		metrics.IssueRejectedTotal.WithLabelValues("low_confidence").Inc()
 		r.store.UpdateStatus(job.ID, queue.JobCompleted)
-		r.updateStatus(job, ":warning: 判斷不屬於此 repo，已跳過")
+		text := ":warning: 判斷不屬於此 repo，已跳過"
+		if result.Message != "" {
+			text = text + "\n> " + result.Message
+		}
+		r.updateStatus(job, text)
 		r.clearDedup(job)
 
 	case result.FilesFound == 0 || result.Questions >= 5:
