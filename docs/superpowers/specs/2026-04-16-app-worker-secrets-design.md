@@ -2,21 +2,24 @@
 
 **Issue**: [#56](https://github.com/Ivantseng123/agentdock/issues/56)
 **Date**: 2026-04-16
+**Updated**: 2026-04-17 (post-grill review)
 
 ## Problem
 
-Secrets (GitHub token, K8s token, NPM token, etc.) are currently hardcoded as a single `GH_TOKEN` environment variable in the worker. There is no mechanism for the app to centrally manage and distribute multiple secrets to workers. Workers cannot be guaranteed to have the correct or up-to-date tokens.
+Secrets (GitHub token, K8s token, NPM token, etc.) are currently hardcoded as a single `GH_TOKEN` environment variable in the worker. There is no mechanism for the app to centrally manage and distribute multiple secrets to workers. Workers cannot be guaranteed to have the correct or up-to-date tokens. Additionally, `Job.CloneURL` embeds the GitHub token in plaintext through Redis.
 
 ## Decision Summary
 
 | Item | Decision |
 |------|----------|
-| Secret source | App centralized (config plaintext + env var via `EnvOverrideMap` pattern) |
+| Secret source | App centralized (config plaintext + env var via dynamic scan) |
 | Transport | Job struct → Redis (AES-256-GCM encrypted) |
 | Worker injection | Decrypted → `cmd.Env` (never in prompt) |
 | Worker override | Worker config `secrets` map overrides app-provided values |
 | Encryption key | Symmetric AES-256, shared `secret_key` in config |
-| Backward compat | No `secret_key` → no encryption; `github.token` auto-merges into `secrets["GH_TOKEN"]` |
+| Scope | **Redis transport only**; inmem mode unchanged |
+| Backward compat | No `secret_key` → no encryption; `github.token` kept (not deprecated) |
+| CloneURL | No longer contains token; worker assembles authenticated URL from job secrets |
 
 ## Config Structure
 
@@ -40,10 +43,10 @@ secrets:
 
 - `secrets` is `map[string]string`; keys become environment variable names
 - `secret_key` is hex-encoded 32 bytes (AES-256); config string is 64 hex characters
-- **Environment variable injection** uses the existing `EnvOverrideMap()` pattern in `config.go`, not a `${...}` interpolation syntax (which does not exist in this codebase). New env var mappings:
-  - `SECRET_KEY` env var → `secret_key` config path
-  - `SECRET_<NAME>` env var → `secrets.<name>` config path (e.g., `SECRET_K8S_TOKEN` → `secrets.K8S_TOKEN`)
-  - This is consistent with how `GITHUB_TOKEN`, `SLACK_BOT_TOKEN`, etc. already work
+- **Environment variable injection**:
+  - `SECRET_KEY` env var → `secret_key` config path (static mapping in `EnvOverrideMap()`)
+  - `AGENTDOCK_SECRET_<NAME>` env vars → dynamic scan at config load time. E.g., `AGENTDOCK_SECRET_K8S_TOKEN=xxx` → `cfg.Secrets["K8S_TOKEN"] = "xxx"`. The `AGENTDOCK_` prefix avoids collision with K8s or other system env vars.
+  - Config-file values and env var values merge; env var wins on conflict.
 
 ## Encryption Module
 
@@ -75,6 +78,24 @@ type Job struct {
 - If `secret_key` is not configured, `EncryptedSecrets` is left empty (nil). Secrets are not sent through the Job at all — only worker-local config secrets apply.
 - This eliminates ambiguity: if the field is non-empty, it is encrypted. Period.
 
+### CloneURL Change
+
+`Job.CloneURL` no longer contains the GitHub token. App submits a clean URL (e.g., `https://github.com/owner/repo.git`). Worker assembles the authenticated URL using `GH_TOKEN` from the resolved secrets map.
+
+Before:
+```go
+// workflow.go — app side
+CloneURL: w.repoCache.ResolveURL(pt.SelectedRepo)  // https://ghp_xxx@github.com/...
+```
+
+After:
+```go
+// workflow.go — app side
+CloneURL: fmt.Sprintf("https://github.com/%s.git", pt.SelectedRepo)  // no token
+```
+
+This eliminates plaintext token leakage through Redis in `Job.CloneURL`.
+
 ## Secret Passing Interface
 
 Secrets flow from `executor.go` (decryption) to `AgentRunner` (env injection) via `RunOptions`:
@@ -89,10 +110,72 @@ type RunOptions struct {
 
 - `executor.go` decrypts job secrets, merges with worker config secrets, sets `opts.Secrets`
 - `AgentRunner.runOne()` reads `opts.Secrets` and injects into `cmd.Env`
-- `AgentRunner` no longer stores `githubToken` as a field — it comes through `opts.Secrets`
+- **`AgentRunner.githubToken` field is kept** as fallback for inmem mode. Injection logic:
+  ```go
+  if len(opts.Secrets) > 0 {
+      for k, v := range opts.Secrets { env = append(env, k+"="+v) }
+  } else if r.githubToken != "" {
+      env = append(env, "GH_TOKEN="+r.githubToken)
+  }
+  ```
 - The `Runner` interface signature does not change (it already accepts `RunOptions`)
 
-## Data Flow
+## Worker Execution Dependencies
+
+`executionDeps` gains two fields for secret handling:
+
+```go
+type executionDeps struct {
+    // ... existing fields
+    secretKey     []byte            // decoded AES key, nil if not configured
+    workerSecrets map[string]string // worker config overrides
+}
+```
+
+`Pool` passes these from config at construction time.
+
+## RepoCache Per-Call Token
+
+`RepoCache.EnsureRepo` gains a `token` parameter so the worker can pass the job's `GH_TOKEN`:
+
+```go
+// Before
+func (rc *RepoCache) EnsureRepo(repoRef string) (string, error)
+
+// After
+func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error)
+```
+
+- If `token` is non-empty, use it; otherwise fallback to `rc.githubPAT` (backward compat for inmem mode)
+- On cache hit (repo already cloned), only run `git remote set-url origin <url-with-token>` **if the token differs** from what's currently in the remote URL. Same token → skip `set-url`, go straight to `git fetch`.
+- On cache miss, clone with the provided token.
+
+### RepoProvider Interface Change
+
+```go
+type RepoProvider interface {
+    Prepare(cloneURL, branch, token string) (string, error)  // token added
+    RemoveWorktree(worktreePath string) error
+    CleanAll() error
+    PurgeStale() error
+}
+```
+
+`repoCacheAdapter.Prepare()` passes token to `EnsureRepo`. `executor.go` extracts `GH_TOKEN` from the resolved secrets map and passes it to `Prepare`.
+
+`NewRepoCache` signature unchanged — in Redis mode, pass `""` as `githubPAT` at startup (token comes per-call from jobs). In inmem mode, pass `cfg.GitHub.Token` as before.
+
+## Scope: Redis Transport Only
+
+This feature is **only active in Redis transport mode** (`queue.transport: "redis"`).
+
+In inmem mode:
+- `AgentRunner.githubToken` fallback handles `GH_TOKEN` injection (same as today)
+- `RepoCache` uses `rc.githubPAT` from startup config (same as today)
+- `opts.Secrets` is empty; no encryption/decryption occurs
+- No behavioral changes whatsoever
+
+## Data Flow (Redis Mode)
 
 ```
 ┌─────────── App ───────────┐
@@ -101,16 +184,17 @@ type RunOptions struct {
 │  ├ secret_key: "aes-key"   │
 │  ├ secrets:                │
 │  │   GH_TOKEN: "ghp_xxx"  │
-│  │   K8S_TOKEN: "from-cfg" │  ← or via SECRET_K8S_TOKEN env (EnvOverrideMap)
-│  └ github.token: "ghp_x"  │  ← backward compat → secrets["GH_TOKEN"]
+│  │   K8S_TOKEN: "from-cfg" │  ← or via AGENTDOCK_SECRET_K8S_TOKEN env
+│  └ github.token: "ghp_x"  │  ← auto-merge → secrets["GH_TOKEN"]
 │                            │
 │  Submit Job:               │
 │  1. Resolve secrets map    │
 │  2. JSON marshal secrets   │
 │  3. AES-GCM encrypt        │
 │  4. Job.EncryptedSecrets   │
+│  5. Job.CloneURL (no token)│
 └──────────┬─────────────────┘
-           │ Redis (ciphertext)
+           │ Redis (ciphertext + clean URL)
 ┌──────────▼─────────────────┐
 │                            │
 │  Worker                    │
@@ -122,7 +206,10 @@ type RunOptions struct {
 │  Receive Job:              │
 │  1. AES-GCM decrypt        │
 │  2. Merge (worker wins)    │
-│  3. cmd.Env inject all     │
+│  3. RepoCache.EnsureRepo   │
+│     with GH_TOKEN from     │
+│     merged secrets         │
+│  4. cmd.Env inject all     │
 │                            │
 │  exec claude --print ...   │
 │  env: GH_TOKEN=ghp_ovr    │
@@ -135,17 +222,29 @@ type RunOptions struct {
 
 1. Start with app-provided secrets (decrypted from Job)
 2. Overlay worker config `secrets` (worker wins on conflict)
-3. Result is the final `map[string]string` injected into `cmd.Env`
+3. Result is the final `map[string]string` — used for both `cmd.Env` injection and `RepoCache` token
 
 ## Backward Compatibility
 
 | Scenario | Behavior |
 |----------|----------|
-| No `secret_key`, no `secrets` | Same as today; `github.token` → `GH_TOKEN` env var |
+| No `secret_key`, no `secrets` | Same as today; `github.token` → `GH_TOKEN` env var via `AgentRunner.githubToken` fallback |
 | `secrets` set, no `secret_key` | Secrets are NOT sent through Job; only worker-local config secrets apply |
 | `secret_key` set, `secrets` set | Full encryption flow |
 | Worker has no `secret_key` but receives `EncryptedSecrets` | Job fails with clear error |
 | `github.token` set alongside `secrets` | `github.token` auto-merged as `secrets["GH_TOKEN"]`; explicit `secrets.GH_TOKEN` wins |
+| inmem transport | Completely unchanged; secrets feature not active |
+
+## `github.token` Handling
+
+`github.token` is **not deprecated**. Both `github.token` and `secrets.GH_TOKEN` are valid config paths.
+
+The auto-merge happens at config post-processing time (in `applyDefaults` or a new `resolveSecrets` step):
+
+1. If `cfg.GitHub.Token` is set and `cfg.Secrets["GH_TOKEN"]` is not → copy `cfg.GitHub.Token` into `cfg.Secrets["GH_TOKEN"]`
+2. If both are set → `cfg.Secrets["GH_TOKEN"]` wins (explicit beats implicit)
+3. After this step, `cfg.Secrets` is the single source of truth for all secrets
+4. `RepoCache` in inmem mode still reads `cfg.GitHub.Token` directly for its own `githubPAT` field
 
 ## Error Handling
 
@@ -160,15 +259,6 @@ Add optional step in the init wizard:
 1. Ask if user wants to enable secret encryption
 2. If yes, auto-generate 32 bytes via `crypto/rand`, hex-encode, write to config
 3. Prompt for secrets (key-value pairs) — or tell user to add manually later
-
-## `github.token` Auto-Merge
-
-The merge happens at config post-processing time (in `applyDefaults` or a new `resolveSecrets` step):
-
-1. If `cfg.GitHub.Token` is set and `cfg.Secrets["GH_TOKEN"]` is not → copy `cfg.GitHub.Token` into `cfg.Secrets["GH_TOKEN"]`
-2. If both are set → `cfg.Secrets["GH_TOKEN"]` wins (explicit beats implicit)
-3. After this step, `cfg.Secrets` is the single source of truth for all secrets
-4. `AgentRunner` no longer reads `cfg.GitHub.Token` directly for env injection
 
 ## Environment Variable Composition
 
@@ -196,6 +286,10 @@ On Linux/macOS, later entries override earlier ones with the same key, so append
 | No `secret_key` → `EncryptedSecrets` is nil | `internal/bot/workflow_test.go` |
 | Worker receives `EncryptedSecrets` without `secret_key` → job fails | `internal/worker/executor_test.go` |
 | `RunOptions.Secrets` injected into `cmd.Env` | `internal/bot/agent_test.go` |
+| `AGENTDOCK_SECRET_*` env var scan | `internal/config/config_test.go` |
+| `RepoCache.EnsureRepo` with per-call token | `internal/github/repo_test.go` |
+| `RepoCache` skips `set-url` when token unchanged | `internal/github/repo_test.go` |
+| `Job.CloneURL` does not contain token | `internal/bot/workflow_test.go` |
 
 ## Files Changed
 
@@ -203,12 +297,15 @@ On Linux/macOS, later entries override earlier ones with the same key, so append
 |------|--------|
 | `internal/crypto/aes.go` | **New** — Encrypt / Decrypt functions |
 | `internal/crypto/aes_test.go` | **New** — encryption round-trip tests |
-| `internal/config/config.go` | Add `SecretKey`, `Secrets` fields + env var expansion |
+| `internal/config/config.go` | Add `SecretKey`, `Secrets` fields + `AGENTDOCK_SECRET_*` dynamic scan + `SECRET_KEY` in `EnvOverrideMap` |
 | `internal/queue/job.go` | Add `EncryptedSecrets []byte` field |
-| `internal/bot/agent.go` | Generic secret injection via `cmd.Env`, remove hardcoded `GH_TOKEN` |
-| `internal/bot/workflow.go` | Encrypt secrets when submitting job |
-| `internal/worker/executor.go` | Decrypt + merge worker secrets before agent execution |
-| `cmd/agentdock/adapters.go` | Pass secrets through to Runner |
+| `internal/bot/agent.go` | Generic secret injection via `opts.Secrets` with `githubToken` fallback, remove hardcoded `GH_TOKEN` |
+| `internal/bot/workflow.go` | Encrypt secrets when submitting job; `CloneURL` without token |
+| `internal/worker/executor.go` | Decrypt + merge worker secrets; pass `GH_TOKEN` to `RepoCache.Prepare`; add `secretKey`/`workerSecrets` to `executionDeps` |
+| `internal/github/repo.go` | `EnsureRepo` per-call token param; conditional `git remote set-url` |
+| `internal/worker/executor.go` | `RepoProvider.Prepare` adds `token` param |
+| `cmd/agentdock/adapters.go` | `repoCacheAdapter.Prepare` passes token; `agentRunnerAdapter` unchanged |
+| `cmd/agentdock/worker.go` | Pass `secretKey`/`workerSecrets` to Pool config |
 | `cmd/agentdock/init.go` / `prompts.go` | Init wizard: secret_key generation step |
 
 ## Out of Scope
@@ -217,3 +314,4 @@ On Linux/macOS, later entries override earlier ones with the same key, so append
 - Per-channel secret overrides (all jobs get the same secrets from app config)
 - Secret rotation mechanism (manual: update config, restart)
 - Prompt-level secret injection (secrets are env vars only, never in prompt text)
+- inmem transport support for secrets (inmem mode unchanged)
