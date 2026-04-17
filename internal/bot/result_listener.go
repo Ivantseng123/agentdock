@@ -126,6 +126,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 
 	case result.Confidence == "low":
 		metrics.IssueRejectedTotal.WithLabelValues("low_confidence").Inc()
+		r.store.UpdateStatus(job.ID, queue.JobCompleted)
 		r.updateStatus(job, ":warning: 判斷不屬於此 repo，已跳過")
 		r.clearDedup(job)
 
@@ -284,6 +285,7 @@ func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job,
 
 	url, err := r.github.CreateIssue(ctx, owner, repo, result.Title, body, result.Labels)
 	if err != nil {
+		r.store.UpdateStatus(job.ID, queue.JobFailed)
 		r.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
 		return
 	}
@@ -294,6 +296,7 @@ func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job,
 	}
 	metrics.IssueCreatedTotal.WithLabelValues(confidence, strconv.FormatBool(degraded)).Inc()
 
+	r.store.UpdateStatus(job.ID, queue.JobCompleted)
 	r.updateStatus(job, fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url))
 }
 

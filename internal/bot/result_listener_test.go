@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -10,6 +11,8 @@ import (
 
 	"agentdock/internal/queue"
 )
+
+var errBoomGitHub = errors.New("github down")
 
 type mockSlackPoster struct {
 	mu       sync.Mutex
@@ -85,6 +88,39 @@ func TestResultListener_CompletedCreatesIssue(t *testing.T) {
 	if !found {
 		t.Errorf("expected issue URL in messages, got %v", slackMock.messages)
 	}
+
+	state, _ := store.Get("j1")
+	if state.Status != queue.JobCompleted {
+		t.Errorf("store status = %q, want JobCompleted", state.Status)
+	}
+}
+
+func TestResultListener_IssueCreationFailureMarksJobFailed(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jcerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	githubMock := &mockIssueCreator{err: errBoomGitHub}
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID: "jcerr", Status: "completed",
+		Title: "Bug", Body: "body", Confidence: "high", FilesFound: 2,
+	})
+	time.Sleep(200 * time.Millisecond)
+
+	state, _ := store.Get("jcerr")
+	if state.Status != queue.JobFailed {
+		t.Errorf("store status = %q, want JobFailed", state.Status)
+	}
 }
 
 func TestResultListener_FailedPostsError(t *testing.T) {
@@ -156,6 +192,11 @@ func TestResultListener_LowConfidenceRejects(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected rejection in messages, got %v", slackMock.messages)
+	}
+
+	state, _ := store.Get("j1")
+	if state.Status != queue.JobCompleted {
+		t.Errorf("store status = %q, want JobCompleted", state.Status)
 	}
 }
 
