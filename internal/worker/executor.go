@@ -188,6 +188,25 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]bot.At
 	return infos, nil
 }
 
+func classifyResult(job *queue.Job, startedAt time.Time, err error, repoPath string, ctx context.Context, store queue.JobStore) *queue.JobResult {
+	if ctx.Err() == context.Canceled {
+		if state, lookupErr := store.Get(job.ID); lookupErr == nil && state.Status == queue.JobCancelled {
+			return cancelledResult(job, startedAt, repoPath)
+		}
+	}
+	return failedResult(job, startedAt, err, repoPath)
+}
+
+func cancelledResult(job *queue.Job, startedAt time.Time, repoPath string) *queue.JobResult {
+	return &queue.JobResult{
+		JobID:      job.ID,
+		Status:     "cancelled",
+		RepoPath:   repoPath,
+		StartedAt:  startedAt,
+		FinishedAt: time.Now(),
+	}
+}
+
 func failedResult(job *queue.Job, startedAt time.Time, err error, repoPath string) *queue.JobResult {
 	return &queue.JobResult{
 		JobID:      job.ID,
