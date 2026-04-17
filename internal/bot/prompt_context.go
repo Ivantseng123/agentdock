@@ -13,10 +13,6 @@ func AssemblePromptContext(
 	extraDesc, channel, reporter, branch string,
 	pc config.PromptConfig,
 ) queue.PromptContext {
-	allow := false
-	if pc.AllowWorkerRules != nil {
-		allow = *pc.AllowWorkerRules
-	}
 	return queue.PromptContext{
 		ThreadMessages:   threadMsgs,
 		ExtraDescription: extraDesc,
@@ -26,6 +22,6 @@ func AssemblePromptContext(
 		Language:         pc.Language,
 		Goal:             pc.Goal,
 		OutputRules:      pc.OutputRules,
-		AllowWorkerRules: allow,
+		AllowWorkerRules: pc.IsWorkerRulesAllowed(),
 	}
 }

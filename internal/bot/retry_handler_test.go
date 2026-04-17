@@ -27,9 +27,14 @@ func TestRetryHandler_CreatesNewJob(t *testing.T) {
 		Repo:      "owner/repo",
 		CloneURL:  "https://github.com/owner/repo.git",
 		Branch:    "main",
-		Prompt:    "test prompt",
-		Priority:  50,
-		Skills:    map[string]*queue.SkillPayload{"s1": {Files: map[string][]byte{"SKILL.md": []byte("content")}}},
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "Alice", Timestamp: "1", Text: "test prompt"}},
+			Channel:        "general",
+			Reporter:       "Alice",
+			Goal:           "triage",
+		},
+		Priority: 50,
+		Skills:   map[string]*queue.SkillPayload{"s1": {Files: map[string][]byte{"SKILL.md": []byte("content")}}},
 	}
 	store.Put(original)
 	store.UpdateStatus("j1", queue.JobFailed)
@@ -54,8 +59,14 @@ func TestRetryHandler_CreatesNewJob(t *testing.T) {
 	if newJob.RetryOfJobID != "j1" {
 		t.Errorf("RetryOfJobID = %q, want j1", newJob.RetryOfJobID)
 	}
-	if newJob.Prompt != "test prompt" {
-		t.Errorf("Prompt = %q, want test prompt", newJob.Prompt)
+	if newJob.PromptContext == nil {
+		t.Fatal("PromptContext not copied to retry job (worker would reject as malformed)")
+	}
+	if len(newJob.PromptContext.ThreadMessages) == 0 || newJob.PromptContext.ThreadMessages[0].Text != "test prompt" {
+		t.Errorf("PromptContext.ThreadMessages not preserved, got %+v", newJob.PromptContext.ThreadMessages)
+	}
+	if newJob.PromptContext.Goal != "triage" {
+		t.Errorf("PromptContext.Goal = %q, want triage", newJob.PromptContext.Goal)
 	}
 	if newJob.UserID != "U1" {
 		t.Errorf("UserID = %q, want U1", newJob.UserID)

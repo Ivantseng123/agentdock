@@ -39,10 +39,12 @@ func TestAssemblePromptContext_PassesConfigThrough(t *testing.T) {
 	}
 }
 
-func TestAssemblePromptContext_NilAllowWorkerRulesDefaultsFalse(t *testing.T) {
+func TestAssemblePromptContext_NilAllowWorkerRulesDefaultsTrue(t *testing.T) {
+	// Delegates to PromptConfig.IsWorkerRulesAllowed(), which treats nil as
+	// "allow" (matching applyDefaults). Keeps the invariant in one place.
 	pc := config.PromptConfig{AllowWorkerRules: nil}
 	got := AssemblePromptContext(nil, "", "", "", "", pc)
-	if got.AllowWorkerRules {
-		t.Error("nil AllowWorkerRules pointer should assemble as false")
+	if !got.AllowWorkerRules {
+		t.Error("nil AllowWorkerRules should assemble as true (matches applyDefaults default)")
 	}
 }
