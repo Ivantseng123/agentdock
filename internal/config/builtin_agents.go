@@ -18,7 +18,7 @@ var BuiltinAgents = map[string]AgentConfig{
 	},
 	"codex": {
 		Command:  "codex",
-		Args:     []string{"exec", "--skip-git-repo-check", "-o", "{output_file}", "{prompt}"},
+		Args:     []string{"exec", "--skip-git-repo-check", "--color", "never", "{prompt}"},
 		Timeout:  15 * time.Minute,
 		SkillDir: ".codex/skills",
 	},
