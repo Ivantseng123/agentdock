@@ -24,8 +24,9 @@
 - App 傳**結構化 context** 給 worker（thread messages、channel、reporter、branch、extra desc、language、goal、output rules、allow_worker_rules 開關），不再傳 raw prompt 字串。
 - Prompt 格式從 markdown-like 改 XML。
 - App config 的 `prompt.extra_rules` 移除；worker config 新增 `worker.prompt.extra_rules`。
+- YAML top-level `workers:` rename 為 `worker:`，`count` 併入同一 section（breaking，跟本 PR 其他 breaking 一起吃）。
 - App 透過 job payload `allow_worker_rules: bool` 決定 worker 端的 ExtraRules 要不要生效。
-- App config 支援 `prompt.goal`（string）與 `prompt.output_rules`（string array），允許運維覆寫預設的 Goal 與 Output 指示；運維不設定時用 hardcoded default。
+- App config 支援 `prompt.goal`（string）與 `prompt.output_rules`（string array），允許運維覆寫預設的 Goal 與 Output 指示；`Goal` 有 hardcoded default、`OutputRules` default 為 `[]`（不渲染 section）。
 - 舊測試從 `internal/bot/prompt_test.go` 搬到 `internal/worker/prompt_test.go` 並改斷 XML。
 
 ## 3. 非目標
@@ -37,7 +38,7 @@
 
 ## 4. 關鍵決策
 
-五個判斷題的 brainstorm 結論：
+Brainstorm + grill 後的結論：
 
 | # | 決策 | 理由 |
 |---|---|---|
@@ -46,6 +47,10 @@
 | Q3 | **XML 直切**，不留 markdown fallback flag | 跟 Q1 一致，兩套 render code 並存會永遠刪不掉。 |
 | Q4 | **Secret 不進 prompt**，agent 透過 env var (`$GH_TOKEN`) + skill 文件知道能力 | 避免 token 進 LLM log；agent 的 skill 文件本來就該講這些。 |
 | Q5 | **Prompt builder 放 `internal/worker/prompt.go`** | App/worker 界線最硬；`AppendAttachmentSection` 一起搬進來（目前只有 `executor.go:107` 在呼叫）。 |
+| G1 | **`OutputRules` default 為 `[]`** | 避免啟用預設值後改變現有 agent 行為（跟 `/triage-issue` skill 的 JSON output schema 衝突）。運維要才自己填。 |
+| G2 | **`AllowWorkerRules` default `true`** | 升級平滑：搬完 `extra_rules` 行為照舊；忘搬還有 `warnUnknownKeys` 警告當安全網。 |
+| G3 | **YAML rename `workers` → `worker`**，`count` 併入 | 避免 `workers`/`worker` 單複數並存的永久 smell；跟本 PR 其他 breaking 改動一起承擔一次升級成本。 |
+| G4 | **特判 migration warn** for 舊 key（`prompt.extra_rules`、`workers.count`） | 通用 `warnUnknownKeys` 訊息不告訴運維該搬去哪；特判一次省後續一大堆 support。 |
 
 ## 5. Architecture
 
@@ -84,36 +89,43 @@
 | 修改 | `internal/queue/job.go` | 新增 `PromptContext`、`ThreadMessage`；刪除 `Job.Prompt` 欄位；新增 `Job.PromptContext` 欄位 |
 | 修改 | `internal/worker/executor.go` | 改呼叫 `worker.BuildPrompt`；`deps` 加 `workerPromptConfig` |
 | 修改 | `internal/bot/workflow.go` | 刪掉 `BuildPrompt` 呼叫；改組 `queue.PromptContext{}` 塞進 job |
-| 修改 | `internal/config/config.go` | `PromptConfig` 擴 Goal/OutputRules/AllowWorkerRules，刪 ExtraRules；新增 `WorkerConfig{Prompt WorkerPromptConfig}` |
+| 修改 | `internal/config/config.go` | `PromptConfig` 擴 Goal/OutputRules/AllowWorkerRules，刪 ExtraRules；rename `Workers` → `Worker`，`Count` 併入，新增 `Prompt WorkerPromptConfig`；特判舊 key migration warn |
+| 修改 | 所有 `cfg.Workers.Count` 呼叫點 | rename 為 `cfg.Worker.Count`（全專案 grep 改） |
 
 ### App config（`internal/config/config.go`）
 
 ```go
 type PromptConfig struct {
     Language         string   `yaml:"language"`
-    Goal             string   `yaml:"goal"`              // 新增，default hardcoded fallback
-    OutputRules      []string `yaml:"output_rules"`      // 新增，default hardcoded fallback
+    Goal             string   `yaml:"goal"`              // 新增，default hardcoded
+    OutputRules      []string `yaml:"output_rules"`      // 新增，default: []（不輸出 section）
     AllowWorkerRules bool     `yaml:"allow_worker_rules"` // 新增，default true（升級平滑）
     // ExtraRules []string ← 刪除
 }
 ```
 
-**Default fallbacks**（當 YAML 未設定時於 `applyDefaults` 套用）：
-- `Goal`: `"Use the /triage-issue skill to investigate and produce a triage result."`
-- `OutputRules`: `["一句話整理分析結果", "< 100 字", "用在回報 slack"]`
-- `AllowWorkerRules`: `true`
+**Default 套用策略**（於 `applyDefaults(cfg *Config)`）：
 
-### Worker config（`internal/config/config.go`，新區塊）
+| 欄位 | Default | 理由 |
+|---|---|---|
+| `Goal` | `"Use the /triage-issue skill to investigate and produce a triage result."` | 必須非空（XML 一定渲染 `<goal>`），無值等於 agent 沒指令 |
+| `OutputRules` | `[]`（空陣列） | 現況 prompt 無 output 段，default 保持現況行為；空陣列時 `<output_rules>` 整段不渲染（optional section 規則） |
+| `AllowWorkerRules` | `true` | 升級時搬完 rules 繼續生效（lossless） |
+
+### Worker config（`internal/config/config.go`，rename + 擴充）
+
+**Breaking change**：把既有的 `Workers WorkersConfig`（plural）rename 成 `Worker WorkerConfig`（singular），`Count` 併進去同時新增 `Prompt` 子區塊：
 
 ```go
 type Config struct {
     // ... existing ...
-    Workers WorkersConfig `yaml:"workers"` // 既有：pool count
-    Worker  WorkerConfig  `yaml:"worker"`  // 新增：每個 worker 的行為
+    // Workers WorkersConfig `yaml:"workers"` ← 刪除
+    Worker WorkerConfig `yaml:"worker"` // 每個 worker 的規模與行為都放這
 }
 
 type WorkerConfig struct {
-    Prompt WorkerPromptConfig `yaml:"prompt"`
+    Count  int                `yaml:"count"`  // 從舊 WorkersConfig 搬來
+    Prompt WorkerPromptConfig `yaml:"prompt"` // 新增
 }
 
 type WorkerPromptConfig struct {
@@ -121,26 +133,49 @@ type WorkerPromptConfig struct {
 }
 ```
 
-`workers`（plural, pool 規模）與 `worker`（singular, 行為）並存。語意分得開，不破壞既有 YAML。
+程式碼內所有 `cfg.Workers.Count` 同時 rename 成 `cfg.Worker.Count`。
 
 ### YAML 升級範例
 
 ```diff
+-workers:
+-  count: 3
++worker:
++  count: 3
++  prompt:
++    extra_rules:
++      - "no guessing"
+
  prompt:
    language: zh-TW
 -  extra_rules:
 -    - "no guessing"
-+  # 以下可省略，走 hardcoded default；範例展示如何覆寫：
++  # 以下可省略，走 hardcoded default 或不渲染；範例展示如何覆寫：
 +  # goal: "..."
 +  # output_rules:
 +  #   - "..."
 +  allow_worker_rules: true
-
-+worker:
-+  prompt:
-+    extra_rules:
-+      - "no guessing"
 ```
+
+### Migration warning（特判）
+
+`applyDefaults` 或 `validate` 階段額外檢查舊位置的 key：
+
+```go
+// pseudocode - 看 koanf raw key 是否存在
+if k.Exists("prompt.extra_rules") {
+    slog.Warn("prompt.extra_rules 已搬到 worker.prompt.extra_rules，本設定忽略",
+        "phase", "設定", "migration", "prompt-refactor")
+}
+if k.Exists("workers.count") && !k.Exists("worker.count") {
+    slog.Warn("workers.count 已 rename 為 worker.count，本設定忽略",
+        "phase", "設定", "migration", "prompt-refactor")
+}
+```
+
+- **WARN only，不 remap**：運維自己改 YAML。跟其他 breaking change 一致。
+- **不 fail-fast**：避免把只是想跑新 binary 的運維卡死。
+- **通用 `warnUnknownKeys` 仍會 fire**：這兩個特判提供更具體的指引，和通用 warn 並存不衝突。
 
 ## 7. Wire Protocol：`PromptContext`
 
@@ -258,7 +293,7 @@ Worker `BuildPrompt()` 吐的字串長這樣：
 | `job.PromptContext == nil`（舊 schema 殘留） | Worker `failedResult("malformed job: missing prompt_context")`，不 retry。Q1 drain 下不該發生，純防禦。 |
 | `PromptContext.ThreadMessages` 空 | App assembly 時先檢查，空 thread 根本不該進 queue：`workflow.go` log + `notifyError`，不 submit。 |
 | `PromptContext.Goal` 空 | App `applyDefaults` 已套 hardcoded default，worker 信任 app 已填好，不額外驗證。 |
-| `PromptContext.OutputRules` 空 | 同上，app defaults 保證非空。 |
+| `PromptContext.OutputRules` 空（default 就是 `[]`） | Worker 完全不輸出 `<output_rules>` 整段（optional section 規則生效）。不是錯，是預期行為。 |
 | XML escape edge case（非法 UTF-8、null byte） | `encoding/xml.EscapeString` 會忽略無效序列，最壞情況 agent 收到缺字但不 crash。不 retry、不失敗。 |
 
 ## 10. Deploy & Migration
@@ -279,9 +314,15 @@ Worker `BuildPrompt()` 吐的字串長這樣：
 
 寫進 `docs/MIGRATION-v1.md` 增補章節或新開 migration 文：
 
-- **必改**：`prompt.extra_rules` → `worker.prompt.extra_rules`
-- **可改**（有 default）：`prompt.goal`、`prompt.output_rules`、`prompt.allow_worker_rules`
-- **App 啟動 validation**：偵測到頂層 `prompt.extra_rules` 殘留 → log WARN（「已搬到 worker.prompt.extra_rules，本設定已忽略」），**不 crash**，給 operator 一段時間看到 log 再改 YAML。
+- **必改**：
+  - `workers:` → `worker:`（top-level rename）
+  - `prompt.extra_rules` → `worker.prompt.extra_rules`
+- **可選**（有 default）：`prompt.goal`、`prompt.output_rules`、`prompt.allow_worker_rules`
+- **App 啟動 validation**：
+  - 偵測到 `prompt.extra_rules` 殘留 → 特判 WARN「已搬到 worker.prompt.extra_rules，本設定忽略」
+  - 偵測到 `workers.count` 殘留 → 特判 WARN「已 rename 為 worker.count，本設定忽略」
+  - 通用 `warnUnknownKeys` 照常 fire（兩者並存）
+  - **不 crash、不 remap**，給 operator 看 log 自己改 YAML
 
 ## 11. Testing
 
@@ -301,8 +342,16 @@ Worker `BuildPrompt()` 吐的字串長這樣：
 
 | Test | 驗證 |
 |---|---|
-| `TestAssemblePromptContext_AppliesDefaults` | `cfg.Prompt.Goal == ""` → `PromptContext.Goal` 得到 hardcoded default；OutputRules 同理；`AllowWorkerRules` 預設 true |
+| `TestAssemblePromptContext_AppliesDefaults` | `cfg.Prompt.Goal == ""` → `PromptContext.Goal` 得到 hardcoded default；`OutputRules == nil` → 維持 nil/empty（空陣列是預期）；`AllowWorkerRules` 預設 true |
 | `TestAssemblePromptContext_PassesConfigThrough` | 有填的 config 欄位原封不動進 PromptContext |
+
+### Config migration tests（擴充 `internal/config/config_test.go` 或 `cmd/agentdock/config_test.go`）
+
+| Test | 驗證 |
+|---|---|
+| `TestConfig_LegacyPromptExtraRules_Warns` | YAML 含 `prompt.extra_rules` → log 含「已搬到 worker.prompt.extra_rules」；值不套用到 `cfg.Prompt`（已被移除的欄位） |
+| `TestConfig_LegacyWorkersCount_Warns` | YAML 含 `workers.count` → log 含「已 rename 為 worker.count」；值不套用到 `cfg.Worker.Count` |
+| `TestConfig_NewWorkerSection_LoadsCorrectly` | YAML 含 `worker.count` + `worker.prompt.extra_rules` → `cfg.Worker` 正確 populated |
 
 ### Integration（`internal/worker/pool_test.go` 擴充）
 
