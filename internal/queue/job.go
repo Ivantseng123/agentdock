@@ -21,26 +21,26 @@ type SkillPayload struct {
 }
 
 type Job struct {
-	ID          string                    `json:"id"`
-	Priority    int                       `json:"priority"`
-	Seq         uint64                    `json:"seq"`
-	ChannelID   string                    `json:"channel_id"`
-	ThreadTS    string                    `json:"thread_ts"`
-	UserID      string                    `json:"user_id"`
-	Repo        string                    `json:"repo"`
-	Branch      string                    `json:"branch"`
-	CloneURL    string                    `json:"clone_url"`
-	Prompt      string                    `json:"prompt"`
-	Skills      map[string]*SkillPayload  `json:"skills"`
-	RequestID   string            `json:"request_id"`
-	Attachments []AttachmentMeta  `json:"attachments"`
-	StatusMsgTS string            `json:"status_msg_ts,omitempty"`
-	TaskType     string            `json:"task_type,omitempty"`
-	RetryCount   int               `json:"retry_count,omitempty"`
-	RetryOfJobID string            `json:"retry_of_job_id,omitempty"`
-	PromptContext    *PromptContext    `json:"prompt_context,omitempty"`
-	SubmittedAt  time.Time         `json:"submitted_at"`
-	EncryptedSecrets []byte    `json:"encrypted_secrets,omitempty"`
+	ID               string                   `json:"id"`
+	Priority         int                      `json:"priority"`
+	Seq              uint64                   `json:"seq"`
+	ChannelID        string                   `json:"channel_id"`
+	ThreadTS         string                   `json:"thread_ts"`
+	UserID           string                   `json:"user_id"`
+	Repo             string                   `json:"repo"`
+	Branch           string                   `json:"branch"`
+	CloneURL         string                   `json:"clone_url"`
+	Prompt           string                   `json:"prompt"`
+	Skills           map[string]*SkillPayload `json:"skills"`
+	RequestID        string                   `json:"request_id"`
+	Attachments      []AttachmentMeta         `json:"attachments"`
+	StatusMsgTS      string                   `json:"status_msg_ts,omitempty"`
+	TaskType         string                   `json:"task_type,omitempty"`
+	RetryCount       int                      `json:"retry_count,omitempty"`
+	RetryOfJobID     string                   `json:"retry_of_job_id,omitempty"`
+	PromptContext    *PromptContext           `json:"prompt_context,omitempty"`
+	SubmittedAt      time.Time                `json:"submitted_at"`
+	EncryptedSecrets []byte                   `json:"encrypted_secrets,omitempty"`
 }
 
 type AttachmentMeta struct {
@@ -70,22 +70,22 @@ type PromptContext struct {
 }
 
 type JobResult struct {
-	JobID        string    `json:"job_id"`
-	Status       string    `json:"status"`
-	Title        string    `json:"title"`
-	Body         string    `json:"body"`
-	Labels       []string  `json:"labels"`
-	Confidence   string    `json:"confidence"`
-	FilesFound   int       `json:"files_found"`
-	Questions    int       `json:"open_questions"`
-	Message      string    `json:"message,omitempty"`
-	RawOutput    string    `json:"raw_output"`
-	Error        string    `json:"error"`
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at"`
-	CostUSD      float64   `json:"cost_usd,omitempty"`
-	InputTokens  int       `json:"input_tokens,omitempty"`
-	OutputTokens int       `json:"output_tokens,omitempty"`
+	JobID          string    `json:"job_id"`
+	Status         string    `json:"status"`
+	Title          string    `json:"title"`
+	Body           string    `json:"body"`
+	Labels         []string  `json:"labels"`
+	Confidence     string    `json:"confidence"`
+	FilesFound     int       `json:"files_found"`
+	Questions      int       `json:"open_questions"`
+	Message        string    `json:"message,omitempty"`
+	RawOutput      string    `json:"raw_output"`
+	Error          string    `json:"error"`
+	StartedAt      time.Time `json:"started_at"`
+	FinishedAt     time.Time `json:"finished_at"`
+	CostUSD        float64   `json:"cost_usd,omitempty"`
+	InputTokens    int       `json:"input_tokens,omitempty"`
+	OutputTokens   int       `json:"output_tokens,omitempty"`
 	RepoPath       string    `json:"-"` // local only, not serialized over Redis
 	PrepareSeconds float64   `json:"-"` // local only, not serialized over Redis
 }
