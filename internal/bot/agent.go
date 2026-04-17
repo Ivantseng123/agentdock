@@ -20,6 +20,7 @@ import (
 type RunOptions struct {
 	OnStarted func(pid int, command string)
 	OnEvent   func(event queue.StreamEvent)
+	Secrets   map[string]string
 }
 
 type AgentRunner struct {
@@ -108,8 +109,16 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 
-	// Pass GH_TOKEN for agent to access GitHub API.
-	cmd.Env = append(os.Environ(), fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
+	// Inject secrets as environment variables.
+	env := os.Environ()
+	if len(opts.Secrets) > 0 {
+		for k, v := range opts.Secrets {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
+	} else if r.githubToken != "" {
+		env = append(env, fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
+	}
+	cmd.Env = env
 
 	if useStdin {
 		cmd.Stdin = strings.NewReader(prompt)

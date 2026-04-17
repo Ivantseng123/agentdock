@@ -106,3 +106,53 @@ echo "padding padding padding padding padding padding padding"
 		t.Errorf("prompt not substituted in output: %q", output)
 	}
 }
+
+func TestAgentRunner_SecretsInjected(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "env-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+env | grep TOKEN | sort
+echo "padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewAgentRunner([]config.AgentConfig{
+		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
+	})
+
+	secrets := map[string]string{
+		"GH_TOKEN":  "ghp_from_secrets",
+		"K8S_TOKEN": "k8s_val",
+	}
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{Secrets: secrets})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !strings.Contains(output, "GH_TOKEN=ghp_from_secrets") {
+		t.Errorf("GH_TOKEN not injected: %q", output)
+	}
+	if !strings.Contains(output, "K8S_TOKEN=k8s_val") {
+		t.Errorf("K8S_TOKEN not injected: %q", output)
+	}
+}
+
+func TestAgentRunner_GithubTokenFallback(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "env-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+env | grep GH_TOKEN
+echo "padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewAgentRunner([]config.AgentConfig{
+		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
+	})
+	runner.githubToken = "ghp_fallback"
+
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !strings.Contains(output, "GH_TOKEN=ghp_fallback") {
+		t.Errorf("githubToken fallback not working: %q", output)
+	}
+}
