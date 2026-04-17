@@ -236,3 +236,53 @@ func TestShowDescriptionPrompt_NoBackButton_WhenShortcut(t *testing.T) {
 		t.Errorf("should not include back button for shortcut path")
 	}
 }
+
+func TestPostRepoSelector_MultiRepo_UsesPostSelector(t *testing.T) {
+	slack := &stubSlack{}
+	cfg := &config.Config{
+		ChannelDefaults: config.ChannelConfig{Repos: []string{"o/a", "o/b", "o/c"}},
+	}
+	w := newTestWorkflow(t, slack, cfg)
+
+	pt := testPending("C1", "T1", true, "")
+	ts, err := w.postRepoSelector(pt, cfg.ChannelDefaults)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if ts == "" {
+		t.Error("expected selector TS")
+	}
+	if len(slack.PostSelectorCalls) != 1 {
+		t.Fatalf("expected 1 PostSelector call, got %d", len(slack.PostSelectorCalls))
+	}
+	if slack.PostSelectorCalls[0].ActionPrefix != "repo_select" {
+		t.Errorf("ActionPrefix = %q, want repo_select", slack.PostSelectorCalls[0].ActionPrefix)
+	}
+	if pt.Phase != "repo" {
+		t.Errorf("Phase = %q, want repo", pt.Phase)
+	}
+}
+
+func TestPostRepoSelector_NoRepos_UsesPostExternalSelector(t *testing.T) {
+	slack := &stubSlack{}
+	cfg := &config.Config{ChannelDefaults: config.ChannelConfig{}}
+	w := newTestWorkflow(t, slack, cfg)
+
+	pt := testPending("C1", "T1", true, "")
+	ts, err := w.postRepoSelector(pt, cfg.ChannelDefaults)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if ts == "" {
+		t.Error("expected selector TS")
+	}
+	if len(slack.PostExternalSelectorCalls) != 1 {
+		t.Fatalf("expected 1 PostExternalSelector call")
+	}
+	if slack.PostExternalSelectorCalls[0].ActionID != "repo_search" {
+		t.Errorf("ActionID = %q, want repo_search", slack.PostExternalSelectorCalls[0].ActionID)
+	}
+	if pt.Phase != "repo_search" {
+		t.Errorf("Phase = %q, want repo_search", pt.Phase)
+	}
+}

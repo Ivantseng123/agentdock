@@ -200,30 +200,30 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		return
 	}
 
-	if len(repos) > 1 {
-		pt.Phase = "repo"
-		selectorTS, err := w.slack.PostSelector(event.ChannelID,
-			":point_right: Which repo should this issue go to?",
-			"repo_select", repos, pt.ThreadTS)
-		if err != nil {
-			w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo selector: %v", err)
-			return
-		}
-		pt.SelectorTS = selectorTS
-		w.storePending(selectorTS, pt)
-		return
-	}
-
-	pt.Phase = "repo_search"
-	selectorTS, err := w.slack.PostExternalSelector(event.ChannelID,
-		":point_right: Search and select a repo:",
-		"repo_search", "Type to search repos...", pt.ThreadTS)
+	selectorTS, err := w.postRepoSelector(pt, channelCfg)
 	if err != nil {
-		w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo search: %v", err)
+		w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo selector: %v", err)
 		return
 	}
 	pt.SelectorTS = selectorTS
 	w.storePending(selectorTS, pt)
+}
+
+// postRepoSelector posts either the multi-repo button selector (len>1) or the
+// external searchable selector (len==0). The len==1 auto-select case is
+// handled by callers inline — see HandleTrigger and HandleBackToRepo.
+func (w *Workflow) postRepoSelector(pt *pendingTriage, channelCfg config.ChannelConfig) (string, error) {
+	repos := channelCfg.GetRepos()
+	if len(repos) > 1 {
+		pt.Phase = "repo"
+		return w.slack.PostSelector(pt.ChannelID,
+			":point_right: Which repo should this issue go to?",
+			"repo_select", repos, pt.ThreadTS)
+	}
+	pt.Phase = "repo_search"
+	return w.slack.PostExternalSelector(pt.ChannelID,
+		":point_right: Search and select a repo:",
+		"repo_search", "Type to search repos...", pt.ThreadTS)
 }
 
 func (w *Workflow) HandleRepoSuggestion(query string) []string {
