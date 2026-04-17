@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.4](https://github.com/Ivantseng123/agentdock/compare/v1.2.3...v1.2.4) (2026-04-17)
+
+
+### Bug Fixes
+
+* **bot:** revert opencode to default format; drop unused stream_format ([506c18b](https://github.com/Ivantseng123/agentdock/commit/506c18bf1b9578edd83329bfd002aade1594322b))
+* **bot:** revert opencode to default format; drop unused stream_format ([c028524](https://github.com/Ivantseng123/agentdock/commit/c028524df7584eb78be5afa04e3b35799df90aff))
+
 ## [1.2.3](https://github.com/Ivantseng123/agentdock/compare/v1.2.2...v1.2.3) (2026-04-17)
 
 
