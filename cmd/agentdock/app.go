@@ -227,7 +227,7 @@ func runApp(cfg *config.Config) error {
 
 	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger)
 
-	statusListener := bot.NewStatusListener(bundle.Status, jobStore, queueLogger)
+	statusListener := bot.NewStatusListener(bundle.Status, jobStore, slackClient, queueLogger)
 	go statusListener.Listen(context.Background())
 
 	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
