@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.7](https://github.com/Ivantseng123/agentdock/compare/v1.2.6...v1.2.7) (2026-04-17)
+
+
+### Bug Fixes
+
+* **bot:** switch codex to stdout+marker, drop --output-last-message ([9574294](https://github.com/Ivantseng123/agentdock/commit/9574294ff739f5e58d2834aafc1cc6bf38373f94))
+* **bot:** switch codex to stdout+marker, drop --output-last-message ([8db8565](https://github.com/Ivantseng123/agentdock/commit/8db8565f0c2abde3ee49427338984ee19c37c185))
+
 ## [1.2.6](https://github.com/Ivantseng123/agentdock/compare/v1.2.5...v1.2.6) (2026-04-17)
 
 
