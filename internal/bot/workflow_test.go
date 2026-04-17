@@ -199,3 +199,40 @@ func TestAfterRepoSelected_NoBackButton_WhenShortcut(t *testing.T) {
 			slack.PostSelectorWithBackCalls[0].BackActionID)
 	}
 }
+
+func TestShowDescriptionPrompt_BackButton_WhenRepoWasPicked(t *testing.T) {
+	slack := &stubSlack{}
+	w := newTestWorkflow(t, slack, nil)
+
+	pt := testPending("C1", "T1", true, "branch")
+	pt.SelectedRepo = "o/r"
+	pt.SelectedBranch = "main"
+	w.showDescriptionPrompt(pt)
+
+	if len(slack.PostSelectorWithBackCalls) != 1 {
+		t.Fatalf("expected 1 PostSelectorWithBack call")
+	}
+	c := slack.PostSelectorWithBackCalls[0]
+	if c.ActionPrefix != "description_action" {
+		t.Errorf("ActionPrefix = %q, want description_action", c.ActionPrefix)
+	}
+	if c.BackActionID != "back_to_repo" {
+		t.Errorf("BackActionID = %q, want back_to_repo", c.BackActionID)
+	}
+}
+
+func TestShowDescriptionPrompt_NoBackButton_WhenShortcut(t *testing.T) {
+	slack := &stubSlack{}
+	w := newTestWorkflow(t, slack, nil)
+
+	pt := testPending("C1", "T1", false, "")
+	pt.SelectedRepo = "o/r"
+	w.showDescriptionPrompt(pt)
+
+	if len(slack.PostSelectorWithBackCalls) != 1 {
+		t.Fatalf("expected 1 PostSelectorWithBack call")
+	}
+	if slack.PostSelectorWithBackCalls[0].BackActionID != "" {
+		t.Errorf("should not include back button for shortcut path")
+	}
+}

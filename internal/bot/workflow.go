@@ -316,9 +316,14 @@ func (w *Workflow) afterRepoSelected(pt *pendingTriage, channelCfg config.Channe
 
 func (w *Workflow) showDescriptionPrompt(pt *pendingTriage) {
 	pt.Phase = "description"
-	selectorTS, err := w.slack.PostSelector(pt.ChannelID,
+	backAction := ""
+	if pt.RepoWasPicked {
+		backAction = "back_to_repo"
+	}
+	selectorTS, err := w.slack.PostSelectorWithBack(pt.ChannelID,
 		":memo: 需要補充說明嗎？（補充後可讓分析更精準）",
-		"description_action", []string{"補充說明", "跳過"}, pt.ThreadTS)
+		"description_action", []string{"補充說明", "跳過"}, pt.ThreadTS,
+		backAction, "← 重新選 repo")
 	if err != nil {
 		w.runTriage(pt)
 		return
