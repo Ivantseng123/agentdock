@@ -534,6 +534,66 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.
 }
 
+// HandleBackToRepo handles a "← 重新選 repo" button click. Invoked from
+// cmd/agentdock/app.go when action.ActionID == "back_to_repo".
+func (w *Workflow) HandleBackToRepo(channelID, selectorMsgTS string) {
+	w.mu.Lock()
+	pt, ok := w.pending[selectorMsgTS]
+	if ok {
+		delete(w.pending, selectorMsgTS)
+	}
+	w.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	if pt.Logger != nil {
+		pt.Logger.Info("收到返回 repo 請求",
+			"phase", "接收", "from_selector_ts", selectorMsgTS)
+	}
+
+	channelCfg := w.cfg.ChannelDefaults
+	if cc, ok := w.cfg.Channels[pt.ChannelID]; ok {
+		channelCfg = cc
+	}
+
+	// Clear carried-over fields.
+	pt.SelectedRepo = ""
+	pt.SelectedBranch = ""
+	pt.ExtraDesc = ""
+
+	// Rare case: channel config reloaded and now has exactly one repo — auto-select
+	// and go directly to the branch step (mirrors HandleTrigger's shortcut).
+	repos := channelCfg.GetRepos()
+	if len(repos) == 1 {
+		pt.SelectedRepo = repos[0]
+		w.slack.UpdateMessage(channelID, selectorMsgTS,
+			":leftwards_arrow_with_hook: 已返回 repo 選擇")
+		w.afterRepoSelected(pt, channelCfg)
+		return
+	}
+
+	// Multi-repo or external-search case.
+	newSelectorTS, err := w.postRepoSelector(pt, channelCfg)
+	if err != nil {
+		w.notifyError(pt.Logger, channelID, pt.ThreadTS,
+			"重選 repo 失敗: %v", err)
+		w.clearDedup(pt)
+		return
+	}
+
+	w.slack.UpdateMessage(channelID, selectorMsgTS,
+		":leftwards_arrow_with_hook: 已返回 repo 選擇")
+
+	pt.SelectorTS = newSelectorTS
+	w.storePending(newSelectorTS, pt)
+
+	if pt.Logger != nil {
+		pt.Logger.Info("已重新顯示 repo 選擇",
+			"phase", "處理中", "new_selector_ts", newSelectorTS)
+	}
+}
+
 func cleanCloneURL(repoRef string) string {
 	if strings.HasPrefix(repoRef, "http") || strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
 		return repoRef

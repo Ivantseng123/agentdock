@@ -286,3 +286,162 @@ func TestPostRepoSelector_NoRepos_UsesPostExternalSelector(t *testing.T) {
 		t.Errorf("Phase = %q, want repo_search", pt.Phase)
 	}
 }
+
+func TestHandleBackToRepo_FromBranchStep(t *testing.T) {
+	slack := &stubSlack{}
+	slack.NextSelectorTS = "NEW_SEL"
+	cfg := &config.Config{
+		ChannelDefaults: config.ChannelConfig{Repos: []string{"o/a", "o/b"}},
+	}
+	w := newTestWorkflow(t, slack, cfg)
+
+	pt := testPending("C1", "T1", true, "branch")
+	pt.SelectedRepo = "o/a"
+	pt.SelectedBranch = "main"
+	pt.SelectorTS = "BRANCH_TS"
+	w.pending["BRANCH_TS"] = pt
+
+	w.HandleBackToRepo("C1", "BRANCH_TS")
+
+	if _, still := w.pending["BRANCH_TS"]; still {
+		t.Error("old selector key should be deleted")
+	}
+	if _, added := w.pending["NEW_SEL"]; !added {
+		t.Error("new selector key should be present")
+	}
+	if pt.SelectedRepo != "" {
+		t.Errorf("SelectedRepo should be cleared, got %q", pt.SelectedRepo)
+	}
+	if pt.SelectedBranch != "" {
+		t.Errorf("SelectedBranch should be cleared, got %q", pt.SelectedBranch)
+	}
+	if len(slack.PostSelectorCalls) != 1 {
+		t.Errorf("expected 1 PostSelector call (multi-repo), got %d", len(slack.PostSelectorCalls))
+	}
+	// Old message must be frozen.
+	found := false
+	for _, u := range slack.UpdateMessageCalls {
+		if u.MessageTS == "BRANCH_TS" && containsStr(u.Text, "已返回 repo 選擇") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("old selector message should be updated with 已返回 repo 選擇 text")
+	}
+}
+
+func TestHandleBackToRepo_FromDescriptionStep(t *testing.T) {
+	slack := &stubSlack{}
+	cfg := &config.Config{ChannelDefaults: config.ChannelConfig{}} // len==0 → external search
+	w := newTestWorkflow(t, slack, cfg)
+
+	pt := testPending("C1", "T1", true, "description")
+	pt.SelectedRepo = "o/a"
+	pt.SelectedBranch = "main"
+	pt.ExtraDesc = "I typed this before going back"
+	pt.SelectorTS = "DESC_TS"
+	w.pending["DESC_TS"] = pt
+
+	w.HandleBackToRepo("C1", "DESC_TS")
+
+	if pt.ExtraDesc != "" {
+		t.Errorf("ExtraDesc should be cleared, got %q", pt.ExtraDesc)
+	}
+	if len(slack.PostExternalSelectorCalls) != 1 {
+		t.Errorf("expected 1 PostExternalSelector call (no channel repos)")
+	}
+}
+
+func TestHandleBackToRepo_PendingMissing_Silent(t *testing.T) {
+	slack := &stubSlack{}
+	w := newTestWorkflow(t, slack, nil)
+
+	w.HandleBackToRepo("C1", "NONEXISTENT") // no panic, no calls
+
+	if len(slack.PostSelectorCalls)+len(slack.PostExternalSelectorCalls) != 0 {
+		t.Errorf("unexpected Slack calls for missing pending")
+	}
+}
+
+func TestHandleBackToRepo_PostFails_NoFreeze_ClearsDedup(t *testing.T) {
+	slack := &stubSlack{PostSelectorErr: fmt.Errorf("slack fail")}
+	cfg := &config.Config{
+		ChannelDefaults: config.ChannelConfig{Repos: []string{"o/a", "o/b"}},
+	}
+	w := newTestWorkflow(t, slack, cfg)
+
+	// Stand in for handler.ClearThreadDedup.
+	w.handler = nil // leave nil; clearDedup no-ops when handler is nil
+
+	pt := testPending("C1", "T1", true, "branch")
+	pt.SelectedRepo = "o/a"
+	pt.SelectorTS = "BRANCH_TS"
+	w.pending["BRANCH_TS"] = pt
+
+	w.HandleBackToRepo("C1", "BRANCH_TS")
+
+	// Old message should NOT be frozen since post failed.
+	for _, u := range slack.UpdateMessageCalls {
+		if u.MessageTS == "BRANCH_TS" && containsStr(u.Text, "已返回") {
+			t.Error("old message should NOT be frozen when new post fails")
+		}
+	}
+	// Error message should have been posted via notifyError.
+	foundErrMsg := false
+	for _, m := range slack.PostMessageCalls {
+		if containsStr(m.Text, ":x:") {
+			foundErrMsg = true
+		}
+	}
+	if !foundErrMsg {
+		t.Error("expected error message via notifyError")
+	}
+}
+
+func TestHandleBackToRepo_ConfigNowSingleRepo_AutoSelect(t *testing.T) {
+	slack := &stubSlack{}
+	// Need a non-nil *bool for IsBranchSelectEnabled() to return true
+	tru := true
+	cfg := &config.Config{
+		ChannelDefaults: config.ChannelConfig{
+			Repos:        []string{"o/only"},
+			Branches:     []string{"main", "develop"},
+			BranchSelect: &tru,
+		},
+	}
+	w := newTestWorkflow(t, slack, cfg)
+
+	pt := testPending("C1", "T1", true, "branch")
+	pt.SelectorTS = "BRANCH_TS"
+	w.pending["BRANCH_TS"] = pt
+
+	w.HandleBackToRepo("C1", "BRANCH_TS")
+
+	if pt.SelectedRepo != "o/only" {
+		t.Errorf("SelectedRepo should be auto-set to o/only, got %q", pt.SelectedRepo)
+	}
+	// Should have posted branch selector (via afterRepoSelected), not repo selector.
+	if len(slack.PostSelectorCalls)+len(slack.PostExternalSelectorCalls) != 0 {
+		t.Errorf("should not post a repo selector when len(repos)==1")
+	}
+	if len(slack.PostSelectorWithBackCalls) != 1 {
+		t.Errorf("expected 1 branch PostSelectorWithBack call")
+	}
+	if slack.PostSelectorWithBackCalls[0].ActionPrefix != "branch_select" {
+		t.Errorf("expected branch_select, got %q", slack.PostSelectorWithBackCalls[0].ActionPrefix)
+	}
+}
+
+// containsStr helper for workflow tests (renamed to avoid name collision with
+// the `contains` helper in status_listener_test.go, both files in same package).
+func containsStr(s, sub string) bool {
+	if sub == "" {
+		return true
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
