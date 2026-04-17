@@ -5,19 +5,42 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"agentdock/internal/queue"
 )
 
+const statusUpdateDebounce = 15 * time.Second
+
+// SlackStatusPoster is the narrow Slack surface StatusListener uses.
+type SlackStatusPoster interface {
+	UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value string) error
+}
+
 type StatusListener struct {
 	status queue.StatusBus
 	store  queue.JobStore
+	slack  SlackStatusPoster
+
+	mu         sync.Mutex
+	lastUpdate map[string]time.Time // jobID → last Slack update
+	lastPhase  map[string]string    // jobID → last rendered phase label
+
+	clock  func() time.Time
 	logger *slog.Logger
 }
 
-func NewStatusListener(status queue.StatusBus, store queue.JobStore, logger *slog.Logger) *StatusListener {
-	return &StatusListener{status: status, store: store, logger: logger}
+func NewStatusListener(status queue.StatusBus, store queue.JobStore, slack SlackStatusPoster, logger *slog.Logger) *StatusListener {
+	return &StatusListener{
+		status:     status,
+		store:      store,
+		slack:      slack,
+		lastUpdate: make(map[string]time.Time),
+		lastPhase:  make(map[string]string),
+		clock:      time.Now,
+		logger:     logger,
+	}
 }
 
 func (l *StatusListener) Listen(ctx context.Context) {
@@ -33,10 +56,83 @@ func (l *StatusListener) Listen(ctx context.Context) {
 				return
 			}
 			l.store.SetAgentStatus(report.JobID, report)
+			l.maybeUpdateSlack(report)
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+func (l *StatusListener) maybeUpdateSlack(r queue.StatusReport) {
+	if l.slack == nil {
+		return // defensive; tests may wire nil
+	}
+	state, err := l.store.Get(r.JobID)
+	if err != nil || state == nil {
+		l.logger.Warn("status listener: job state missing",
+			"phase", "失敗", "job_id", r.JobID, "error", err)
+		return
+	}
+
+	// Terminal — let ResultListener own the final message; clean up.
+	if isTerminal(state.Status) {
+		l.mu.Lock()
+		delete(l.lastUpdate, r.JobID)
+		delete(l.lastPhase, r.JobID)
+		l.mu.Unlock()
+		return
+	}
+
+	if state.Job == nil || state.Job.StatusMsgTS == "" {
+		return // workflow hasn't posted the first status message yet
+	}
+
+	phase := inferPhase(state, r)
+
+	l.mu.Lock()
+	prevTime, hadUpdate := l.lastUpdate[r.JobID]
+	prevPhase := l.lastPhase[r.JobID]
+	now := l.clock()
+	phaseChanged := hadUpdate && prevPhase != phase
+	debounceExpired := !hadUpdate || now.Sub(prevTime) >= statusUpdateDebounce
+	if !phaseChanged && !debounceExpired {
+		l.mu.Unlock()
+		return
+	}
+	l.lastUpdate[r.JobID] = now
+	l.lastPhase[r.JobID] = phase
+	l.mu.Unlock()
+
+	text := renderStatusMessage(state, r, phase)
+	if text == "" {
+		return
+	}
+
+	// Second terminal check right before the API call narrows race with ResultListener.
+	if latest, err := l.store.Get(r.JobID); err == nil && latest != nil && isTerminal(latest.Status) {
+		l.mu.Lock()
+		delete(l.lastUpdate, r.JobID)
+		delete(l.lastPhase, r.JobID)
+		l.mu.Unlock()
+		return
+	}
+
+	if err := l.slack.UpdateMessageWithButton(
+		state.Job.ChannelID, state.Job.StatusMsgTS, text,
+		"cancel_job", "取消", r.JobID,
+	); err != nil {
+		l.logger.Warn("status 訊息更新失敗", "phase", "失敗", "job_id", r.JobID, "error", err)
+	}
+}
+
+// ClearJob wipes debounce state for a job. Intended for ResultListener to call
+// when a terminal result is handled, protecting against leaked map entries when
+// a worker crashes without emitting a final status report.
+func (l *StatusListener) ClearJob(jobID string) {
+	l.mu.Lock()
+	delete(l.lastUpdate, jobID)
+	delete(l.lastPhase, jobID)
+	l.mu.Unlock()
 }
 
 func shortWorker(id string) string {

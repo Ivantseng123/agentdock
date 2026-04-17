@@ -1,6 +1,9 @@
 package bot
 
 import (
+	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -130,4 +133,210 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// ---- Task 4: maybeUpdateSlack tests ----
+
+type stubSlackStatusPoster struct {
+	calls []struct {
+		ChannelID  string
+		MessageTS  string
+		Text       string
+		ActionID   string
+		ButtonText string
+		Value      string
+	}
+	err error
+}
+
+func (s *stubSlackStatusPoster) UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value string) error {
+	s.calls = append(s.calls, struct {
+		ChannelID, MessageTS, Text, ActionID, ButtonText, Value string
+	}{channelID, messageTS, text, actionID, buttonText, value})
+	return s.err
+}
+
+func newTestListener(store queue.JobStore, slack SlackStatusPoster, now time.Time) *StatusListener {
+	l := NewStatusListener(nil, store, slack, slogDiscardLogger())
+	l.clock = func() time.Time { return now }
+	return l
+}
+
+func slogDiscardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestMaybeUpdateSlack_PreparingPhase(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus("j1", queue.JobPreparing)
+
+	slack := &stubSlackStatusPoster{}
+	l := newTestListener(store, slack, time.Now())
+
+	l.maybeUpdateSlack(queue.StatusReport{
+		JobID: "j1", WorkerID: "host/worker-0", PID: 0, Alive: true,
+	})
+
+	if len(slack.calls) != 1 {
+		t.Fatalf("expected 1 Slack call, got %d", len(slack.calls))
+	}
+	c := slack.calls[0]
+	if c.ChannelID != "C1" || c.MessageTS != "S1" {
+		t.Errorf("wrong target: %+v", c)
+	}
+	if c.ActionID != "cancel_job" || c.ButtonText != "取消" || c.Value != "j1" {
+		t.Errorf("wrong button: %+v", c)
+	}
+	if !contains(c.Text, "準備中") || !contains(c.Text, "worker-0") {
+		t.Errorf("text missing expected markers: %q", c.Text)
+	}
+}
+
+func TestMaybeUpdateSlack_RunningWithToolCalls(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus("j1", queue.JobRunning)
+
+	slack := &stubSlackStatusPoster{}
+	l := newTestListener(store, slack, time.Now())
+
+	l.maybeUpdateSlack(queue.StatusReport{
+		JobID: "j1", WorkerID: "host/worker-0", PID: 1234,
+		AgentCmd: "claude", ToolCalls: 15, FilesRead: 8,
+	})
+
+	if len(slack.calls) != 1 {
+		t.Fatalf("expected 1 Slack call")
+	}
+	if !containsBoth(slack.calls[0].Text, "處理中 · worker-0 (claude)", "工具呼叫 15 次") {
+		t.Errorf("missing expected substrings: %q", slack.calls[0].Text)
+	}
+}
+
+func TestMaybeUpdateSlack_RunningNoToolCalls(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus("j1", queue.JobRunning)
+
+	slack := &stubSlackStatusPoster{}
+	l := newTestListener(store, slack, time.Now())
+
+	l.maybeUpdateSlack(queue.StatusReport{
+		JobID: "j1", WorkerID: "host/worker-0", PID: 1234, AgentCmd: "codex",
+	})
+
+	if len(slack.calls) != 1 {
+		t.Fatalf("expected 1 Slack call")
+	}
+	if contains(slack.calls[0].Text, "工具呼叫") {
+		t.Errorf("should NOT include tool-call line for codex: %q", slack.calls[0].Text)
+	}
+}
+
+func TestMaybeUpdateSlack_DebounceSkips(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus("j1", queue.JobRunning)
+
+	slack := &stubSlackStatusPoster{}
+	t0 := time.Now()
+	l := newTestListener(store, slack, t0)
+
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
+	// 5 seconds later — still within 15s debounce, same phase
+	l.clock = func() time.Time { return t0.Add(5 * time.Second) }
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
+
+	if len(slack.calls) != 1 {
+		t.Errorf("debounce failed: got %d calls", len(slack.calls))
+	}
+}
+
+func TestMaybeUpdateSlack_PhaseChangeForcesUpdate(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus("j1", queue.JobPreparing)
+
+	slack := &stubSlackStatusPoster{}
+	t0 := time.Now()
+	l := newTestListener(store, slack, t0)
+
+	// First update in preparing.
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 0})
+
+	// 2 seconds later — within debounce but phase changed to running.
+	store.UpdateStatus("j1", queue.JobRunning)
+	l.clock = func() time.Time { return t0.Add(2 * time.Second) }
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1234, AgentCmd: "claude"})
+
+	if len(slack.calls) != 2 {
+		t.Errorf("phase change should force update; got %d calls", len(slack.calls))
+	}
+}
+
+func TestMaybeUpdateSlack_TerminalSkips(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus("j1", queue.JobCompleted)
+
+	slack := &stubSlackStatusPoster{}
+	l := newTestListener(store, slack, time.Now())
+
+	// Pre-populate lastUpdate to confirm it gets cleared.
+	l.lastUpdate["j1"] = time.Now()
+	l.lastPhase["j1"] = "running"
+
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1234})
+
+	if len(slack.calls) != 0 {
+		t.Errorf("terminal should skip; got %d calls", len(slack.calls))
+	}
+	if _, ok := l.lastUpdate["j1"]; ok {
+		t.Error("lastUpdate should be cleared for terminal jobs")
+	}
+}
+
+func TestMaybeUpdateSlack_StoreMissing(t *testing.T) {
+	store := queue.NewMemJobStore()
+	// no Put — store.Get returns error
+	slack := &stubSlackStatusPoster{}
+	l := newTestListener(store, slack, time.Now())
+
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "missing"})
+
+	if len(slack.calls) != 0 {
+		t.Errorf("missing state should skip; got %d calls", len(slack.calls))
+	}
+}
+
+func TestMaybeUpdateSlack_StatusMsgTSEmpty(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1"}) // no StatusMsgTS
+	store.UpdateStatus("j1", queue.JobPreparing)
+
+	slack := &stubSlackStatusPoster{}
+	l := newTestListener(store, slack, time.Now())
+
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 0})
+
+	if len(slack.calls) != 0 {
+		t.Errorf("empty StatusMsgTS should skip; got %d calls", len(slack.calls))
+	}
+}
+
+func TestMaybeUpdateSlack_SlackErrorNonFatal(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus("j1", queue.JobRunning)
+
+	slack := &stubSlackStatusPoster{err: fmt.Errorf("slack boom")}
+	l := newTestListener(store, slack, time.Now())
+
+	// Should not panic.
+	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
+
+	if len(slack.calls) != 1 {
+		t.Errorf("expected one attempt; got %d", len(slack.calls))
+	}
 }
