@@ -110,7 +110,7 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				continue
 			case queue.JobFailed:
 				p.cfg.Results.Publish(ctx, &queue.JobResult{
-					JobID: job.ID, Status: "failed", Error: "cancelled before execution",
+					JobID: job.ID, Status: "failed", Error: "terminated before execution",
 				})
 				continue
 			}
