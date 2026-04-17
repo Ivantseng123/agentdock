@@ -43,9 +43,6 @@ providers: [claude, opencode]
 
 prompt:
   language: zh-TW
-  extra_rules:
-    - "rule one"
-    - "rule two"
 
 channels:
   C123:
