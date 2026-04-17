@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.4.0](https://github.com/Ivantseng123/agentdock/compare/v1.3.0...v1.4.0) (2026-04-17)
+
+
+### Features
+
+* **config:** add Goal, OutputRules, AllowWorkerRules to PromptConfig ([daa3d23](https://github.com/Ivantseng123/agentdock/commit/daa3d230f2742fc2f4c025783d88fef81ac774d3))
+* **config:** specific migration warns for prompt-refactor legacy keys ([9e67200](https://github.com/Ivantseng123/agentdock/commit/9e672001f11a63ec2b60ce5757da73b7261c4c19))
+* **log:** add Debug lines dumping full PromptContext / XML prompt ([a3f9ede](https://github.com/Ivantseng123/agentdock/commit/a3f9edea0b5c613e7843454584d1b99dcad0f1fe))
+* **queue:** add PromptContext and ThreadMessage types ([0a8700f](https://github.com/Ivantseng123/agentdock/commit/0a8700f62bf320a3588d2de3258d031125d9f9f5))
+* **slack:** single lifecycle message + preserve worker diagnostics ([39eeaa8](https://github.com/Ivantseng123/agentdock/commit/39eeaa8afe8471f7c6fca7008a244105fedddabc))
+* **worker:** add XML prompt builder ([3ebc9cf](https://github.com/Ivantseng123/agentdock/commit/3ebc9cf53a4b9b44aba7a84b6f3376fbcc0b3771))
+
+
+### Bug Fixes
+
+* /jobs shows worker state accurately (status + queue_depth) ([32ac957](https://github.com/Ivantseng123/agentdock/commit/32ac957ec5c2448bda99b0b9babb93f547a96be4))
+* **bot,worker:** propagate JobStatus across pods via StatusBus ([c7975e5](https://github.com/Ivantseng123/agentdock/commit/c7975e5dfa5ae0c6d9ae7af4babfec29471a898c))
+* **bot:** propagate PromptContext through retry, unify allow-worker-rules default ([56c9d0b](https://github.com/Ivantseng123/agentdock/commit/56c9d0b0805a370bb2d681e7024e8838701b02d4))
+* **queue:** use consumer-group lag for queue_depth, not raw XLEN ([2077cb6](https://github.com/Ivantseng123/agentdock/commit/2077cb6fdf718444f43cce9f983065e4c7ecdb49))
+* **worker:** preserve whitespace in xml escape ([20161f8](https://github.com/Ivantseng123/agentdock/commit/20161f89ec98f84221ffc5c03743d3f78b5b6398))
+* **worker:** respect log_level + write to jsonl file like app ([b61843a](https://github.com/Ivantseng123/agentdock/commit/b61843a02da1656ffaecc25e1bfdf277539b9ba2))
+
 ## [1.3.0](https://github.com/Ivantseng123/agentdock/compare/v1.2.7...v1.3.0) (2026-04-17)
 
 
