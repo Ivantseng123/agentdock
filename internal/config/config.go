@@ -89,12 +89,23 @@ type RedisConfig struct {
 	TLS      bool   `yaml:"tls"`
 }
 
+// defaultPromptGoal is the hardcoded Goal applied when the operator hasn't set
+// one in YAML. Kept as a const so tests and applyDefaults share a single source.
+const defaultPromptGoal = "Use the /triage-issue skill to investigate and produce a triage result."
+
 type PromptConfig struct {
 	Language         string   `yaml:"language"`
 	ExtraRules       []string `yaml:"extra_rules"` // deprecated — removed in Task 7
 	Goal             string   `yaml:"goal"`
 	OutputRules      []string `yaml:"output_rules"`
 	AllowWorkerRules *bool    `yaml:"allow_worker_rules"` // tri-state: nil = default true
+}
+
+// IsWorkerRulesAllowed returns whether worker-side ExtraRules should be
+// rendered into the prompt. Nil pointer is treated as true (default) so
+// callers don't have to duplicate the applyDefaults invariant.
+func (p PromptConfig) IsWorkerRulesAllowed() bool {
+	return p.AllowWorkerRules == nil || *p.AllowWorkerRules
 }
 
 type ChannelConfig struct {
@@ -229,7 +240,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Attachments.TTL = 30 * time.Minute
 	}
 	if cfg.Prompt.Goal == "" {
-		cfg.Prompt.Goal = "Use the /triage-issue skill to investigate and produce a triage result."
+		cfg.Prompt.Goal = defaultPromptGoal
 	}
 	// OutputRules default is empty slice — no <output_rules> section rendered unless operator sets values.
 	if cfg.Prompt.OutputRules == nil {

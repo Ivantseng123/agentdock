@@ -558,9 +558,8 @@ prompt:
 func TestPromptConfig_Defaults(t *testing.T) {
 	cfg := loadFromString(t, "")
 
-	wantGoal := "Use the /triage-issue skill to investigate and produce a triage result."
-	if cfg.Prompt.Goal != wantGoal {
-		t.Errorf("default Goal = %q, want %q", cfg.Prompt.Goal, wantGoal)
+	if cfg.Prompt.Goal != defaultPromptGoal {
+		t.Errorf("default Goal = %q, want %q", cfg.Prompt.Goal, defaultPromptGoal)
 	}
 	if cfg.Prompt.OutputRules == nil || len(cfg.Prompt.OutputRules) != 0 {
 		t.Errorf("default OutputRules = %v, want empty non-nil", cfg.Prompt.OutputRules)
@@ -568,4 +567,27 @@ func TestPromptConfig_Defaults(t *testing.T) {
 	if cfg.Prompt.AllowWorkerRules == nil || !*cfg.Prompt.AllowWorkerRules {
 		t.Errorf("default AllowWorkerRules = %v, want &true", cfg.Prompt.AllowWorkerRules)
 	}
+}
+
+func TestPromptConfig_IsWorkerRulesAllowed(t *testing.T) {
+	t.Run("nil_pointer_defaults_true", func(t *testing.T) {
+		pc := PromptConfig{AllowWorkerRules: nil}
+		if !pc.IsWorkerRulesAllowed() {
+			t.Error("nil should default to true")
+		}
+	})
+	t.Run("explicit_true", func(t *testing.T) {
+		v := true
+		pc := PromptConfig{AllowWorkerRules: &v}
+		if !pc.IsWorkerRulesAllowed() {
+			t.Error("explicit true should return true")
+		}
+	})
+	t.Run("explicit_false", func(t *testing.T) {
+		v := false
+		pc := PromptConfig{AllowWorkerRules: &v}
+		if pc.IsWorkerRulesAllowed() {
+			t.Error("explicit false should return false")
+		}
+	})
 }
