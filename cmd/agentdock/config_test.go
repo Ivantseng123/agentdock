@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -367,5 +368,68 @@ func TestResolveConfigPath_ExpandsTilde(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, home) {
 		t.Errorf("resolved path should start with home: %q", got)
+	}
+}
+
+// captureLogs temporarily replaces the default slog handler to capture all
+// output, then returns the captured logs as a string.
+func captureLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(orig)
+	fn()
+	return buf.String()
+}
+
+// loadConfigTestHelper writes a YAML string to a temp file, then calls buildKoanf
+// to load it, returning the parsed Config.
+func loadConfigTestHelper(t *testing.T, yamlStr string) *config.Config {
+	t.Helper()
+	tmp := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tmp, []byte(yamlStr), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	cmd := &cobra.Command{}
+	addPersistentFlags(cmd)
+	cfg, _, _, _, err := buildKoanf(cmd, tmp)
+	if err != nil {
+		t.Fatalf("buildKoanf: %v", err)
+	}
+	return cfg
+}
+
+func TestConfig_LegacyPromptExtraRules_Warns(t *testing.T) {
+	yaml := `
+prompt:
+  language: zh-TW
+  extra_rules:
+    - "legacy rule"
+`
+	logs := captureLogs(t, func() {
+		loadConfigTestHelper(t, yaml)
+	})
+	if !strings.Contains(logs, "prompt.extra_rules") {
+		t.Errorf("expected migration warn mentioning 'prompt.extra_rules', got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "worker.prompt.extra_rules") {
+		t.Errorf("expected warn to point at new location, got:\n%s", logs)
+	}
+}
+
+func TestConfig_LegacyWorkersCount_Warns(t *testing.T) {
+	yaml := `
+workers:
+  count: 5
+`
+	logs := captureLogs(t, func() {
+		loadConfigTestHelper(t, yaml)
+	})
+	if !strings.Contains(logs, "workers.count") {
+		t.Errorf("expected migration warn mentioning 'workers.count', got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "worker.count") {
+		t.Errorf("expected warn to point at new location, got:\n%s", logs)
 	}
 }

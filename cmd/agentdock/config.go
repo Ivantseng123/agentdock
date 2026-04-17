@@ -64,7 +64,13 @@ func buildKoanf(cmd *cobra.Command, configPath string) (*config.Config, *koanf.K
 			// Warn about any file-origin keys that don't match the Config schema.
 			// Done after file load and before env overlay so we only flag YAML
 			// typos / leftover v0.x keys, not env-sourced values.
+			// For legacy migrations, we need only the file-loaded keys, not defaults.
+			kFile := koanf.New(".")
+			if err := kFile.Load(file.Provider(configPath), parser); err != nil {
+				return nil, nil, nil, DeltaInfo{}, fmt.Errorf("load %s for warn: %w", configPath, err)
+			}
 			warnUnknownKeys(kEff)
+			warnLegacyMigrationKeys(kFile)
 		} else if !os.IsNotExist(err) {
 			return nil, nil, nil, DeltaInfo{}, fmt.Errorf("stat %s: %w", configPath, err)
 		}
@@ -298,5 +304,30 @@ func warnUnknownKeys(k *koanf.Koanf) {
 		if !valid[key] {
 			slog.Warn("未知設定鍵", "phase", "失敗", "key", key)
 		}
+	}
+}
+
+// warnLegacyMigrationKeys emits WARN logs for specific YAML keys that were
+// renamed in the prompt refactor (docs/superpowers/specs/2026-04-18-*),
+// pointing operators at the new location. This is in addition to
+// warnUnknownKeys, which also fires generically.
+func warnLegacyMigrationKeys(k *koanf.Koanf) {
+	if k.Exists("prompt.extra_rules") {
+		slog.Warn(
+			"prompt.extra_rules 已搬到 worker.prompt.extra_rules，本設定忽略",
+			"phase", "設定",
+			"migration", "prompt-refactor",
+			"old_key", "prompt.extra_rules",
+			"new_key", "worker.prompt.extra_rules",
+		)
+	}
+	if k.Exists("workers.count") && !k.Exists("worker.count") {
+		slog.Warn(
+			"workers.count 已 rename 為 worker.count，本設定忽略",
+			"phase", "設定",
+			"migration", "prompt-refactor",
+			"old_key", "workers.count",
+			"new_key", "worker.count",
+		)
 	}
 }
