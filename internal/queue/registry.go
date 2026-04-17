@@ -44,6 +44,26 @@ func (r *ProcessRegistry) Register(jobID string, pid int, command string, cancel
 	}
 }
 
+func (r *ProcessRegistry) RegisterPending(jobID string, cancel context.CancelFunc) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.processes[jobID] = &RunningAgent{
+		JobID:  jobID,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+}
+
+func (r *ProcessRegistry) SetStarted(jobID string, pid int, command string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if a, ok := r.processes[jobID]; ok {
+		a.PID = pid
+		a.Command = command
+		a.StartedAt = time.Now()
+	}
+}
+
 func (r *ProcessRegistry) Remove(jobID string) {
 	r.mu.Lock()
 	agent, ok := r.processes[jobID]
