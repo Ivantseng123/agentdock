@@ -230,6 +230,8 @@ func runApp(cfg *config.Config) error {
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore, slackClient, queueLogger)
 	go statusListener.Listen(context.Background())
 
+	resultListener.SetStatusJobClearer(statusListener.ClearJob)
+
 	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
 	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, bundle.Results, queue.WatchdogConfig{
 		JobTimeout:     cfg.Queue.JobTimeout,
