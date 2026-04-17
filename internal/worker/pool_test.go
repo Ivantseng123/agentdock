@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -446,6 +447,91 @@ func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
 // Scenario 7 — Watchdog-level cancel fallback (JobCancelled + CancelledAt past timeout + no worker publish)
 // is covered by TestWatchdog_CancelFallbackAfterTimeout in internal/queue/watchdog_test.go.
 // No pool-level duplication needed.
+
+func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	statusBus := queue.NewInMemStatusBus(16)
+
+	var (
+		mu      sync.Mutex
+		reports []queue.StatusReport
+	)
+
+	// Collect StatusReports in background.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		ch, _ := statusBus.Subscribe(ctx)
+		for r := range ch {
+			mu.Lock()
+			reports = append(reports, r)
+			mu.Unlock()
+		}
+	}()
+
+	// Use a runner that blocks until cancelled, without calling OnStarted,
+	// so we can verify the prep-phase report arrives before the agent starts.
+	runner := &prepBlockingRunner{started: make(chan struct{})}
+
+	job := &queue.Job{ID: "jprep2", Repo: "o/r", SubmittedAt: time.Now()}
+
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      runner,
+		RepoCache:   &mockRepo{path: "/tmp/r"},
+		Commands:    bundle.Commands,
+		Status:      statusBus,
+		WorkerCount: 1,
+		Hostname:    "test-host",
+		Logger:      slog.Default(),
+	})
+
+	pool.Start(ctx)
+
+	if err := bundle.Queue.Submit(ctx, job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Wait for the runner to enter Run (prep phase has started).
+	select {
+	case <-runner.started:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for runner.started")
+	}
+
+	// Give the prep-phase Report call a moment to land in the bus.
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(reports) == 0 {
+		t.Fatal("expected at least one StatusReport before OnStarted fires")
+	}
+	first := reports[0]
+	if first.JobID != "jprep2" {
+		t.Errorf("first report JobID = %q, want jprep2", first.JobID)
+	}
+	if first.WorkerID == "" {
+		t.Error("first report WorkerID should be set")
+	}
+	if first.WorkerID != "test-host/worker-0" {
+		t.Errorf("first report WorkerID = %q, want test-host/worker-0", first.WorkerID)
+	}
+	if first.PID != 0 {
+		t.Errorf("first report PID = %d, want 0 (prep phase)", first.PID)
+	}
+	if !first.Alive {
+		t.Error("first report Alive should be true")
+	}
+}
 
 func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
 	store := queue.NewMemJobStore()

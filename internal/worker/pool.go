@@ -184,6 +184,12 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 
 	p.cfg.Store.SetWorker(job.ID, wID)
 
+	// Prep-phase status signal — PID=0, AgentCmd="" lets StatusListener render
+	// the "準備中" template before the agent process starts.
+	if p.cfg.Status != nil {
+		_ = p.cfg.Status.Report(jobCtx, status.toReport())
+	}
+
 	deps := executionDeps{
 		attachments:   p.cfg.Attachments,
 		repoCache:     p.cfg.RepoCache,
