@@ -156,13 +156,13 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 
 			// Now that we have a PID, send first report immediately + start periodic.
 			if p.cfg.Status != nil {
-				p.cfg.Status.Report(jobCtx, status.toReport())
+				p.publishStatus(jobCtx, job.ID, status)
 				stopReporter = make(chan struct{})
 				interval := p.cfg.StatusInterval
 				if interval <= 0 {
 					interval = 5 * time.Second
 				}
-				go p.reportStatus(jobCtx, status, interval, stopReporter)
+				go p.reportStatus(jobCtx, job.ID, status, interval, stopReporter)
 			}
 		},
 		OnEvent: func(event queue.StreamEvent) {
@@ -187,7 +187,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	// Prep-phase status signal — PID=0, AgentCmd="" lets StatusListener render
 	// the "準備中" template before the agent process starts.
 	if p.cfg.Status != nil {
-		_ = p.cfg.Status.Report(jobCtx, status.toReport())
+		p.publishStatus(jobCtx, job.ID, status)
 	}
 
 	deps := executionDeps{
@@ -206,7 +206,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	// Send final status report (captures cost/tokens from result event).
 	status.alive = false
 	if p.cfg.Status != nil {
-		p.cfg.Status.Report(ctx, status.toReport())
+		p.publishStatus(ctx, job.ID, status)
 	}
 
 	if stopReporter != nil {
@@ -276,17 +276,34 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 	}
 }
 
-func (p *Pool) reportStatus(ctx context.Context, status *statusAccumulator, interval time.Duration, stop <-chan struct{}) {
+func (p *Pool) reportStatus(ctx context.Context, jobID string, status *statusAccumulator, interval time.Duration, stop <-chan struct{}) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			p.cfg.Status.Report(ctx, status.toReport())
+			p.publishStatus(ctx, jobID, status)
 		case <-stop:
 			return
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+// publishStatus stamps the current worker-side JobStatus onto the report before
+// emission so the app pod's JobStore can track the lifecycle across transports.
+// A miss on store.Get (job already cleaned up) drops the JobStatus tag but still
+// ships the runtime telemetry so late reports don't get lost.
+func (p *Pool) publishStatus(ctx context.Context, jobID string, status *statusAccumulator) {
+	if p.cfg.Status == nil {
+		return
+	}
+	report := status.toReport()
+	if p.cfg.Store != nil {
+		if state, err := p.cfg.Store.Get(jobID); err == nil && state != nil {
+			report.JobStatus = state.Status
+		}
+	}
+	p.cfg.Status.Report(ctx, report)
 }

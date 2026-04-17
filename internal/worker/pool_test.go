@@ -587,3 +587,93 @@ func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
 		t.Fatal("no result")
 	}
 }
+
+// recordingStatusBus captures every Report call for later inspection.
+type recordingStatusBus struct {
+	mu      sync.Mutex
+	reports []queue.StatusReport
+}
+
+func (b *recordingStatusBus) Report(_ context.Context, r queue.StatusReport) error {
+	b.mu.Lock()
+	b.reports = append(b.reports, r)
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *recordingStatusBus) Subscribe(_ context.Context) (<-chan queue.StatusReport, error) {
+	ch := make(chan queue.StatusReport)
+	close(ch)
+	return ch, nil
+}
+
+func (b *recordingStatusBus) Close() error { return nil }
+
+func (b *recordingStatusBus) snapshot() []queue.StatusReport {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]queue.StatusReport, len(b.reports))
+	copy(out, b.reports)
+	return out
+}
+
+func TestPool_StatusReportsIncludeJobStatus(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	recorder := &recordingStatusBus{}
+	agentOutput := "Analysis done.\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "CREATED",
+  "title": "Bug fix",
+  "body": "## Problem\nSomething broke",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 3,
+  "open_questions": 0
+}`
+
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      &mockRunner{output: agentOutput},
+		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
+		WorkerCount: 1,
+		Status:      recorder,
+		Logger:      slog.Default(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool.Start(ctx)
+	bundle.Attachments.Prepare(ctx, "j1", nil)
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, Prompt: "test"})
+
+	resCh, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case <-resCh:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for result")
+	}
+
+	// Expect at least one report carrying the worker-side lifecycle state —
+	// otherwise the app pod stays wedged at JobPending forever.
+	reports := recorder.snapshot()
+	seen := map[queue.JobStatus]bool{}
+	for _, r := range reports {
+		if r.JobStatus != "" {
+			seen[r.JobStatus] = true
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatalf("no report carried JobStatus; got %d reports", len(reports))
+	}
+	// The prep-phase report (after Ack, before executeJob) must advertise
+	// JobPreparing so the app surfaces 準備中 rather than pending.
+	if !seen[queue.JobPreparing] {
+		t.Errorf("no report with JobStatus=JobPreparing; seen=%v", seen)
+	}
+}

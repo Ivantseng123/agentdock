@@ -340,3 +340,61 @@ func TestMaybeUpdateSlack_SlackErrorNonFatal(t *testing.T) {
 		t.Errorf("expected one attempt; got %d", len(slack.calls))
 	}
 }
+
+// ---- applyJobStatus: cross-pod lifecycle propagation via StatusBus ----
+
+func TestApplyJobStatus_AppliesWhenPending(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1"}) // Put initialises as JobPending
+	l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
+
+	l.applyJobStatus(queue.StatusReport{JobID: "j1", JobStatus: queue.JobRunning})
+
+	state, _ := store.Get("j1")
+	if state.Status != queue.JobRunning {
+		t.Errorf("status = %q, want JobRunning", state.Status)
+	}
+}
+
+func TestApplyJobStatus_SkipsEmptyStatus(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "j1"})
+	l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
+
+	l.applyJobStatus(queue.StatusReport{JobID: "j1" /* JobStatus zero */})
+
+	state, _ := store.Get("j1")
+	if state.Status != queue.JobPending {
+		t.Errorf("status = %q, want JobPending (unchanged)", state.Status)
+	}
+}
+
+func TestApplyJobStatus_DoesNotRegressFromTerminal(t *testing.T) {
+	cases := []queue.JobStatus{queue.JobCompleted, queue.JobFailed, queue.JobCancelled}
+	for _, terminal := range cases {
+		store := queue.NewMemJobStore()
+		store.Put(&queue.Job{ID: "j1"})
+		store.UpdateStatus("j1", terminal)
+
+		l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
+
+		l.applyJobStatus(queue.StatusReport{JobID: "j1", JobStatus: queue.JobRunning})
+
+		state, _ := store.Get("j1")
+		if state.Status != terminal {
+			t.Errorf("status = %q, want %q (no regression)", state.Status, terminal)
+		}
+	}
+}
+
+func TestApplyJobStatus_SkipsWhenStateMissing(t *testing.T) {
+	store := queue.NewMemJobStore()
+	l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
+
+	// Should be a no-op, not panic, and not create anything.
+	l.applyJobStatus(queue.StatusReport{JobID: "missing", JobStatus: queue.JobRunning})
+
+	if _, err := store.Get("missing"); err == nil {
+		t.Error("no entry should have been created")
+	}
+}

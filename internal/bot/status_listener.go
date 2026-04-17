@@ -55,11 +55,33 @@ func (l *StatusListener) Listen(ctx context.Context) {
 			if !ok {
 				return
 			}
+			l.applyJobStatus(report)
 			l.store.SetAgentStatus(report.JobID, report)
 			l.maybeUpdateSlack(report)
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// applyJobStatus propagates the worker-side lifecycle state into the app's
+// JobStore. Guards against empty reports from older workers, missing state
+// entries, and regressions from terminal states (a stray late report must
+// never downgrade a completed/failed/cancelled job back to running).
+func (l *StatusListener) applyJobStatus(report queue.StatusReport) {
+	if report.JobStatus == "" {
+		return
+	}
+	state, err := l.store.Get(report.JobID)
+	if err != nil || state == nil {
+		return
+	}
+	if isTerminal(state.Status) || state.Status == report.JobStatus {
+		return
+	}
+	if err := l.store.UpdateStatus(report.JobID, report.JobStatus); err != nil {
+		l.logger.Warn("status listener: 套用 job 狀態失敗",
+			"phase", "失敗", "job_id", report.JobID, "status", report.JobStatus, "error", err)
 	}
 }
 

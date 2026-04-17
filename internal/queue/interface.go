@@ -55,6 +55,10 @@ type StatusReport struct {
 	InputTokens    int       `json:"input_tokens,omitempty"`
 	OutputTokens   int       `json:"output_tokens,omitempty"`
 	PrepareSeconds float64   `json:"prepare_seconds,omitempty"`
+	// JobStatus carries the worker-side lifecycle state so the app's
+	// JobStore can reflect `running`/`preparing` across pods. Empty on
+	// reports from pre-fix workers — apply-side ignores the empty case.
+	JobStatus JobStatus `json:"job_status,omitempty"`
 }
 
 type StatusBus interface {
