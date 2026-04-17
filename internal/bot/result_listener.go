@@ -101,14 +101,24 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	job := state.Job
 	owner, repo := splitRepo(job.Repo)
 
+	// Design A: user cancellation dominates, regardless of result.Status.
+	if state.Status == queue.JobCancelled || result.Status == "cancelled" {
+		r.handleCancellation(state.Job, state, result)
+		r.attachments.Cleanup(ctx, result.JobID)
+		return
+	}
+
 	logger := r.logger.With("job_id", result.JobID, "repo", job.Repo, "status", result.Status)
-	if result.Status == "failed" {
+	switch result.Status {
+	case "failed":
 		truncated := result.RawOutput
 		if len(truncated) > 2000 {
 			truncated = truncated[:2000] + "…(truncated)"
 		}
 		logger.Warn("工作失敗", "phase", "降級", "error", result.Error, "raw_output", truncated)
-	} else {
+	case "cancelled":
+		logger.Info("工作已取消", "phase", "完成")
+	default:
 		logger.Info("工作完成", "phase", "完成", "title", result.Title, "confidence", result.Confidence, "files_found", result.FilesFound)
 	}
 
@@ -172,12 +182,15 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 
 		// Execution outcome.
 		status := "success"
-		if result.Status == "failed" {
+		switch result.Status {
+		case "failed":
 			if strings.Contains(result.Error, "timeout") {
 				status = "timeout"
 			} else {
 				status = "error"
 			}
+		case "cancelled":
+			status = "cancelled"
 		}
 		metrics.AgentExecutionsTotal.WithLabelValues(provider, status).Inc()
 
@@ -202,6 +215,8 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 	} else if result.Status == "failed" {
 		// No agent status — job failed before agent started.
 		metrics.AgentExecutionsTotal.WithLabelValues("unknown", "error").Inc()
+	} else if result.Status == "cancelled" {
+		metrics.AgentExecutionsTotal.WithLabelValues("unknown", "cancelled").Inc()
 	}
 }
 
@@ -243,6 +258,12 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 		r.updateStatus(job, text)
 		r.clearDedup(job)
 	}
+}
+
+func (r *ResultListener) handleCancellation(job *queue.Job, state *queue.JobState, result *queue.JobResult) {
+	r.store.UpdateStatus(job.ID, queue.JobCancelled)
+	r.updateStatus(job, ":white_check_mark: 已取消")
+	r.clearDedup(job)
 }
 
 func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job, owner, repo string, result *queue.JobResult, degraded bool) {
