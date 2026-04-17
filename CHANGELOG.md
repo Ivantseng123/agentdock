@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.2](https://github.com/Ivantseng123/agentdock/compare/v1.2.1...v1.2.2) (2026-04-17)
+
+
+### Bug Fixes
+
+* **bot:** update job store status on success paths ([07aad0f](https://github.com/Ivantseng123/agentdock/commit/07aad0f889520edd2b887dcff626c8c5f9dcca9e))
+* **bot:** update job store status on success paths ([0f3d7c0](https://github.com/Ivantseng123/agentdock/commit/0f3d7c0117b60422dda4a844c3154811fa8f147b))
+
 ## [1.2.1](https://github.com/Ivantseng123/agentdock/compare/v1.2.0...v1.2.1) (2026-04-17)
 
 
