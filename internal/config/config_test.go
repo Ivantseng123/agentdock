@@ -430,3 +430,78 @@ func TestDefaultsMap_AgreesWithApplyDefaults(t *testing.T) {
 		t.Errorf("DefaultsMap.workers.count=%v != applyDefaults.Workers.Count=%v", got, cfg.Workers.Count)
 	}
 }
+
+func TestResolveSecrets_GitHubTokenAutoMerge(t *testing.T) {
+	cfg := &Config{
+		GitHub: GitHubConfig{Token: "ghp_from_github"},
+	}
+	resolveSecrets(cfg)
+	if cfg.Secrets["GH_TOKEN"] != "ghp_from_github" {
+		t.Errorf("got %q, want ghp_from_github", cfg.Secrets["GH_TOKEN"])
+	}
+}
+
+func TestResolveSecrets_ExplicitSecretsWin(t *testing.T) {
+	cfg := &Config{
+		GitHub:  GitHubConfig{Token: "ghp_from_github"},
+		Secrets: map[string]string{"GH_TOKEN": "ghp_explicit"},
+	}
+	resolveSecrets(cfg)
+	if cfg.Secrets["GH_TOKEN"] != "ghp_explicit" {
+		t.Errorf("got %q, want ghp_explicit", cfg.Secrets["GH_TOKEN"])
+	}
+}
+
+func TestResolveSecrets_InitializesNilMap(t *testing.T) {
+	cfg := &Config{}
+	resolveSecrets(cfg)
+	if cfg.Secrets == nil {
+		t.Error("Secrets should be initialized to non-nil map")
+	}
+}
+
+func TestEnvOverrideMap_SecretKey(t *testing.T) {
+	t.Setenv("SECRET_KEY", "abc123")
+	m := EnvOverrideMap()
+	if m["secret_key"] != "abc123" {
+		t.Errorf("got %q, want abc123", m["secret_key"])
+	}
+}
+
+func TestScanSecretEnvVars(t *testing.T) {
+	t.Setenv("AGENTDOCK_SECRET_K8S_TOKEN", "k8s-val")
+	t.Setenv("AGENTDOCK_SECRET_NPM_TOKEN", "npm-val")
+	t.Setenv("UNRELATED_VAR", "ignore")
+
+	got := ScanSecretEnvVars()
+	if got["K8S_TOKEN"] != "k8s-val" {
+		t.Errorf("K8S_TOKEN = %q, want k8s-val", got["K8S_TOKEN"])
+	}
+	if got["NPM_TOKEN"] != "npm-val" {
+		t.Errorf("NPM_TOKEN = %q, want npm-val", got["NPM_TOKEN"])
+	}
+	if _, exists := got["UNRELATED_VAR"]; exists {
+		t.Error("should not include UNRELATED_VAR")
+	}
+}
+
+func TestValidateSecretKey_Valid(t *testing.T) {
+	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	_, err := DecodeSecretKey(key)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateSecretKey_Invalid(t *testing.T) {
+	cases := []string{
+		"tooshort",
+		"not-hex-not-hex-not-hex-not-hex-not-hex-not-hex-not-hex-not-hex",
+		"",
+	}
+	for _, c := range cases {
+		if _, err := DecodeSecretKey(c); err == nil {
+			t.Errorf("expected error for %q", c)
+		}
+	}
+}

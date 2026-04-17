@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -35,6 +37,8 @@ type Config struct {
 	Attachments       AttachmentsConfig        `yaml:"attachments"`
 	Redis             RedisConfig              `yaml:"redis"`
 	SkillsConfig      string                   `yaml:"skills_config"`
+	SecretKey         string                   `yaml:"secret_key"`
+	Secrets           map[string]string        `yaml:"secrets"`
 }
 
 type ServerConfig struct {
@@ -217,6 +221,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.Attachments.TTL <= 0 {
 		cfg.Attachments.TTL = 30 * time.Minute
 	}
+	resolveSecrets(cfg)
 }
 
 // DefaultsMap returns a koanf-friendly map[string]any of all default values
@@ -264,6 +269,9 @@ func EnvOverrideMap() map[string]any {
 	if v := os.Getenv("ACTIVE_AGENT"); v != "" {
 		out["active_agent"] = v
 	}
+	if v := os.Getenv("SECRET_KEY"); v != "" {
+		out["secret_key"] = v
+	}
 	if v := os.Getenv("PROVIDERS"); v != "" {
 		var providers []string
 		for _, p := range strings.Split(v, ",") {
@@ -276,5 +284,51 @@ func EnvOverrideMap() map[string]any {
 		}
 	}
 	return out
+}
+
+// ScanSecretEnvVars scans environment for AGENTDOCK_SECRET_* variables
+// and returns them as a map with the prefix stripped.
+func ScanSecretEnvVars() map[string]string {
+	const prefix = "AGENTDOCK_SECRET_"
+	out := make(map[string]string)
+	for _, env := range os.Environ() {
+		if idx := strings.Index(env, "="); idx > 0 {
+			key := env[:idx]
+			if strings.HasPrefix(key, prefix) {
+				name := key[len(prefix):]
+				if name != "" {
+					out[name] = env[idx+1:]
+				}
+			}
+		}
+	}
+	return out
+}
+
+// resolveSecrets merges github.token into secrets and applies env var overrides.
+func resolveSecrets(cfg *Config) {
+	if cfg.Secrets == nil {
+		cfg.Secrets = make(map[string]string)
+	}
+	if cfg.GitHub.Token != "" {
+		if _, exists := cfg.Secrets["GH_TOKEN"]; !exists {
+			cfg.Secrets["GH_TOKEN"] = cfg.GitHub.Token
+		}
+	}
+	for k, v := range ScanSecretEnvVars() {
+		cfg.Secrets[k] = v
+	}
+}
+
+// DecodeSecretKey validates and decodes a hex-encoded 32-byte AES key.
+func DecodeSecretKey(hexKey string) ([]byte, error) {
+	decoded, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("secret_key: invalid hex: %w", err)
+	}
+	if len(decoded) != 32 {
+		return nil, fmt.Errorf("secret_key: must be 32 bytes (64 hex chars), got %d bytes", len(decoded))
+	}
+	return decoded, nil
 }
 
