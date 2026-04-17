@@ -505,3 +505,27 @@ func TestValidateSecretKey_Invalid(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_CancelTimeoutDefault(t *testing.T) {
+	cfg := loadFromString(t, `
+agents:
+  claude:
+    command: claude
+`)
+	if cfg.Queue.CancelTimeout != 60*time.Second {
+		t.Errorf("default cancel_timeout = %v, want 60s", cfg.Queue.CancelTimeout)
+	}
+}
+
+func TestLoad_CancelTimeoutOverride(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  cancel_timeout: 20s
+agents:
+  claude:
+    command: claude
+`)
+	if cfg.Queue.CancelTimeout != 20*time.Second {
+		t.Errorf("cancel_timeout = %v, want 20s", cfg.Queue.CancelTimeout)
+	}
+}

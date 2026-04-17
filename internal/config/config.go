@@ -68,6 +68,7 @@ type QueueConfig struct {
 	JobTimeout       time.Duration `yaml:"job_timeout"`
 	AgentIdleTimeout time.Duration `yaml:"agent_idle_timeout"`
 	PrepareTimeout   time.Duration `yaml:"prepare_timeout"`
+	CancelTimeout    time.Duration `yaml:"cancel_timeout"`
 	StatusInterval   time.Duration `yaml:"status_interval"`
 }
 
@@ -201,6 +202,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Queue.PrepareTimeout <= 0 {
 		cfg.Queue.PrepareTimeout = 3 * time.Minute
+	}
+	if cfg.Queue.CancelTimeout <= 0 {
+		cfg.Queue.CancelTimeout = 60 * time.Second
 	}
 	if cfg.Queue.StatusInterval <= 0 {
 		cfg.Queue.StatusInterval = 5 * time.Second
