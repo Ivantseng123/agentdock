@@ -28,7 +28,6 @@ func TestRedisJobQueue_SubmitAndReceive(t *testing.T) {
 	job := &Job{
 		ID:          "job-redis-001",
 		Priority:    2,
-		Prompt:      "Triage this thread",
 		TaskType:    "triage",
 		ChannelID:   "C123",
 		ThreadTS:    "1234567890.000001",
@@ -49,9 +48,6 @@ func TestRedisJobQueue_SubmitAndReceive(t *testing.T) {
 		}
 		if got.Priority != job.Priority {
 			t.Errorf("Priority = %d, want %d", got.Priority, job.Priority)
-		}
-		if got.Prompt != job.Prompt {
-			t.Errorf("Prompt = %q, want %q", got.Prompt, job.Prompt)
 		}
 		if got.TaskType != job.TaskType {
 			t.Errorf("TaskType = %q, want %q", got.TaskType, job.TaskType)

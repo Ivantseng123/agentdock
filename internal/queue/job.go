@@ -30,7 +30,6 @@ type Job struct {
 	Repo             string                   `json:"repo"`
 	Branch           string                   `json:"branch"`
 	CloneURL         string                   `json:"clone_url"`
-	Prompt           string                   `json:"prompt"`
 	Skills           map[string]*SkillPayload `json:"skills"`
 	RequestID        string                   `json:"request_id"`
 	Attachments      []AttachmentMeta         `json:"attachments"`

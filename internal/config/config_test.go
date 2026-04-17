@@ -111,9 +111,6 @@ repo_cache:
 	if cfg.Prompt.Language != "zh-TW" {
 		t.Errorf("language = %q", cfg.Prompt.Language)
 	}
-	if len(cfg.Prompt.ExtraRules) != 2 {
-		t.Errorf("extra_rules = %v", cfg.Prompt.ExtraRules)
-	}
 
 	// Channel
 	ch, ok := cfg.Channels["C123"]

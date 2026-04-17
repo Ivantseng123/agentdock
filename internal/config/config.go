@@ -100,7 +100,6 @@ const defaultPromptGoal = "Use the /triage-issue skill to investigate and produc
 
 type PromptConfig struct {
 	Language         string   `yaml:"language"`
-	ExtraRules       []string `yaml:"extra_rules"` // deprecated — removed in Task 7
 	Goal             string   `yaml:"goal"`
 	OutputRules      []string `yaml:"output_rules"`
 	AllowWorkerRules *bool    `yaml:"allow_worker_rules"` // tri-state: nil = default true
