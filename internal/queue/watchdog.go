@@ -11,6 +11,7 @@ type WatchdogConfig struct {
 	JobTimeout     time.Duration
 	IdleTimeout    time.Duration
 	PrepareTimeout time.Duration
+	CancelTimeout  time.Duration
 }
 
 type Watchdog struct {
@@ -20,6 +21,7 @@ type Watchdog struct {
 	jobTimeout     time.Duration
 	idleTimeout    time.Duration
 	prepareTimeout time.Duration
+	cancelTimeout  time.Duration
 	interval       time.Duration
 	logger         *slog.Logger
 	onKill         func(reason string) // optional metric hook
@@ -47,6 +49,7 @@ func NewWatchdog(store JobStore, commands CommandBus, results ResultBus, cfg Wat
 		jobTimeout:     cfg.JobTimeout,
 		idleTimeout:    cfg.IdleTimeout,
 		prepareTimeout: cfg.PrepareTimeout,
+		cancelTimeout:  cfg.CancelTimeout,
 		interval:       interval,
 		logger:         logger,
 	}
@@ -87,7 +90,17 @@ func (w *Watchdog) check() {
 
 	now := time.Now()
 	for _, state := range all {
+		// Terminal states (no action needed).
 		if state.Status == JobCompleted || state.Status == JobFailed {
+			continue
+		}
+
+		// Cancelled: wait for worker, fall back after cancelTimeout.
+		if state.Status == JobCancelled {
+			if w.cancelTimeout > 0 && !state.CancelledAt.IsZero() &&
+				now.Sub(state.CancelledAt) > w.cancelTimeout {
+				w.publishCancelledFallback(state)
+			}
 			continue
 		}
 
@@ -114,7 +127,28 @@ func (w *Watchdog) check() {
 	}
 }
 
+func (w *Watchdog) publishCancelledFallback(state *JobState) {
+	if w.onKill != nil {
+		w.onKill("cancel fallback")
+	}
+	w.logger.Warn("取消狀態逾時，補發 cancelled result", "phase", "完成",
+		"job_id", state.Job.ID,
+		"cancelled_age", time.Since(state.CancelledAt))
+	if w.results != nil {
+		w.results.Publish(context.Background(), &JobResult{
+			JobID:      state.Job.ID,
+			Status:     "cancelled",
+			FinishedAt: time.Now(),
+		})
+	}
+}
+
 func (w *Watchdog) killAndPublish(state *JobState, reason string) {
+	// Back off if the job was cancelled in the race window.
+	if fresh, _ := w.store.Get(state.Job.ID); fresh != nil && fresh.Status == JobCancelled {
+		return
+	}
+
 	if w.onKill != nil {
 		w.onKill(reason)
 	}
