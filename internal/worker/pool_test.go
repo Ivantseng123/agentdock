@@ -456,8 +456,9 @@ func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 	statusBus := queue.NewInMemStatusBus(16)
 
 	var (
-		mu      sync.Mutex
-		reports []queue.StatusReport
+		mu           sync.Mutex
+		reports      []queue.StatusReport
+		reportReady  = make(chan struct{}, 1)
 	)
 
 	// Collect StatusReports in background.
@@ -469,6 +470,12 @@ func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 		for r := range ch {
 			mu.Lock()
 			reports = append(reports, r)
+			if len(reports) == 1 {
+				select {
+				case reportReady <- struct{}{}:
+				default:
+				}
+			}
 			mu.Unlock()
 		}
 	}()
@@ -506,8 +513,12 @@ func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 		t.Fatal("timeout waiting for runner.started")
 	}
 
-	// Give the prep-phase Report call a moment to land in the bus.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the prep-phase StatusReport to land in the bus.
+	select {
+	case <-reportReady:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for first prep StatusReport")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
