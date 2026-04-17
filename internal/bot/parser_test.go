@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -87,6 +88,49 @@ func TestParseAgentOutput_LabelsEmptyString(t *testing.T) {
 	}
 	if len(result.Labels) != 0 {
 		t.Errorf("empty string should yield no labels, got %v", result.Labels)
+	}
+}
+
+func TestParseAgentOutput_CreatedRequiresTitle_Empty(t *testing.T) {
+	// Agent emits Status=CREATED but an empty title — previously the bot
+	// happily sent the request and GitHub rejected with 422 "title can't be
+	// blank". Parser must reject it up-front.
+	output := "x\n\n===TRIAGE_RESULT===\n" + `{"status":"CREATED","title":"","body":"b","labels":["bug"]}`
+	_, err := ParseAgentOutput(output)
+	if err == nil {
+		t.Fatal("expected error for CREATED with empty title")
+	}
+	if !strings.Contains(err.Error(), "title") {
+		t.Errorf("error should mention title, got: %v", err)
+	}
+}
+
+func TestParseAgentOutput_CreatedRequiresTitle_Missing(t *testing.T) {
+	output := "x\n\n===TRIAGE_RESULT===\n" + `{"status":"CREATED","body":"b"}`
+	_, err := ParseAgentOutput(output)
+	if err == nil {
+		t.Fatal("expected error for CREATED without title field")
+	}
+}
+
+func TestParseAgentOutput_CreatedRequiresTitle_WhitespaceOnly(t *testing.T) {
+	output := "x\n\n===TRIAGE_RESULT===\n" + `{"status":"CREATED","title":"   \n\t","body":"b"}`
+	_, err := ParseAgentOutput(output)
+	if err == nil {
+		t.Fatal("expected error for CREATED with whitespace-only title")
+	}
+}
+
+func TestParseAgentOutput_CreatedLegacyURLNoTitleOK(t *testing.T) {
+	// Legacy "CREATED: <url>" path doesn't need a title — the issue already
+	// exists, CreateIssue won't be called, so no validation should apply.
+	output := "done.\n\n===TRIAGE_RESULT===\nCREATED: https://github.com/o/r/issues/1"
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("legacy CREATED should pass: %v", err)
+	}
+	if result.Status != "CREATED" || result.IssueURL == "" {
+		t.Errorf("unexpected result: %+v", result)
 	}
 }
 

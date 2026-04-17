@@ -76,6 +76,13 @@ func ParseAgentOutput(output string) (TriageResult, error) {
 		jsonStr := extractJSON(result)
 		var tr TriageResult
 		if err := json.Unmarshal([]byte(jsonStr), &tr); err == nil && tr.Status != "" {
+			// CREATED payloads are fed directly into CreateIssue — an empty
+			// title causes GitHub to 422 mid-flight with "title can't be
+			// blank", burning retries and confusing the user. Catch it here
+			// so the failure surfaces as a clear parse error instead.
+			if tr.Status == "CREATED" && strings.TrimSpace(tr.Title) == "" {
+				return TriageResult{}, fmt.Errorf("CREATED result missing required title")
+			}
 			return tr, nil
 		}
 	}
