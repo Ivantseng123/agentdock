@@ -14,10 +14,9 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
-	"github.com/Ivantseng123/agentdock/internal/mantis"
+	"github.com/Ivantseng123/agentdock/app/mantis"
 	"github.com/Ivantseng123/agentdock/shared/queue"
-	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
-	"github.com/Ivantseng123/agentdock/worker/agent"
+	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 )
 
 const pendingTimeout = 1 * time.Minute
@@ -65,8 +64,6 @@ type Workflow struct {
 	handler       *slackclient.Handler
 	repoCache     *ghclient.RepoCache
 	repoDiscovery *ghclient.RepoDiscovery
-	// agentRunner is unused; Task 23 removes this field and the worker/agent import.
-	agentRunner   *agent.Runner
 	mantisClient  *mantis.Client
 	queue         queue.JobQueue
 	store         queue.JobStore
@@ -85,7 +82,6 @@ func NewWorkflow(
 	slack slackAPI, // was *slackclient.Client
 	repoCache *ghclient.RepoCache,
 	repoDiscovery *ghclient.RepoDiscovery,
-	agentRunner *agent.Runner,
 	mantisClient *mantis.Client,
 	jobQueue queue.JobQueue,
 	jobStore queue.JobStore,
@@ -107,7 +103,6 @@ func NewWorkflow(
 		slack:         slack,
 		repoCache:     repoCache,
 		repoDiscovery: repoDiscovery,
-		agentRunner:   agentRunner,
 		mantisClient:  mantisClient,
 		queue:         jobQueue,
 		store:         jobStore,

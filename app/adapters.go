@@ -1,9 +1,9 @@
-package main
+package app
 
 import (
 	"log/slog"
 
-	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
+	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 )
 
 // slackPosterAdapter wraps slackclient.Client to satisfy bot.SlackPoster interface.
