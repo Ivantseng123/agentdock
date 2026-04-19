@@ -2,25 +2,23 @@
 
 [繁體中文](deployment.md)
 
-## Local (In-Memory Mode)
+## Local
 
-```bash
-./run.sh
-# or
-go build -o bot ./cmd/bot/ && ./bot -config config.yaml
-```
-
-## Local (Redis Mode)
+App and worker are always two separate processes communicating over Redis.
 
 ```bash
 # Start Redis
 redis-server --daemonize yes
 
-# App (handles Slack events, creates issues)
-./bot -config config.yaml   # config: queue.transport: redis
+# Scaffold configs (interactive mode walks you through Slack/GitHub/Redis)
+agentdock init app -i
+agentdock init worker -i
 
-# Worker (consumes jobs, runs agents) — can run multiple
-./bot worker -config worker.yaml
+# App (Slack side)
+agentdock app -c ~/.config/agentdock/app.yaml
+
+# Worker (agent executor) — run multiple; each consumes jobs independently
+agentdock worker -c ~/.config/agentdock/worker.yaml
 ```
 
 ## External Worker (Teammate's Machine)
@@ -29,19 +27,19 @@ Teammates don't need any config files, just binary + env vars:
 
 ```bash
 # Prerequisites: agent CLI installed and logged in (e.g. claude login)
-REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx ./bot worker
+REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx agentdock worker
 ```
 
 Custom agent:
 ```bash
-REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx PROVIDERS=codex ./bot worker
+REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx PROVIDERS=codex agentdock worker
 ```
 
 Workers have built-in default configs for three agents (claude/codex/opencode), no YAML needed. Redis address and tokens via env vars.
 
 ### External Worker Dependencies
 
-If you download the binary from GitHub Release and run `bot worker` on an external machine, the **binary is not self-contained**. Workers `exec` the following CLIs — install them and ensure they're in `PATH`:
+If you download the binary from GitHub Release and run `agentdock worker` on an external machine, the **binary is not self-contained**. Workers `exec` the following CLIs — install them and ensure they're in `PATH`:
 
 - **At least one agent CLI** (whichever is configured):
   - `@anthropic-ai/claude-code` (npm)
@@ -99,7 +97,7 @@ docker run -e REDIS_ADDR=redis:6379 \
 
 | Execution | Auth Method | Use Case |
 |-----------|-------------|----------|
-| Native binary (`./bot worker`) | OAuth login (`claude login` etc.) | Personal machine, own Pro/Max quota |
+| Native binary (`agentdock worker`) | OAuth login (`claude login` etc.) | Personal machine, own Pro/Max quota |
 | Docker / k8s | API key (env var) | Automated deployment, company API quota |
 
 ### Agent Selection & API Key

@@ -2,25 +2,23 @@
 
 [English](deployment.en.md)
 
-## Local（In-Memory 模式）
+## Local
 
-```bash
-./run.sh
-# 或
-go build -o bot ./cmd/bot/ && ./bot -config config.yaml
-```
-
-## Local（Redis 模式）
+App 與 worker 永遠是兩個獨立 process，透過 Redis 溝通。
 
 ```bash
 # 啟動 Redis
 redis-server --daemonize yes
 
-# App（處理 Slack 事件、建 issue）
-./bot -config config.yaml   # config 裡 queue.transport: redis
+# 建 config（互動模式會幫你填 Slack/GitHub/Redis）
+agentdock init app -i
+agentdock init worker -i
 
-# Worker（消費 job、跑 agent）— 可以開多個
-./bot worker -config worker.yaml
+# App（Slack 端）
+agentdock app -c ~/.config/agentdock/app.yaml
+
+# Worker（agent 執行端）— 可以開多個，彼此獨立消費 job
+agentdock worker -c ~/.config/agentdock/worker.yaml
 ```
 
 ## 外部 Worker（同事電腦）
@@ -29,19 +27,19 @@ redis-server --daemonize yes
 
 ```bash
 # 前置條件：已安裝 agent CLI 並登入（例如 claude login）
-REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx ./bot worker
+REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx agentdock worker
 ```
 
 自訂 agent：
 ```bash
-REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx PROVIDERS=codex ./bot worker
+REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx PROVIDERS=codex agentdock worker
 ```
 
 Worker 內建三個 agent 的預設 config（claude/codex/opencode），不需要 YAML。Redis 地址和 token 透過環境變數傳入。
 
 ### External Worker 依賴
 
-如果你下載 GitHub Release 附的 binary 在外部機器跑 `bot worker`，**binary 不是 self-contained**。Worker 會 `exec` 以下 CLI，請先自行安裝並確認在 `PATH` 中：
+如果你下載 GitHub Release 附的 binary 在外部機器跑 `agentdock worker`，**binary 不是 self-contained**。Worker 會 `exec` 以下 CLI，請先自行安裝並確認在 `PATH` 中：
 
 - **至少一個 agent CLI**（config 裡選定的那個）：
   - `@anthropic-ai/claude-code`（npm）
@@ -99,7 +97,7 @@ docker run -e REDIS_ADDR=redis:6379 \
 
 | 執行方式 | 認證方式 | 適用場景 |
 |---------|---------|---------|
-| Native binary (`./bot worker`) | OAuth 登入（`claude login` 等） | 個人電腦，用自己的 Pro/Max 額度 |
+| Native binary (`agentdock worker`) | OAuth 登入（`claude login` 等） | 個人電腦，用自己的 Pro/Max 額度 |
 | Docker / k8s | API key（環境變數） | 自動化部署，公司付費的 API 額度 |
 
 ### Agent 選擇與 API Key

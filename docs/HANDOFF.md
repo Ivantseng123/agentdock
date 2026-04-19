@@ -1,5 +1,8 @@
 # Session Handoff — Queue Decoupling + Agent Tracking
 
+> **Historical document (pre-v2).** Paths in this file (`internal/queue/...`, `internal/worker/...`, `cmd/bot/...`, `config.yaml`, `transport: inmem`) reflect the queue-decoupling session from 2026-04-10, before the v1 cobra migration and v2 app/worker module split. For current architecture see `README.md`, `docs/configuration.md`, and `shared/queue/` / `app/` / `worker/`. Kept for history.
+
+
 ## What Was Done
 
 Two major features implemented end-to-end in this session:

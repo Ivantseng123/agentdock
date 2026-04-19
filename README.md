@@ -6,7 +6,7 @@
 
 AI agent 調度平台 — 從任何來源接收請求，分派給 CLI agent（claude/codex/opencode）執行，回傳結構化結果。目前支援 Slack → codebase triage → GitHub Issue 流程。
 
-Go 單一 binary，支援 in-memory 和 Redis 兩種 transport。Repo 內有 3 個獨立 module：
+Go 單一 binary（`agentdock` with `app` / `worker` 兩個子命令）。Transport 以 Redis 為主，`queue.transport` 是保留的擴充點供未來新增 backend。Repo 內有 3 個獨立 Go module：
 
 - [`app/`](app/README.md) — Slack orchestrator
 - [`worker/`](worker/README.md) — agent CLI executor

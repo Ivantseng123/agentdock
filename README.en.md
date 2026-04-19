@@ -6,7 +6,7 @@
 
 AI agent dispatch platform — receives requests from any source, dispatches to CLI agents (claude/codex/opencode) for execution, returns structured results. Currently supports Slack → codebase triage → GitHub Issue workflow.
 
-Single Go binary backed by three independent modules:
+Single Go binary (`agentdock` with `app` / `worker` subcommands). Redis is the only transport today; `queue.transport` stays as the extension point for future backends. Repo contains three independent Go modules:
 
 - [`app/`](app/README.en.md) — Slack orchestrator
 - [`worker/`](worker/README.en.md) — agent CLI executor
