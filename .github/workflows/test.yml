@@ -28,3 +28,7 @@ jobs:
         run: (cd worker && go test ./... -race)
       - name: Go vet (worker module)
         run: (cd worker && go vet ./...)
+      - name: Go test (app module)
+        run: (cd app && go test ./... -race)
+      - name: Go vet (app module)
+        run: (cd app && go vet ./...)
