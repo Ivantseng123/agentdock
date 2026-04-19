@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.5.0](https://github.com/Ivantseng123/agentdock/compare/v1.4.0...v1.5.0) (2026-04-19)
+
+
+### Features
+
+* **shared:** extract configloader and connectivity helpers ([3dad48a](https://github.com/Ivantseng123/agentdock/commit/3dad48a1f9b4444a7f4d80e778cea452fca21d02))
+* **shared:** introduce shared module skeleton with replace directive ([d872792](https://github.com/Ivantseng123/agentdock/commit/d8727927820245ab6c70fc470a103591176ee8cc))
+* **worker:** introduce worker module skeleton with shared dep ([d714a9f](https://github.com/Ivantseng123/agentdock/commit/d714a9f42a256601d34b4b0e89e1eaa3519aaa0a))
+
+
+### Bug Fixes
+
+* **logging:** widen request_id suffix to 32 bits to stop test flake ([579718b](https://github.com/Ivantseng123/agentdock/commit/579718b3b56adea537b2cd1877f11d9193a9f885))
+
 ## [1.4.0](https://github.com/Ivantseng123/agentdock/compare/v1.3.0...v1.4.0) (2026-04-17)
 
 
