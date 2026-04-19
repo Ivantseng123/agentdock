@@ -21,6 +21,7 @@ require (
 )
 
 replace (
+	github.com/Ivantseng123/agentdock/app => ./app
 	github.com/Ivantseng123/agentdock/shared => ./shared
 	github.com/Ivantseng123/agentdock/worker => ./worker
 )
