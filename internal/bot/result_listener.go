@@ -110,6 +110,59 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	}
 
 	logger := r.logger.With("job_id", result.JobID, "repo", job.Repo, "status", result.Status)
+
+	// Parse agent output for completed jobs. Non-completed results (failed/
+	// cancelled) skip this step, and tests that pre-populate parsed fields
+	// (without RawOutput) also fall through unchanged — this parse path is
+	// guarded by result.RawOutput != "".
+	if result.Status == "completed" && result.RawOutput != "" {
+		parsed, err := ParseAgentOutput(result.RawOutput)
+		if err != nil {
+			truncated := result.RawOutput
+			if len(truncated) > 2000 {
+				truncated = truncated[:2000] + "…(truncated)"
+			}
+			logger.Warn("解析失敗，輸出原始內容", "phase", "失敗", "output", truncated)
+			failed := *result
+			failed.Status = "failed"
+			failed.Error = fmt.Sprintf("parse failed: %v", err)
+			r.handleFailure(job, state, &failed)
+			r.attachments.Cleanup(ctx, result.JobID)
+			return
+		}
+		logger.Info("解析成功", "phase", "完成", "parsed_status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
+		switch parsed.Status {
+		case "REJECTED":
+			// "Not our bug" — short-circuit into the low-confidence lane below
+			// so the user sees the reason instead of an issue with an empty
+			// title.
+			result.Confidence = "low"
+			result.Message = parsed.Message
+		case "ERROR":
+			// Agent self-reported ERROR — route to failure so the user gets a
+			// retry button and a clear reason instead of a silent 422.
+			msg := parsed.Message
+			if msg == "" {
+				msg = "agent reported ERROR without message"
+			}
+			failed := *result
+			failed.Status = "failed"
+			failed.Error = fmt.Sprintf("agent error: %s", msg)
+			r.handleFailure(job, state, &failed)
+			r.attachments.Cleanup(ctx, result.JobID)
+			return
+		default:
+			// CREATED — populate the parsed fields on the result for the
+			// issue-creation path below.
+			result.Title = parsed.Title
+			result.Body = parsed.Body
+			result.Labels = []string(parsed.Labels)
+			result.Confidence = parsed.Confidence
+			result.FilesFound = parsed.FilesFound
+			result.Questions = parsed.Questions
+		}
+	}
+
 	switch result.Status {
 	case "failed":
 		truncated := result.RawOutput
