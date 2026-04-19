@@ -1,7 +1,7 @@
 # App / Worker Module Split — Design
 
 **Date:** 2026-04-19
-**Status:** Proposed (awaiting review)
+**Status:** Revised after grill-me review (2026-04-19)
 **Related:** Issue #63 as originating context (actual `extra_args` implementation deferred to follow-up). Parent umbrella #54.
 
 ## Problem
@@ -15,11 +15,12 @@ Originating use case: worker-side agent CLI behavior control (issue #63). That f
 ## Goals
 
 1. App, worker, and their shared types become **three separate Go modules** under one git repo, with dependencies only flowing `app → shared` and `worker → shared`. Module boundaries prevent accidental coupling by making cross-cuts require explicit import paths.
-2. Config schema splits into `AppConfig` (owned by `app` module) and `WorkerConfig` (owned by `worker` module). **No shared Config struct**. Users maintain two yaml files: `app.yaml` and `worker.yaml`.
-3. A new `agentdock migrate` command converts legacy single-file `config.yaml` into the two new files, with a `.v1.bak` backup.
-4. **All existing user-observable behavior is preserved**, including inmem mode. The only user-visible change is the config file split.
+2. Config schema splits into `AppConfig` (owned by `app` module) and `WorkerConfig` (owned by `worker` module). **No shared Config struct; no shared yaml-tagged struct types**. Each module declares its own yaml types; overlap (RedisConfig, LoggingConfig, etc.) is accepted as a few dozen lines of duplication in exchange for schema-evolution independence.
+3. Each module has its own `config.yaml` file (`app.yaml` / `worker.yaml`). **No automatic migration tool** — users manually rebuild two files via `agentdock init app` and `agentdock init worker`, guided by `docs/MIGRATION-v2.md`. Justified by pre-launch deployment scale (1 app + 3 worker machines).
+4. **All existing user-observable behavior is preserved**, including inmem mode. The only user-visible change is the config file split and the new `--worker-config` flag for inmem.
 5. **CI/CD pipeline is kept untouched** — single binary `agentdock`, single Docker image `ghcr.io/ivantseng123/agentdock:X`, single homebrew formula, single release-please flow. Binary dispatches to `app.Run()` or `worker.Run()` via cobra subcommands.
-6. Module boundaries are enforced by an `import_direction_test.go` in the `shared` module.
+6. Module boundaries are enforced by a **whitelist-based** `import_direction_test.go` in the `shared` module, added in Phase 6.
+7. **New `test.yml` GitHub Actions workflow** added in Phase 1 to run `go test ./...` across the four module roots on every PR.
 
 ## Non-goals
 
@@ -30,6 +31,8 @@ Originating use case: worker-side agent CLI behavior control (issue #63). That f
 - Issue #63 `extra_args` implementation (deferred to follow-up, 1-2 days once refactor lands).
 - Fixing the `mergeBuiltinAgents` all-or-nothing merge bug (the parent #63 concern; deferred).
 - Agent CLI environment isolation (XDG / HOME redirect to defeat `oh my opencode` style plugin pollution) — deferred as low-frequency concern.
+- **Automatic config migration tool `agentdock migrate`** — with only 4 deployment machines pre-launch, manual rebuild via `init` is simpler than the tool plus golden-file tests.
+- **Legacy `config.yaml` auto-detection** at startup — users who see "config file not found" can follow the `init` hint; no extra parsing code.
 
 ## Design
 
@@ -43,40 +46,44 @@ agentdock/                            # git repo root
 
   cmd/agentdock/
     main.go, root.go
-    app.go                            # cobra 'app' subcommand → calls app.Run()
-    worker.go                         # cobra 'worker' subcommand → calls worker.Run()
-    migrate.go                        # agentdock migrate (v1 → v2 config split)
-    init.go                           # agentdock init app / init worker
+    app.go                            # cobra 'app' subcommand → orchestrates app.Run + (inmem) LocalAdapter
+    worker.go                         # cobra 'worker' subcommand → calls worker.Run
+    init.go                           # agentdock init app / init worker / init (no sub = show help)
 
   app/
     go.mod                            # module github.com/Ivantseng123/agentdock/app
-    app.go                            # func Run(cfg *Config) error
+    app.go                            # func Run(cfg *Config, deps Deps) error
     config/                           # AppConfig, applyAppDefaults, buildAppKoanf, preflight, validate, init
-    bot/                              # workflow, result_listener, retry_handler, status_listener, parser
+    bot/                              # workflow, result_listener, retry_handler, status_listener, parser, enrich, skill_provider
     slack/
     mantis/
     metrics/
-    skill/                            # loader, watcher, npx (app-side only)
+    skill/                            # loader, watcher, npx, validate (app-side only)
 
   worker/
     go.mod                            # module github.com/Ivantseng123/agentdock/worker
-    worker.go                         # func Run(cfg *Config) error
+    worker.go                         # func Run(cfg *Config, deps Deps) error
     config/                           # WorkerConfig, applyWorkerDefaults, buildWorkerKoanf, preflight, validate, init, builtin_agents
-    pool/                             # ex internal/worker
+    pool/                             # ex internal/worker (pool.go, executor.go) + local.go (ex cmd/agentdock/local_adapter.go)
     agent/                            # ex internal/bot/agent.go (AgentRunner)
     prompt/                           # ex internal/worker/prompt.go (XML builder)
 
   shared/
     go.mod                            # module github.com/Ivantseng123/agentdock/shared
-    queue/                            # Job, JobResult, PromptContext types + redis transport + mem store
+    queue/                            # Job, JobResult, PromptContext, SkillPayload types + redis transport + mem store
     crypto/
     github/                           # shared GitHub client helpers
     logging/
-    skill/                            # SkillPayload type only (no loader)
-    config/                           # shared config types: RedisConfig, LoggingConfig, QueueConfig, GitHubConfig, RepoCacheConfig, AttachmentsConfig
+    configloader/                     # pure helpers: pickParser, resolveConfigPath, atomicWrite,
+                                      #               walkYAMLPathsKeyOnly, warnUnknownKeys, saveConfig
+    connectivity/                     # pure helpers: CheckGitHubToken, CheckSlackToken, CheckRedis, VerifySecretBeacon
     test/
-      import_direction_test.go        # enforces module boundaries
+      import_direction_test.go        # whitelist enforcement (added Phase 6)
 ```
+
+**Note: no `shared/config/` and no `shared/skill/` packages.** Yaml-tagged struct types and skill loader/watcher are not cross-module concerns.
+
+**`SkillPayload`** lives in `shared/queue/job.go` alongside `Job` (since it is part of Job payload).
 
 Root `go.mod` uses `replace` to point at local sibling modules:
 
@@ -101,8 +108,8 @@ replace (
 
 ```
 cmd/agentdock ─► app
-              ─► worker
-              ─► shared  (indirect via app/worker)
+              ─► worker          (allowed because dispatcher lives in root module)
+              ─► shared  (indirect via app/worker, and direct use is also OK)
 
 app   ─► shared
 worker ─► shared
@@ -112,7 +119,18 @@ worker ✗ app              (forbidden; enforced)
 shared ✗ app | worker     (forbidden; enforced)
 ```
 
-Enforcement: `shared/test/import_direction_test.go` uses `go/packages` to scan all files in each module and assert no forbidden imports exist. Runs as part of standard `go test`.
+**Enforcement (Phase 6)**: `shared/test/import_direction_test.go` uses a **whitelist**:
+
+```go
+var moduleAllowedImports = map[string][]string{
+    "github.com/Ivantseng123/agentdock/app":    {"github.com/Ivantseng123/agentdock/shared"},
+    "github.com/Ivantseng123/agentdock/worker": {"github.com/Ivantseng123/agentdock/shared"},
+    "github.com/Ivantseng123/agentdock/shared": {},  // cannot import any internal module
+    "github.com/Ivantseng123/agentdock/cmd":    {"app", "worker", "shared"},
+}
+```
+
+Uses `go/packages.Load` to scan every file; stdlib and external third-party imports (not starting with `github.com/Ivantseng123/agentdock/`) are automatically allowed. Violations fail the test with file:import details.
 
 ### Config Field Allocation
 
@@ -127,7 +145,7 @@ Enforcement: `shared/test/import_direction_test.go` uses `go/packages` to scan a
 | `MaxThreadMessages`, `SemaphoreTimeout`, `RateLimit` | ✓ | | Slack handler |
 | `Mantis` | ✓ | | |
 | `Prompt` (goal, output_rules, language, allow_worker_rules) | ✓ | | App assembles `Job.PromptContext`; `AllowWorkerRules` passed as bool to worker via Job payload |
-| `Worker.Count`, `Worker.Prompt.ExtraRules` | | ✓ | |
+| `Count`, `Prompt.ExtraRules` | | ✓ | **Flat in worker.yaml — no `worker:` prefix nest** |
 | `Attachments` | ✓ | | App downloads from Slack to temp dir; worker consumes via Redis AttachmentBus |
 | `SkillsConfig` | ✓ | | App loads skills → `Job.Skills` payload; worker materializes them in cloned repo |
 | `RepoCache` | ✓ | ✓ | Each side has its own cache dir (different processes) |
@@ -136,9 +154,39 @@ Enforcement: `shared/test/import_direction_test.go` uses `go/packages` to scan a
 | `SecretKey` | ✓ | ✓ | Values must match (app writes beacon, worker verifies) |
 | `Secrets` | ✓ | ✓ | App encrypts; worker decrypts; worker config may override |
 
+**Sample `worker.yaml` (flat schema)**:
+
+```yaml
+log_level: info
+github:
+  token: ghp-...
+count: 3                              # was worker.count
+prompt:
+  extra_rules:                        # was worker.prompt.extra_rules
+    - "no guessing"
+agents:
+  claude:
+    command: claude
+    args: ["--print", "--output-format", "stream-json", "-p", "{prompt}"]
+    timeout: 15m
+    skill_dir: ".claude/skills"
+    stream: true
+active_agent: claude
+providers: [claude, codex]
+redis:
+  addr: redis:6379
+queue:
+  job_timeout: 20m
+secret_key: "..."
+secrets:
+  GH_TOKEN: "..."
+```
+
+Note: the `prompt:` block appears in both `app.yaml` and `worker.yaml` with different meaning — app's is about structuring the prompt (goal / output_rules / language / allow_worker_rules), worker's is about appending rules (`extra_rules`). Same name is intentional: both sides contribute to the same final prompt, each owning their segment.
+
 ### Load Flow Split
 
-Per-scope load helpers:
+Per-scope load helpers in each module's `config/` package:
 
 ```go
 // app/config/load.go
@@ -152,185 +200,263 @@ func AppEnvOverrideMap() map[string]any
 // worker/config/load.go — symmetric
 ```
 
+**Pure helpers live in `shared/configloader/`** (no type dependency on AppConfig / WorkerConfig):
+- `PickParser(path)` — yaml/yml/json selector
+- `ResolveConfigPath(in)` — expand `~/`, absolute path
+- `AtomicWrite(path, data, mode)` — temp file + rename
+- `WalkYAMLPathsKeyOnly(t, prefix, out, mapKeys)` — for warnUnknownKeys
+- `WarnUnknownKeys(k)` — generic
+- `SaveConfig(kSave, path, prompted, delta)` — delta-write logic
+
+**Connectivity helpers live in `shared/connectivity/`**:
+- `CheckGitHubToken(token)` — via go-github
+- `CheckSlackToken(token)` — via slack-go
+- `CheckRedis(addr, password, db, tls)` — ping
+- `VerifySecretBeacon(redisClient, key)` — for worker startup
+
 Env var allocation:
 
-| Env | App | Worker |
+| Env | AppConfig | WorkerConfig |
 |---|:-:|:-:|
 | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `MANTIS_API_TOKEN` | ✓ | |
 | `ACTIVE_AGENT`, `PROVIDERS` | | ✓ |
 | `GITHUB_TOKEN`, `REDIS_ADDR`, `REDIS_PASSWORD`, `SECRET_KEY`, `AGENTDOCK_SECRET_*` | ✓ | ✓ |
 
+`AppEnvOverrideMap()` and `WorkerEnvOverrideMap()` each emit only their scope's env keys.
+
 CLI flags get sorted the same way: app subcommand owns Slack-related flags, worker subcommand owns agent/worker-count flags, and a small set of shared flags (e.g. `--redis-addr`) are added to both subcommands by their own registrar.
-
-`cmd/agentdock/main.go` dispatches:
-
-```go
-func runAppCmd(cmd *cobra.Command, args []string) error {
-    cfg, err := appconfig.LoadAndStash(cmd, appConfigPath)
-    if err != nil { return err }
-    return app.Run(cfg)
-}
-```
 
 ### Inmem Mode Handling
 
-The `app` subcommand gains `--worker-config <path>` flag, used only when `Queue.Transport != "redis"`. In that case, after loading its own `AppConfig`, the app additionally loads the worker config and passes it to its embedded `LocalAdapter`:
+**The inmem orchestration lives in `cmd/agentdock/app.go`, not in `app/app.go`** — this respects the `app ✗ worker` rule (app module cannot import worker module).
+
+The `app` subcommand gains `--worker-config <path>` flag, used only when `Queue.Transport != "redis"`. Default value: **the `worker.yaml` sitting next to the app config file** (e.g. if `-c /etc/agentdock/app.yaml`, default is `/etc/agentdock/worker.yaml`). This covers K8s ConfigMap layouts where both files mount in the same directory.
 
 ```go
-// app/app.go (inside Run)
-if cfg.Queue.Transport != "redis" {
-    workerCfgPath := resolveWorkerConfigPathForInmem(cfg, workerConfigFlag)
-    wcfg, err := workerconfig.Load(workerCfgPath)
-    if err != nil {
-        return fmt.Errorf("inmem mode requires worker config: %w", err)
+// cmd/agentdock/app.go (dispatcher layer, imports both modules)
+func runAppCmd(cmd *cobra.Command, args []string) error {
+    appCfg, err := appconfig.LoadAndStash(cmd, appConfigPath)
+    if err != nil { return err }
+
+    // app.Run does NOT own inmem embedding; it only handles app-native work
+    // (Slack handler, workflow, watchdog, result listener).
+    appDeps, err := app.Run(appCfg, assembleAppDeps(appCfg))
+    if err != nil { return err }
+
+    if appCfg.Queue.Transport != "redis" {
+        workerCfgPath := resolveWorkerConfigForInmem(appConfigPath, workerConfigFlag)
+        wcfg, err := workerconfig.Load(workerCfgPath)
+        if err != nil {
+            return fmt.Errorf(
+                "inmem mode requires worker configuration, but none found\n"+
+                "  tried: %s (not found)\n"+
+                "  run: agentdock init worker\n"+
+                "  or:  agentdock app --worker-config /path/to/worker.yaml",
+                workerCfgPath)
+        }
+        if err := workerpool.StartLocal(wcfg, appDeps.Buses); err != nil {
+            return err
+        }
     }
-    localAdapter := NewLocalAdapter(..., wcfg.Agents, wcfg.Worker.Count, wcfg.Worker.Prompt.ExtraRules, ...)
+    return appDeps.Wait()
 }
 ```
 
-Redis mode ignores `--worker-config` entirely. This keeps app's own config free of agent-related fields while preserving inmem behavior.
+Key moves:
+- `LocalAdapter` code migrates from `cmd/agentdock/local_adapter.go` → `worker/pool/local.go`
+- `cmd/agentdock/adapters.go` stays in root module (it's the dispatcher-level type-bridge between app's dependency interfaces and worker's pool input)
+- `app.Run` signature: takes `AppConfig` and `AppDeps` (buses, clients, loggers assembled by cmd layer), returns `RunHandle` that caller can `Wait()` on or receive `Buses` to hand to worker pool in inmem case
+- Redis mode: `app.Run` does everything app-native; `app` binary subcommand on worker machines runs `worker.Run` which owns the pool
 
-### Migration Tool: `agentdock migrate`
+### Manual Config Rebuild (replaces Migration Tool)
 
-```
-$ agentdock migrate
-Reading legacy config: /home/user/.config/agentdock/config.yaml
-Detected schema version: v1 (single file)
+**No `agentdock migrate` command.** Users rebuild `app.yaml` and `worker.yaml` manually, either:
+- Via `agentdock init app -i` and `agentdock init worker -i` (interactive), or
+- By copy-editing example yaml files from `docs/configuration-app.md` / `docs/configuration-worker.md`
 
-Analysis:
-  app-only fields:    slack, channels, channel_defaults, auto_bind, mantis, ...
-  worker-only fields: agents, active_agent, providers, worker.count, ...
-  shared fields:      github, redis, logging, secret_key, secrets, repo_cache, queue
+**Binary startup behavior**:
+- No active detection of legacy `~/.config/agentdock/config.yaml`
+- If `-c` not passed and default path (`~/.config/agentdock/app.yaml` for app, `~/.config/agentdock/worker.yaml` for worker) doesn't exist, return standard "config file not found" error with a hint:
+  ```
+  Error: config file not found: /home/user/.config/agentdock/app.yaml
+  Run `agentdock init app -i` to create one, or pass -c /path/to/app.yaml
+  ```
 
-Writing:
-  /home/user/.config/agentdock/app.yaml       (18 fields)
-  /home/user/.config/agentdock/worker.yaml    (12 fields)
-Backing up original to:
-  /home/user/.config/agentdock/config.yaml.v1.bak
-
-Legacy key warnings:
-  - workers.count → mapped to worker.count
-  - max_concurrent (deprecated) → mapped to worker.count in worker.yaml
-  - prompt.extra_rules (legacy) → NOT auto-migrated; decide manually
-    whether it should go to app:prompt.output_rules or worker:worker.prompt.extra_rules
-
-Done. See docs/MIGRATION-v2.md for deployment updates.
-```
-
-Implementation: `cmd/agentdock/migrate.go` reads legacy `Config` struct (retained as internal type during transition), routes fields to `AppConfig` / `WorkerConfig`, writes both files, creates `.v1.bak`.
-
-Runtime legacy detection: if `-c` not given, both subcommands `os.Stat` the new default paths first; if absent and legacy `config.yaml` exists, they abort with a directed error message pointing at `agentdock migrate`. Never silently fall back to legacy schema.
-
-New default paths:
-- `agentdock app -c`: `~/.config/agentdock/app.yaml`
-- `agentdock worker -c`: `~/.config/agentdock/worker.yaml`
-- `agentdock app --worker-config`: `~/.config/agentdock/worker.yaml`
+**`docs/MIGRATION-v2.md` content**:
+- Side-by-side field mapping (legacy `config.yaml` key → `app.yaml` or `worker.yaml` new location)
+- Interactive init walkthrough
+- Notes on `worker.yaml` schema flattening (legacy `worker.count` → new `count` at top level)
+- K8s ConfigMap update steps (split into `app-config` and `worker-config` mounts)
 
 ### `agentdock init` Restructure
 
-- `agentdock init app -c app.yaml` — app starter config (interactive mode asks Slack tokens)
-- `agentdock init worker -c worker.yaml` — worker starter config (interactive mode asks GitHub token, providers, active_agent, secret_key, redis)
-- `agentdock init --all` — both at once
+Cobra subcommand tree:
+- `agentdock init app [-c app.yaml] [-i]` — app starter config; interactive asks Slack tokens + GitHub token + Redis + SecretKey
+- `agentdock init worker [-c worker.yaml] [-i]` — worker starter config; interactive asks GitHub token + Redis + SecretKey + Providers + ActiveAgent
+- `agentdock init` (no sub-command) — **displays cobra help listing the two sub-commands** (standard cobra behavior; zero implicit action)
+- `agentdock init --all` (optional convenience) — runs both in sequence; deferred as nice-to-have, not Phase 5 requirement
 
 ### Docs Restructure
 
-Top-level `README.md` keeps the overall introduction (product positioning, "what is AgentDock", architecture diagram) and links to sub-READMEs. `app/` and `worker/` each get their own `README.md` covering only that module — there is no content overlap, just cross-links where relevant.
+Top-level `README.md` keeps the overall introduction (product positioning, "what is AgentDock", architecture diagram) and links to sub-READMEs. `app/` and `worker/` each get their own `README.md` covering only that module — **there is no content overlap**, just cross-links where relevant.
 
 | File | Action |
 |---|---|
 | `README.md` / `.en.md` | Keep intro and architecture only; link to `app/README.md` and `worker/README.md` |
-| `app/README.md` / `.en.md` | New — app-specific setup, deployment (K8s), configuration pointer |
+| `app/README.md` / `.en.md` | New — app-specific setup, K8s deployment, configuration pointer |
 | `worker/README.md` / `.en.md` | New — worker-specific setup, local usage, configuration pointer |
 | `docs/configuration.md` / `.en.md` | Split into `configuration-app.md` and `configuration-worker.md`; original becomes index |
-| `docs/MIGRATION-v2.md` / `.en.md` | New — legacy config migration, K8s ConfigMap update, `--worker-config` flag |
+| `docs/MIGRATION-v2.md` / `.en.md` | New — manual rebuild guide with field mapping table, K8s ConfigMap split steps, interactive init walkthrough |
 | `CLAUDE.md` | Update Landmines to reflect module structure and import rules |
 
 ### Testing Strategy
 
 1. **Unit tests travel with source**: `internal/config/config_test.go` splits into `app/config/*_test.go` and `worker/config/*_test.go`; assertions unchanged, only imports updated. Same for `internal/bot/*_test.go`, `internal/worker/*_test.go`, etc.
-2. **Import direction test** (new): `shared/test/import_direction_test.go` scans all files in app / worker / shared, asserts no forbidden imports.
-3. **Migrate golden-file tests** (new): `cmd/agentdock/migrate_test.go` with fixtures in `cmd/agentdock/testdata/migrate/` (v1-full, v1-minimal, v1-with-legacy-keys inputs; expected-app/worker output pairs). Use `go-cmp` for deep equality.
-4. **Test execution**: add `script/test-all.sh` running `go test ./...` in each of the four module roots. Add `.github/workflows/test.yml` (currently absent) invoking it on pull requests.
+2. **Import direction test** (Phase 6): `shared/test/import_direction_test.go` implements **whitelist enforcement** using `go/packages.Load`. Pure stdlib + `go/packages`, zero external dependency. Fails with file:line and disallowed-import path on violation.
+3. **New `test.yml` workflow** (Phase 1): runs on every PR with:
+    ```yaml
+    - run: go test ./...                  # root module
+    - run: (cd app && go test ./...)
+    - run: (cd worker && go test ./...)
+    - run: (cd shared && go test ./...)
+    - run: go vet ./...
+    ```
+    Script `script/test-all.sh` provides the same sequence for local dev. If multi-module `go test ./...` behaves cleanly via `go.work`, the subshell invocations may collapse into one — verified during Phase 1 spike.
+
+No migrate golden-file tests (migrate tool cancelled).
 
 ## Implementation Phases
 
-Breaking changes (Phase 4+5) must ship together as one PR to avoid broken main; other phases can each be independent PRs.
+Breaking changes (Phase 4) must ship together with Phase 5 as one PR to avoid broken main — unless main-broken-between-phases is acceptable (which per project status memory, it is). Phases 1~3 and Phase 6 each ship as independent PRs.
 
-### Phase 1 — Shared module (low risk)
-- Rename root module `agentdock` → `github.com/Ivantseng123/agentdock`
-- Introduce `shared/go.mod` with replace directive
-- Move `internal/queue`, `internal/crypto`, `internal/logging`, `internal/github` into `shared/`
-- Extract skill types (SkillPayload) into `shared/skill/`, leave loader in place
-- Extract shared config types into `shared/config/`
-- Update all import paths; run `go mod tidy` in both modules
-- **End state**: binary behavior identical; two modules active
+### Phase 1 — Shared module + CI test workflow + feasibility spike (low risk)
+
+```
+commits:
+  0.  spike(build): verify goreleaser+replace build works with multi-module setup
+      (creates minimal 3-module hello-world, runs `goreleaser release --snapshot --clean --skip=publish`,
+       verifies single agentdock binary dispatches to app/worker sub-commands — if fails,
+       pivot to go.work-only or single-module design before further work)
+  1.  chore(go): rename module agentdock → github.com/Ivantseng123/agentdock
+  2.  chore(ci): add test.yml workflow (initial: go test ./... on root only)
+  3.  feat(shared): introduce shared module with replace directive
+  4.  refactor(shared): move internal/queue → shared/queue (includes SkillPayload type)
+  5.  refactor(shared): move internal/crypto → shared/crypto
+  6.  refactor(shared): move internal/logging → shared/logging
+  7.  refactor(shared): move internal/github → shared/github
+  8.  feat(shared): introduce shared/configloader and shared/connectivity with pure helpers extracted from internal/config + cmd/agentdock/preflight
+  9.  chore(ci): update test.yml to also run tests in shared module
+```
+
+End of Phase 1: `agentdock` binary behavior identical; shared module active; test workflow running.
 
 ### Phase 2 — Worker module
-- Introduce `worker/go.mod`
-- Move `internal/worker/{pool,executor}`, `internal/bot/agent.go`, `internal/worker/prompt.go`, `internal/config/builtin_agents.go` into `worker/`
-- Expose `worker.Run(cfg)` entry; wire `cmd/agentdock/worker.go` to call it
-- **End state**: three modules (root, shared, worker); app code still in `internal/`; Config struct still legacy
+
+```
+commits:
+  10. feat(worker): introduce worker module
+  11. refactor(worker): move internal/worker/{pool,executor} → worker/pool
+  12. refactor(worker): move cmd/agentdock/local_adapter.go → worker/pool/local.go
+  13. refactor(worker): move internal/bot/agent.go → worker/agent/runner.go
+  14. refactor(worker): move internal/worker/prompt.go → worker/prompt/builder.go
+  15. refactor(worker): move internal/config/builtin_agents.go → worker/config/
+  16. refactor(worker): expose worker.Run(cfg, deps) entry; wire cmd/agentdock/worker.go to call it
+  17. chore(ci): update test.yml to run tests in worker module
+```
+
+End of Phase 2: worker code isolated in its module; Config struct still legacy.
 
 ### Phase 3 — App module
-- Introduce `app/go.mod`
-- Move `internal/slack`, `internal/mantis`, `internal/metrics`, the remaining `internal/bot/*` (workflow, listeners, parser, retry), and `internal/skill` loader/watcher/npx into `app/`
-- Expose `app.Run(cfg)` entry; wire `cmd/agentdock/app.go` to call it
-- **End state**: all four modules (root cmd, shared, app, worker); Config struct still legacy
 
-### Phase 4 — Config split (high risk)
-- Introduce `AppConfig` in `app/config/` and `WorkerConfig` in `worker/config/`
-- Per-scope `applyDefaults`, `EnvOverrideMap`, `DefaultsMap`, `buildKoanf`, `validate`, `runPreflight`
-- Change `app.Run` / `worker.Run` signatures to take split configs
-- Add `--worker-config` flag for inmem mode in `app` subcommand
-- Split `agentdock init` into `init app` / `init worker`
-- **End state**: new load flow in place; legacy `config.yaml` no longer readable
+```
+commits:
+  18. feat(app): introduce app module
+  19. refactor(app): move internal/slack → app/slack
+  20. refactor(app): move internal/mantis → app/mantis
+  21. refactor(app): move internal/metrics → app/metrics
+  22. refactor(app): move internal/bot/{workflow,result_listener,retry_handler,status_listener,parser,enrich,skill_provider} → app/bot
+  23. refactor(app/bot): remove dead agentRunner field from Workflow struct (was assigned but never read)
+  24. refactor(app): move internal/skill/{loader,watcher,npx,validate} → app/skill
+  25. refactor(app): expose app.Run(cfg, deps) entry; wire cmd/agentdock/app.go (redis mode path)
+  26. chore(ci): update test.yml to run tests in app module
+```
 
-### Phase 5 — Migration + user-facing cutover (ships with Phase 4)
-- Implement `cmd/agentdock/migrate.go` with golden-file tests
-- Change default config paths to `app.yaml` / `worker.yaml`
-- Legacy-config detection with directed error message
-- Write `docs/MIGRATION-v2.md`, split `configuration.md`, update root and new sub-READMEs
-- **End state**: user-facing v2 release; breaking change announced in release notes
+End of Phase 3: all four modules co-exist; Config struct still legacy; workflow.go dead code cleaned.
 
-### Phase 6 — Cleanup
-- Remove legacy `internal/*` directories that are now empty
-- Add `import_direction_test.go`
-- Add `script/test-all.sh` and `.github/workflows/test.yml`
-- Update `CLAUDE.md` landmines section
+### Phase 4 — Config split (high risk, ships with Phase 5)
+
+```
+commits:
+  27. feat(app/config): introduce AppConfig struct + applyAppDefaults + AppDefaultsMap + AppEnvOverrideMap
+  28. feat(worker/config): introduce WorkerConfig struct (flat schema: no worker: nest) + applyWorkerDefaults + WorkerDefaultsMap + WorkerEnvOverrideMap
+  29. feat(app/config): implement buildAppKoanf + LoadAndStash + Validate + RunPreflight using shared/configloader
+  30. feat(worker/config): implement buildWorkerKoanf + LoadAndStash + Validate + RunPreflight using shared/configloader
+  31. refactor(app): app.Run signature takes *AppConfig
+  32. refactor(worker): worker.Run signature takes *WorkerConfig
+  33. feat(cmd): --worker-config flag for inmem mode; cmd/agentdock/app.go orchestrates dispatch
+  34. chore(cleanup): remove internal/config (legacy Config struct no longer needed; buildKoanf, mergeBuiltinAgents etc. replaced by per-module versions)
+```
+
+End of Phase 4 (before PR-4 lands): legacy config.yaml no longer readable.
+
+### Phase 5 — User-facing cutover + docs (ships with Phase 4 in same PR)
+
+```
+commits:
+  35. refactor(cmd): default config paths → app.yaml / worker.yaml; init splits into init app / init worker / init (no sub = help)
+  36. docs: MIGRATION-v2.md with manual rebuild guide + field mapping table
+  37. docs: split configuration.md → configuration-app.md + configuration-worker.md
+  38. docs: README.md intro only; new app/README.md + worker/README.md
+  39. chore(release): v2.0.0 release notes with BREAKING CHANGE trailer for release-please
+```
+
+End of Phase 5: user-facing v2 release ready; breaking change announced.
+
+### Phase 6 — Cleanup + enforcement
+
+```
+commits:
+  40. chore: remove remaining legacy internal/ directories (internal/bot, internal/worker, etc. — already emptied by Phase 2~3, this just removes stale dirs)
+  41. test(shared): add shared/test/import_direction_test.go with whitelist enforcement
+  42. docs(CLAUDE.md): update Landmines for new module structure and import rules
+  43. docs(README): point to new v2 flow
+```
+
+End of Phase 6: boundary enforced; all docs updated.
 
 ### PR Breakdown
 
 | PR | Phases | Approx commits |
 |---|---|---|
-| PR-1 | 1 | 8 |
-| PR-2 | 2 | 6 |
-| PR-3 | 3 | 7 |
-| PR-4 | 4 + 5 | 14 |
+| PR-1 | 1 | 10 (incl. spike commit) |
+| PR-2 | 2 | 8 |
+| PR-3 | 3 | 9 |
+| **PR-4** | 4 + 5 | 13 |
 | PR-5 | 6 | 4 |
 
-PR-4 is large but cannot be split — Config schema change and migration tool must land together.
+PR-4 is large but PR-4 is the atomic unit of user-facing breaking change.
 
 ## Risks & Mitigation
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|:-:|:-:|---|
-| User migration loses data | Low | High | `.v1.bak` preserved; golden-file test exercises all canonical inputs; release notes emphasize migration |
-| K8s production deployment breaks | Medium | High | Dev env validation before tag; MIGRATION-v2.md gives explicit ConfigMap split steps; rollback is `image: agentdock:v1.x` revert |
-| Import path churn causes CI failure | Medium | Medium | `go mod tidy` per module after each phase; import-direction test |
-| Inmem mode breaks | Medium | Medium | Integration test covers `--worker-config` path; clear error message if flag missing |
+| User forgets to rebuild config after upgrade | Medium | Medium | Standard "config not found" error includes `init` hint; `MIGRATION-v2.md` field-mapping table is visible in release notes; only 4 machines pre-launch so support burden is minimal |
+| K8s production deployment breaks | Low (pre-launch) | Low (pre-launch) | MIGRATION-v2.md gives explicit ConfigMap split steps; rollback is `image: agentdock:v1.x` revert; `.v1.bak` not needed |
+| Goreleaser + replace directive incompat | Medium | High | Phase 1 commit 0 is a dedicated spike validating `goreleaser release --snapshot` works; fallback options in spike notes (go.work-only / single-module) |
+| Import path churn causes CI failure | Medium | Medium | `go mod tidy` per module after each phase; `test.yml` workflow catches regressions per PR |
+| Inmem mode breaks | Medium | Medium | End-to-end manual validation in DoD; clear error message when `--worker-config` missing |
 | Scope creep into issue #63 or other features | Medium | Medium | Issue #63 explicitly deferred; phase gates prevent feature additions during refactor |
-| Release-please confused by branch strategy | Low | Low | Whole refactor on `refactor/v2-config-split` feature branch; merge-to-main triggers release-please once |
+| Release-please confused by branching | Low | Low | All PRs target main directly; each merge triggers release-please once; BREAKING CHANGE trailer on Phase 5 final commit triggers major bump |
 
 ## Success Criteria (DoD)
 
-1. `go test ./...` green in root, `app/`, `worker/`, `shared/`.
+1. `test.yml` workflow green — `go test ./...` and `go vet ./...` pass in root, `app/`, `worker/`, `shared/`.
 2. `release-validate.yml` snapshot build green.
-3. `shared/test/import_direction_test.go` green (enforces boundaries).
-4. `agentdock migrate` produces exact golden output for all three fixture inputs.
-5. End-to-end manual validation:
+3. `shared/test/import_direction_test.go` green (whitelist enforcement works; no violations).
+4. End-to-end manual validation:
     - Redis mode: `agentdock app -c app.yaml` + `agentdock worker -c worker.yaml` complete one triage round-trip.
     - Inmem mode: `agentdock app -c app.yaml --worker-config worker.yaml` completes one triage round-trip.
-6. A user with a typical v1 `config.yaml` can follow `docs/MIGRATION-v2.md` and reach a working v2 setup.
+5. A user with a typical v1 `config.yaml` can follow `docs/MIGRATION-v2.md` and reach a working v2 setup (verified by running through the guide on the 3 worker machines + 1 app pod).
 
 ## Follow-up (Not in this spec)
 
@@ -339,3 +465,5 @@ PR-4 is large but cannot be split — Config schema change and migration tool mu
 - Agent CLI environment isolation (XDG / HOME redirect) for plugin-pollution defense: deferred as low-frequency concern; needs per-agent-CLI feasibility study.
 - Issue #54 sub-issue #62 (worker takes over output / Slack response text): independent spec.
 - Future git repository split (separate repos for app and worker): deferred until team or release cadence diverges.
+- `agentdock init --all` convenience command: deferred as nice-to-have.
+- Goreleaser `gomod.proxy` enablement (after module rename to full URL): can be turned on in Phase 6 or later; improves reproducible build but not required.
