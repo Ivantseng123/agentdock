@@ -31,7 +31,7 @@ agents:
     command: codex
     args: ["exec", "--skip-git-repo-check", "--color", "never", "{prompt}"]
     timeout: 15m
-    skill_dir: .codex/skills
+    skill_dir: .agents/skills         # Codex discovers skills in .agents/skills, not .codex/skills
   opencode:
     command: opencode
     args: ["run", "{prompt}"]
