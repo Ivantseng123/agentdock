@@ -12,7 +12,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
-	"github.com/Ivantseng123/agentdock/internal/crypto"
+	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 

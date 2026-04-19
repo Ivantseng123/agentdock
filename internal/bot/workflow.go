@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
-	"github.com/Ivantseng123/agentdock/internal/crypto"
+	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/internal/github"
 	"github.com/Ivantseng123/agentdock/internal/logging"
 	"github.com/Ivantseng123/agentdock/internal/mantis"
