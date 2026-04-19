@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.0.0](https://github.com/Ivantseng123/agentdock/compare/v1.4.0...v2.0.0) (2026-04-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* the single config.yaml splits into app.yaml and worker.yaml. Operators must rebuild configs via 'agentdock init app' and 'agentdock init worker'. See docs/MIGRATION-v2.md for the field mapping table and K8s ConfigMap update steps.
+
+### Features
+
+* **app/config:** add load/validate/preflight helpers ([0452c8a](https://github.com/Ivantseng123/agentdock/commit/0452c8a1a5abfbd5d336d8d5fbecbfba34ac98e6))
+* **app/config:** introduce AppConfig struct + ApplyDefaults ([5a4d193](https://github.com/Ivantseng123/agentdock/commit/5a4d19333a59cfcd635625a5aa0632841b59a075))
+* **app:** introduce app module skeleton with shared dep ([073080e](https://github.com/Ivantseng123/agentdock/commit/073080ec79df443b298e3b3fca4953830e96e4d9))
+* **shared/prompt:** extract interactive CLI helpers ([715b6c7](https://github.com/Ivantseng123/agentdock/commit/715b6c7489049e0a97fad38054892bc75f64c108))
+* **shared:** extract configloader and connectivity helpers ([3dad48a](https://github.com/Ivantseng123/agentdock/commit/3dad48a1f9b4444a7f4d80e778cea452fca21d02))
+* **shared:** introduce shared module skeleton with replace directive ([d872792](https://github.com/Ivantseng123/agentdock/commit/d8727927820245ab6c70fc470a103591176ee8cc))
+* v2.0.0 — app/worker module split and config cutover ([0c6cb21](https://github.com/Ivantseng123/agentdock/commit/0c6cb21aee80da99d79d9280e5a10c7e632bf268))
+* wire app+worker module split through cmd/agentdock ([f450623](https://github.com/Ivantseng123/agentdock/commit/f450623d5cab2633d4d803fb8aad67a79fca66be))
+* **worker/config:** add load/validate/preflight helpers ([41bc050](https://github.com/Ivantseng123/agentdock/commit/41bc050b96bf2e9823d6df5207b790f4f4318e20))
+* **worker/config:** introduce WorkerConfig struct with flat schema ([7f73a06](https://github.com/Ivantseng123/agentdock/commit/7f73a06eb4b484c1a8d9bcf9cf471c16c9b1fa0f))
+* **worker:** introduce worker module skeleton with shared dep ([d714a9f](https://github.com/Ivantseng123/agentdock/commit/d714a9f42a256601d34b4b0e89e1eaa3519aaa0a))
+
+
+### Bug Fixes
+
+* **app:** size inmem status buffer for up to 10 workers ([62cdaa5](https://github.com/Ivantseng123/agentdock/commit/62cdaa562f12c1e613071b55cdec7b432bdeb9c1))
+* **logging:** widen request_id suffix to 32 bits to stop test flake ([579718b](https://github.com/Ivantseng123/agentdock/commit/579718b3b56adea537b2cd1877f11d9193a9f885))
+* **worker:** codex skill_dir should be .agents/skills, not .codex/skills ([6bb5e2f](https://github.com/Ivantseng123/agentdock/commit/6bb5e2f41c5bcb107f6e50284d09b8540a889f1b))
+
 ## [1.4.0](https://github.com/Ivantseng123/agentdock/compare/v1.3.0...v1.4.0) (2026-04-17)
 
 
