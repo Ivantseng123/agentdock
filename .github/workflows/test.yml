@@ -20,3 +20,7 @@ jobs:
         run: go test ./... -race
       - name: Go vet (root module)
         run: go vet ./...
+      - name: Go test (shared module)
+        run: (cd shared && go test ./... -race)
+      - name: Go vet (shared module)
+        run: (cd shared && go vet ./...)
