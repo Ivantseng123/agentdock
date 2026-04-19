@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
-	"github.com/Ivantseng123/agentdock/internal/worker"
+	"github.com/Ivantseng123/agentdock/worker/pool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -38,7 +38,7 @@ func TestRedisFullFlow_SubmitToResult(t *testing.T) {
 	bundle := queue.NewRedisBundle(rdb, store, "triage")
 	defer bundle.Close()
 
-	pool := worker.NewPool(worker.Config{
+	p := pool.NewPool(pool.Config{
 		Queue:       bundle.Queue,
 		Attachments: bundle.Attachments,
 		Results:     bundle.Results,
@@ -52,7 +52,7 @@ func TestRedisFullFlow_SubmitToResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool.Start(ctx)
+	p.Start(ctx)
 
 	// Submit job.
 	bundle.Queue.Submit(ctx, &queue.Job{

@@ -1,4 +1,4 @@
-package worker
+package pool
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/internal/worker"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
@@ -104,7 +105,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 
 	// Write attachments into worktree — cleaned up together with RemoveWorktree.
-	var attachInfos []AttachmentInfo
+	var attachInfos []worker.AttachmentInfo
 	if len(attachments) > 0 {
 		attachDir := filepath.Join(repoPath, ".attachments")
 		var err error
@@ -117,7 +118,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 
 	// Build XML prompt from structured context + worker-owned extra rules.
-	prompt := BuildPrompt(*job.PromptContext, deps.extraRules, attachInfos)
+	prompt := worker.BuildPrompt(*job.PromptContext, deps.extraRules, attachInfos)
 	logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
 	logger.Debug("Prompt XML 內容", "phase", "處理中", "prompt", prompt)
 
@@ -202,13 +203,13 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 }
 
-func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]AttachmentInfo, error) {
+func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]worker.AttachmentInfo, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create attachment dir: %w", err)
 	}
 
 	seen := make(map[string]int)
-	var infos []AttachmentInfo
+	var infos []worker.AttachmentInfo
 
 	for _, att := range attachments {
 		filename := att.Filename
@@ -223,7 +224,7 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]Attach
 		if err := os.WriteFile(path, att.Data, 0644); err != nil {
 			return nil, fmt.Errorf("write attachment %s: %w", filename, err)
 		}
-		infos = append(infos, AttachmentInfo{
+		infos = append(infos, worker.AttachmentInfo{
 			Path: path,
 			Name: filename,
 			Type: att.MimeType,

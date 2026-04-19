@@ -175,7 +175,7 @@ func runApp(cfg *config.Config) error {
 	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
 
-	// Create and start LocalAdapter (owns worker.Pool lifecycle).
+	// Create and start LocalAdapter (owns pool.Pool lifecycle).
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
 		localAdapter := NewLocalAdapter(LocalAdapterConfig{

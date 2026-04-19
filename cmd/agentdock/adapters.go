@@ -12,7 +12,7 @@ import (
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
 )
 
-// agentRunnerAdapter wraps AgentRunner to satisfy worker.Runner interface.
+// agentRunnerAdapter wraps AgentRunner to satisfy pool.Runner interface.
 type agentRunnerAdapter struct {
 	runner *bot.AgentRunner
 }
@@ -21,7 +21,7 @@ func (a *agentRunnerAdapter) Run(ctx context.Context, workDir, prompt string, op
 	return a.runner.Run(ctx, slog.Default(), workDir, prompt, opts)
 }
 
-// repoCacheAdapter wraps RepoCache to satisfy worker.RepoProvider interface.
+// repoCacheAdapter wraps RepoCache to satisfy pool.RepoProvider interface.
 type repoCacheAdapter struct {
 	cache *ghclient.RepoCache
 }

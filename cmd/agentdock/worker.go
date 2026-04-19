@@ -13,7 +13,7 @@ import (
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/queue"
-	"github.com/Ivantseng123/agentdock/internal/worker"
+	workerpool "github.com/Ivantseng123/agentdock/worker/pool"
 
 	"github.com/spf13/cobra"
 )
@@ -99,7 +99,7 @@ func runWorker(cfg *config.Config) error {
 	}
 
 	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
-	pool := worker.NewPool(worker.Config{
+	pool := workerpool.NewPool(workerpool.Config{
 		Queue:          bundle.Queue,
 		Attachments:    bundle.Attachments,
 		Results:        bundle.Results,

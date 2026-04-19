@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/Ivantseng123/agentdock/shared v0.0.0
+	github.com/Ivantseng123/agentdock/worker v0.0.0-00010101000000-000000000000
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/knadh/koanf/providers/confmap v1.0.0
 	github.com/knadh/koanf/providers/file v1.2.1
