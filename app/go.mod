@@ -2,15 +2,20 @@ module github.com/Ivantseng123/agentdock/app
 
 go 1.25.0
 
+// worker replace is temporary — Phase 4 Task 34 moves inmem LocalAdapter
+// assembly into cmd/agentdock so app no longer imports worker/.
 replace (
 	github.com/Ivantseng123/agentdock => ../
 	github.com/Ivantseng123/agentdock/shared => ../shared
+	github.com/Ivantseng123/agentdock/worker => ../worker
 )
 
 require (
 	github.com/Ivantseng123/agentdock v0.0.0
 	github.com/Ivantseng123/agentdock/shared v0.0.0
+	github.com/Ivantseng123/agentdock/worker v0.0.0-00010101000000-000000000000
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/prometheus/client_golang v1.23.2
 	github.com/slack-go/slack v0.20.0
 	github.com/xuri/excelize/v2 v2.10.1
 	golang.org/x/sync v0.20.0
@@ -24,9 +29,7 @@ require (
 	github.com/google/go-github/v60 v60.0.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
