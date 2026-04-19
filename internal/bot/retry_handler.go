@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/logging"
-	"github.com/Ivantseng123/agentdock/internal/metrics"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 

@@ -1,5 +1,8 @@
-// Package metrics defines all Prometheus metrics for the AgentDock app pod.
-// Workers have zero prometheus dependency; all metrics are recorded on the app side.
+// Package metrics defines the Prometheus metrics used across the AgentDock
+// app and worker processes. Metrics live in shared/ because shared-level
+// packages (e.g. shared/github) instrument themselves with these counters
+// and histograms. Both app and worker emit metrics; each process exposes
+// them on its own /metrics endpoint.
 package metrics
 
 import (

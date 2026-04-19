@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/metrics"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 
 	gh "github.com/google/go-github/v60/github"
 )
