@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	// ParseAgentOutput still in internal/bot — will move to worker-visible
+	// location when Phase 3 restructures the bot package.
 	"github.com/Ivantseng123/agentdock/internal/bot"
-	"github.com/Ivantseng123/agentdock/internal/worker"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/worker/agent"
+	"github.com/Ivantseng123/agentdock/worker/prompt"
 )
 
 // Runner abstracts agent execution (for testing).
@@ -106,7 +108,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	}
 
 	// Write attachments into worktree — cleaned up together with RemoveWorktree.
-	var attachInfos []worker.AttachmentInfo
+	var attachInfos []prompt.AttachmentInfo
 	if len(attachments) > 0 {
 		attachDir := filepath.Join(repoPath, ".attachments")
 		var err error
@@ -119,9 +121,11 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	}
 
 	// Build XML prompt from structured context + worker-owned extra rules.
-	prompt := worker.BuildPrompt(*job.PromptContext, deps.extraRules, attachInfos)
-	logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
-	logger.Debug("Prompt XML 內容", "phase", "處理中", "prompt", prompt)
+	// Local variable named promptXML (not prompt) to avoid shadowing the
+	// imported prompt package — keeps prompt.X callable later in the scope.
+	promptXML := prompt.BuildPrompt(*job.PromptContext, deps.extraRules, attachInfos)
+	logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(promptXML))
+	logger.Debug("Prompt XML 內容", "phase", "處理中", "prompt", promptXML)
 
 	// Mount skills to all agent skill directories.
 	if len(job.Skills) > 0 {
@@ -140,7 +144,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	deps.store.UpdateStatus(job.ID, queue.JobRunning)
 	logger.Info("執行 agent 中", "phase", "處理中")
 	opts.Secrets = mergedSecrets
-	output, err := deps.runner.Run(ctx, repoPath, prompt, opts)
+	output, err := deps.runner.Run(ctx, repoPath, promptXML, opts)
 	if err != nil {
 		return classifyResult(job, startedAt, err, repoPath, ctx, deps.store)
 	}
@@ -204,13 +208,13 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	}
 }
 
-func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]worker.AttachmentInfo, error) {
+func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]prompt.AttachmentInfo, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create attachment dir: %w", err)
 	}
 
 	seen := make(map[string]int)
-	var infos []worker.AttachmentInfo
+	var infos []prompt.AttachmentInfo
 
 	for _, att := range attachments {
 		filename := att.Filename
@@ -225,7 +229,7 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]worker
 		if err := os.WriteFile(path, att.Data, 0644); err != nil {
 			return nil, fmt.Errorf("write attachment %s: %w", filename, err)
 		}
-		infos = append(infos, worker.AttachmentInfo{
+		infos = append(infos, prompt.AttachmentInfo{
 			Path: path,
 			Name: filename,
 			Type: att.MimeType,
