@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Ivantseng123/agentdock/internal/mantis"
+	"github.com/Ivantseng123/agentdock/app/mantis"
 )
 
 var urlRegex = regexp.MustCompile(`https?://[^\s<>|]+`)
