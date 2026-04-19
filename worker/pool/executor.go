@@ -10,9 +10,6 @@ import (
 	"strings"
 	"time"
 
-	// ParseAgentOutput still in internal/bot — will move to worker-visible
-	// location when Phase 3 restructures the bot package.
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/worker/agent"
@@ -150,56 +147,12 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	}
 	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
 
-	// Parse agent output.
-	parsed, err := bot.ParseAgentOutput(output)
-	if err != nil {
-		truncated := output
-		if len(truncated) > 2000 {
-			truncated = truncated[:2000] + "…(truncated)"
-		}
-		logger.Warn("解析失敗，輸出原始內容", "phase", "失敗", "output", truncated)
-		return classifyResult(job, startedAt, fmt.Errorf("parse failed: %w", err), repoPath, ctx, deps.store)
-	}
-	logger.Info("解析成功", "phase", "完成", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
-
-	// Agent said "not our bug" — short-circuit into the existing "low
-	// confidence skipped" lane in result_listener. Dropping parsed.Status
-	// here is what caused empty-title 422s: the worker turned every parse
-	// success into Status="completed" with empty Title, and the listener
-	// then tried to create an issue with that.
-	if parsed.Status == "REJECTED" {
-		return &queue.JobResult{
-			JobID:          job.ID,
-			Status:         "completed",
-			Confidence:     "low",
-			Message:        parsed.Message,
-			RawOutput:      output,
-			RepoPath:       repoPath,
-			StartedAt:      startedAt,
-			FinishedAt:     time.Now(),
-			PrepareSeconds: prepareSeconds,
-		}
-	}
-
-	// Agent self-reported ERROR — route to failure so the user gets a retry
-	// button and a clear reason instead of a silent 422.
-	if parsed.Status == "ERROR" {
-		msg := parsed.Message
-		if msg == "" {
-			msg = "agent reported ERROR without message"
-		}
-		return failedResult(job, startedAt, fmt.Errorf("agent error: %s", msg), repoPath)
-	}
-
+	// Ship the raw agent output to the app. Parsing and REJECTED/ERROR/parse-failed
+	// classification live in the app-side result listener — worker has no
+	// business interpreting agent output or deciding whether to create an issue.
 	return &queue.JobResult{
 		JobID:          job.ID,
 		Status:         "completed",
-		Title:          parsed.Title,
-		Body:           parsed.Body,
-		Labels:         parsed.Labels,
-		Confidence:     parsed.Confidence,
-		FilesFound:     parsed.FilesFound,
-		Questions:      parsed.Questions,
 		RawOutput:      output,
 		RepoPath:       repoPath,
 		StartedAt:      startedAt,

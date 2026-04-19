@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,8 +76,15 @@ func TestRedisFullFlow_SubmitToResult(t *testing.T) {
 		if result.Status != "completed" {
 			t.Errorf("status = %q, want completed", result.Status)
 		}
-		if result.Title != "Test issue" {
-			t.Errorf("title = %q, want 'Test issue'", result.Title)
+		// Worker no longer parses; it forwards RawOutput for the app to decode.
+		if !strings.Contains(result.RawOutput, "===TRIAGE_RESULT===") {
+			t.Errorf("RawOutput missing TRIAGE_RESULT marker: %q", result.RawOutput)
+		}
+		if !strings.Contains(result.RawOutput, "Test issue") {
+			t.Errorf("RawOutput missing expected title fragment; got %q", result.RawOutput)
+		}
+		if result.Title != "" {
+			t.Errorf("worker must not populate Title; got %q", result.Title)
 		}
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for result")

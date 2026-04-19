@@ -103,82 +103,8 @@ func TestClassifyResult_NoErrorRoutesToFailed(t *testing.T) {
 // Covered by TestClassifyResult_WatchdogKillFallsThroughToFailed above, which also
 // asserts result.Error is non-empty.
 
-// Agent emitted a JSON-format REJECTED ("not our bug") — worker must stamp
-// Confidence=low and carry the message so the listener's existing "skipped"
-// lane fires instead of trying to create an issue with an empty title.
-func TestExecuteJob_AgentRejectedRoutesToLowConfidence(t *testing.T) {
-	store := queue.NewMemJobStore()
-	job := &queue.Job{
-		ID:   "jrej",
-		Repo: "o/r",
-		PromptContext: &queue.PromptContext{
-			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
-			Channel:        "test",
-			Reporter:       "tester",
-			Goal:           "test goal",
-		},
-	}
-	store.Put(job)
-
-	output := "done.\n\n===TRIAGE_RESULT===\n" + `{"status":"REJECTED","message":"not our repo"}`
-
-	deps := executionDeps{
-		attachments: queue.NewInMemAttachmentStore(),
-		repoCache:   &mockRepo{path: "/tmp/r"},
-		runner:      &mockRunner{output: output},
-		store:       store,
-	}
-
-	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
-
-	if result.Status != "completed" {
-		t.Errorf("status = %q, want completed", result.Status)
-	}
-	if result.Confidence != "low" {
-		t.Errorf("confidence = %q, want low (so listener skips issue creation)", result.Confidence)
-	}
-	if result.Title != "" {
-		t.Errorf("title must stay empty for REJECTED, got %q", result.Title)
-	}
-	if result.Message != "not our repo" {
-		t.Errorf("message = %q, want 'not our repo'", result.Message)
-	}
-}
-
-// Agent emitted a JSON-format ERROR — worker must route to failed so the
-// user sees the reason and gets a retry button, not a 422 "title blank".
-func TestExecuteJob_AgentErrorRoutesToFailed(t *testing.T) {
-	store := queue.NewMemJobStore()
-	job := &queue.Job{
-		ID:   "jerr",
-		Repo: "o/r",
-		PromptContext: &queue.PromptContext{
-			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
-			Channel:        "test",
-			Reporter:       "tester",
-			Goal:           "test goal",
-		},
-	}
-	store.Put(job)
-
-	output := "done.\n\n===TRIAGE_RESULT===\n" + `{"status":"ERROR","message":"gh exploded"}`
-
-	deps := executionDeps{
-		attachments: queue.NewInMemAttachmentStore(),
-		repoCache:   &mockRepo{path: "/tmp/r"},
-		runner:      &mockRunner{output: output},
-		store:       store,
-	}
-
-	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
-
-	if result.Status != "failed" {
-		t.Errorf("status = %q, want failed", result.Status)
-	}
-	if !strings.Contains(result.Error, "gh exploded") {
-		t.Errorf("error = %q, want to mention 'gh exploded'", result.Error)
-	}
-}
+// Note: REJECTED/ERROR classification tests moved to internal/bot/result_listener_test.go
+// once parsing became an app-side concern (refactor/parse-out-of-worker).
 
 // Spec §9: Job with nil PromptContext must fail loudly with a clear error,
 // not silently render an empty prompt. Drain-and-cut makes this path

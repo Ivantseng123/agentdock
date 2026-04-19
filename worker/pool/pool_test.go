@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,8 +111,16 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 		if result.Status != "completed" {
 			t.Errorf("status = %q, want completed", result.Status)
 		}
-		if result.Title != "Bug fix" {
-			t.Errorf("title = %q", result.Title)
+		// Worker no longer parses agent output — it just forwards it.
+		// The app-side ResultListener is responsible for decoding Title/etc.
+		if result.RawOutput != agentOutput {
+			t.Errorf("RawOutput mismatch; got %q", result.RawOutput)
+		}
+		if !strings.Contains(result.RawOutput, "===TRIAGE_RESULT===") {
+			t.Errorf("RawOutput missing TRIAGE_RESULT marker: %q", result.RawOutput)
+		}
+		if result.Title != "" {
+			t.Errorf("worker must not populate Title; got %q", result.Title)
 		}
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for result")
