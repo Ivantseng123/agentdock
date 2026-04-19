@@ -1,7 +1,5 @@
 // Package app is the module entry point for the agentdock app process (Slack
-// orchestrator). cmd/agentdock/app.go wraps Run with cobra setup, and in
-// inmem mode assembles the worker pool against app.Handle.Buses() so app.Run
-// itself does not import worker/.
+// orchestrator). cmd/agentdock/app.go wraps Run with cobra setup.
 package app
 
 import (
@@ -40,40 +38,9 @@ var (
 	Date    = "unknown"
 )
 
-// Handle is returned by Run and gives the caller access to the app's buses
-// (needed by cmd/agentdock in inmem mode to start a worker pool against the
-// same bundle) and a Wait method that blocks on shutdown.
+// Handle is returned by Run. Call Wait to block on shutdown.
 type Handle struct {
-	bundle  *queue.Bundle
-	store   queue.JobStore
-	done    <-chan error
-	loggers struct {
-		worker *slog.Logger
-		github *slog.Logger
-	}
-}
-
-// Buses returns the queue bundle so an in-process worker pool can wire up
-// against the same JobQueue/ResultBus/StatusBus/CommandBus/AttachmentStore.
-// Only valid while Run's returned Handle has not observed shutdown.
-func (h *Handle) Buses() queue.AdapterDeps {
-	return queue.AdapterDeps{
-		Jobs:        h.bundle.Queue,
-		Results:     h.bundle.Results,
-		Status:      h.bundle.Status,
-		Commands:    h.bundle.Commands,
-		Attachments: h.bundle.Attachments,
-	}
-}
-
-// Store returns the in-memory JobStore app uses for lifecycle tracking.
-// Inmem mode passes this to the local worker pool so both sides share it.
-func (h *Handle) Store() queue.JobStore { return h.store }
-
-// Loggers returns the loggers app configured for worker + github components
-// so the cmd layer's inmem assembly reuses the same file handlers.
-func (h *Handle) Loggers() (workerLogger, githubLogger *slog.Logger) {
-	return h.loggers.worker, h.loggers.github
+	done <-chan error
 }
 
 // Wait blocks until the socket-mode loop exits.
@@ -81,10 +48,9 @@ func (h *Handle) Wait() error {
 	return <-h.done
 }
 
-// Run initializes the app runtime (logging, Slack, buses, listeners, HTTP
-// endpoints, socket-mode loop) and returns a Handle immediately. The caller
-// must call Wait to block until shutdown. In inmem mode the caller should
-// also wire a worker pool against Handle.Buses() before calling Wait.
+// Run initializes the app runtime (logging, Slack, Redis buses, listeners,
+// HTTP endpoints, socket-mode loop) and returns a Handle immediately. The
+// caller must call Wait to block until shutdown.
 func Run(cfg *config.Config) (*Handle, error) {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -148,6 +114,8 @@ func Run(cfg *config.Config) (*Handle, error) {
 	jobStore := queue.NewMemJobStore()
 	jobStore.StartCleanup(1 * time.Hour)
 
+	// Transport selection. New backends (e.g. github-runner) add a case here;
+	// flag + config validator already allow any value that reaches this switch.
 	var bundle *queue.Bundle
 	switch cfg.Queue.Transport {
 	case "redis":
@@ -161,25 +129,18 @@ func Run(cfg *config.Config) (*Handle, error) {
 			return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 		}
 		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
-		appLogger.Info("使用 Redis transport", "phase", "處理中", "addr", cfg.Redis.Addr)
+		appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
 
-		if cfg.SecretKey != "" {
-			sk, err := crypto.DecodeSecretKey(cfg.SecretKey)
-			if err != nil {
-				return nil, fmt.Errorf("invalid secret_key: %w", err)
-			}
-			if err := crypto.WriteBeacon(context.Background(), rdb, sk); err != nil {
-				return nil, fmt.Errorf("failed to write secret beacon: %w", err)
-			}
-			appLogger.Info("Secret beacon 已寫入 Redis", "phase", "完成")
+		sk, err := crypto.DecodeSecretKey(cfg.SecretKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid secret_key: %w", err)
 		}
+		if err := crypto.WriteBeacon(context.Background(), rdb, sk); err != nil {
+			return nil, fmt.Errorf("failed to write secret beacon: %w", err)
+		}
+		appLogger.Info("Secret beacon 已寫入 Redis", "phase", "完成")
 	default:
-		// In inmem mode, worker count lives in worker.yaml which cmd/agentdock
-		// loads after app.Run returns. We size the status bus with a buffer
-		// generous enough for any realistic pool — 10 workers × 2 heartbeats.
-		const inmemStatusBufferSize = 10
-		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, inmemStatusBufferSize, jobStore)
-		appLogger.Info("使用 in-memory transport", "phase", "處理中")
+		return nil, fmt.Errorf("unsupported queue.transport %q (supported: redis)", cfg.Queue.Transport)
 	}
 
 	coordinator := queue.NewCoordinator(bundle.Queue,
@@ -276,10 +237,7 @@ func Run(cfg *config.Config) (*Handle, error) {
 		done <- nil
 	}()
 
-	h := &Handle{bundle: bundle, store: jobStore, done: done}
-	h.loggers.worker = workerLogger
-	h.loggers.github = githubLogger
-	return h, nil
+	return &Handle{done: done}, nil
 }
 
 // handleSocketEvent dispatches a single socketmode event. Extracted to keep

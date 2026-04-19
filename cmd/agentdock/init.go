@@ -240,11 +240,12 @@ func promptAppInit(cfg *appconfig.Config) error {
 	}
 
 	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  Redis is required (queue transport).")
 	for attempt := 1; attempt <= 3; attempt++ {
-		addr := prompt.Line("Redis address (leave blank for inmem): ")
+		addr := prompt.Line("Redis address: ")
 		if addr == "" {
-			prompt.OK("Skipping Redis (inmem mode)")
-			break
+			prompt.Fail("Redis address is required (attempt %d/3)", attempt)
+			continue
 		}
 		if err := connectivity.CheckRedis(addr, "", 0, false); err != nil {
 			prompt.Fail("Redis connect failed: %v (attempt %d/3)", err, attempt)
@@ -256,17 +257,15 @@ func promptAppInit(cfg *appconfig.Config) error {
 		break
 	}
 
-	if cfg.Queue.Transport == "redis" {
-		fmt.Fprintln(prompt.Stderr)
-		fmt.Fprintln(prompt.Stderr, "  Secret key (AES-256, 64 hex chars):")
-		if prompt.YesNo("  Auto-generate a key?") {
-			key := make([]byte, 32)
-			if _, err := rand.Read(key); err != nil {
-				return fmt.Errorf("generate key: %w", err)
-			}
-			cfg.SecretKey = hex.EncodeToString(key)
-			prompt.OK("Secret key generated — copy this into worker.yaml:\n  %s", cfg.SecretKey)
+	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  Secret key (AES-256, 64 hex chars):")
+	if prompt.YesNo("  Auto-generate a key?") {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return fmt.Errorf("generate key: %w", err)
 		}
+		cfg.SecretKey = hex.EncodeToString(key)
+		prompt.OK("Secret key generated — copy this into worker.yaml:\n  %s", cfg.SecretKey)
 	}
 	return nil
 }

@@ -14,7 +14,7 @@ AgentDock 的 Slack 端。`agentdock app` 的程式碼 module，獨立成 Go mod
 - HTTP endpoints：`/healthz`, `/jobs`, `/metrics`
 - Watchdog（偵測卡死的 job）
 
-App **不執行 agent CLI**；那是 worker 的工作。在 inmem 模式下 cmd/agentdock 會另外起本地 worker pool 共用 app 的 buses。
+App **不執行 agent CLI**；那是 worker 的工作。App 與 worker 永遠是獨立 process，透過 `queue.transport` 指定的 backend 通訊。
 
 ## 設定
 
@@ -34,17 +34,10 @@ agentdock app -c ~/.config/agentdock/app.yaml
 
 ## 模式切換
 
-`queue.transport` 決定 runtime：
+`queue.transport` 決定 queue backend：
 
-- `inmem`（預設）：app 在同 process 啟動 worker pool，讀 sibling `worker.yaml`（或 `--worker-config` 指定的路徑）
-- `redis`：app 只處理 Slack，worker 在另一個 process / pod 跑
-
-Inmem 模式細節：
-
-```bash
-agentdock app -c ~/.config/agentdock/app.yaml \
-              --worker-config ~/.config/agentdock/worker.yaml
-```
+- `redis`（目前唯一支援值）：Redis Stream/Pub/Sub，app 與 worker 獨立 process
+- 未來擴充：新增 backend 就在 `app/app.go` 的 transport switch 加 case
 
 ## 測試
 

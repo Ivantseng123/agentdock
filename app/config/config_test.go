@@ -89,7 +89,7 @@ func TestDefaultsMap_ShapeMatchesYAMLTags(t *testing.T) {
 		t.Error("DefaultsMap missing queue key")
 	}
 	q, _ := m["queue"].(map[string]any)
-	if q["transport"] != "inmem" {
-		t.Errorf("queue.transport = %v, want inmem", q["transport"])
+	if q["transport"] != "redis" {
+		t.Errorf("queue.transport = %v, want redis", q["transport"])
 	}
 }

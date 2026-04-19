@@ -46,7 +46,7 @@ agentdock worker -c ~/.config/agentdock/worker.yaml
 
 ## Mode
 
-`agentdock worker` only makes sense in Redis mode — in inmem mode the worker pool is started directly from cmd/agentdock, not through `worker.Run`.
+Worker always runs as its own process and communicates with app through whichever backend `queue.transport` selects (today: `redis`).
 
 ## Tests
 

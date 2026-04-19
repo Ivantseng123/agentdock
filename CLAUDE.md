@@ -11,6 +11,7 @@ Overview, architecture, build/run, tests, and release flow live in `README.md` a
 - **Import direction is enforced by `test/import_direction_test.go`**: `app ✗ worker`, `worker ✗ app`, `shared ✗ app|worker`. Only the root module (cmd/, test/) may import all three. The test fails the CI Test job on any violation.
 - **Config is split into `app.yaml` and `worker.yaml`.** There is no migration tool. Users rebuild via `agentdock init app` and `agentdock init worker`. See `docs/MIGRATION-v2.md`.
 - **`worker.yaml` is flat, not nested.** Top-level `count` and `prompt.extra_rules` — NOT `worker.count` / `worker.prompt.extra_rules`.
+- **Inmem mode is gone (v2.1+).** Only `queue.transport: redis` is supported. The transport switch in `app/app.go` and `worker/worker.go` is preserved as the extension point; adding a new backend means adding a case there, not removing the field.
 - **`/triage` is not a trigger anymore.** It only prints a usage hint because Slack doesn't expose thread context to slash commands. Real triggers are `@bot` mentions inside a thread.
 - **Slack `invalid_blocks`:** do not combine `MsgOptionMetadata` with `MsgOptionBlocks` in the same post — they reject silently together.
 - **Full clone required for branch listing.** Shallow clones can't enumerate branches. `shared/github/repo.go` uses `fetch --all --prune`; keep it that way.

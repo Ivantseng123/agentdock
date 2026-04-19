@@ -34,19 +34,26 @@ func Run(cfg *config.Config) error {
 	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 
-	rdb, err := queue.NewRedisClient(queue.RedisConfig{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password,
-		DB:       cfg.Redis.DB,
-		TLS:      cfg.Redis.TLS,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to Redis: %w", err)
-	}
-	appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
-
+	// Transport selection. Kept in sync with app/app.go so a future backend
+	// (e.g. github-runner) only needs a new case on both sides.
 	jobStore := queue.NewMemJobStore()
-	bundle := queue.NewRedisBundle(rdb, jobStore, "triage")
+	var bundle *queue.Bundle
+	switch cfg.Queue.Transport {
+	case "redis":
+		rdb, err := queue.NewRedisClient(queue.RedisConfig{
+			Addr:     cfg.Redis.Addr,
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+			TLS:      cfg.Redis.TLS,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to connect to Redis: %w", err)
+		}
+		appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
+		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
+	default:
+		return fmt.Errorf("unsupported queue.transport %q (supported: redis)", cfg.Queue.Transport)
+	}
 
 	agentRunner := agent.NewRunnerFromConfig(cfg)
 

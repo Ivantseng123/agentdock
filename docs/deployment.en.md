@@ -80,14 +80,14 @@ Image includes three agent CLIs: claude, codex, opencode.
 ```bash
 docker build -t agentdock .
 
-# App mode (inmem, single machine)
+# App (Slack side)
 docker run -e SLACK_BOT_TOKEN=xoxb-... \
            -e SLACK_APP_TOKEN=xapp-... \
            -e GITHUB_TOKEN=ghp_... \
-           -e ANTHROPIC_API_KEY=sk-ant-... \
-           agentdock
+           -e REDIS_ADDR=redis:6379 \
+           agentdock app
 
-# Worker mode (Redis, standalone job consumer)
+# Worker (standalone job consumer)
 docker run -e REDIS_ADDR=redis:6379 \
            -e GITHUB_TOKEN=ghp_... \
            -e PROVIDERS=claude \

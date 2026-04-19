@@ -16,16 +16,11 @@ agentdock init app -i       # create ~/.config/agentdock/app.yaml, prompts for S
 agentdock init worker -i    # create ~/.config/agentdock/worker.yaml, prompts for GitHub/Redis/secret/providers
 ```
 
-Then:
+Then start the two processes:
 
 ```bash
-# Redis mode (recommended for production) — workers run on a separate node
 agentdock app -c ~/.config/agentdock/app.yaml
 agentdock worker -c ~/.config/agentdock/worker.yaml
-
-# Inmem mode (single-host dev) — app auto-starts a local worker pool
-agentdock app -c ~/.config/agentdock/app.yaml \
-              --worker-config ~/.config/agentdock/worker.yaml
 ```
 
-Default `queue.transport` is `inmem`; set `queue.transport: redis` and fill `redis.addr` to switch.
+`queue.transport` must match on both sides (only `redis` is supported today), and `secret_key` must be identical on both sides.

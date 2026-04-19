@@ -16,16 +16,11 @@ agentdock init app -i       # 建立 ~/.config/agentdock/app.yaml，互動式問
 agentdock init worker -i    # 建立 ~/.config/agentdock/worker.yaml，問 GitHub/Redis/secret/providers
 ```
 
-然後：
+然後分兩個 process 啟動：
 
 ```bash
-# Redis 模式（建議 production）
-agentdock app -c ~/.config/agentdock/app.yaml            # 另一台機器跑 worker
+agentdock app -c ~/.config/agentdock/app.yaml
 agentdock worker -c ~/.config/agentdock/worker.yaml
-
-# Inmem 模式（單機測試）— app 會自動起本地 worker pool
-agentdock app -c ~/.config/agentdock/app.yaml \
-              --worker-config ~/.config/agentdock/worker.yaml
 ```
 
-預設 `queue.transport` 是 `inmem`；要切 Redis 請設 `queue.transport: redis` 並填 `redis.addr`。
+兩邊的 `queue.transport` 必須一致（目前僅支援 `redis`），兩邊的 `secret_key` 也必須相同。

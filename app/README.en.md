@@ -14,7 +14,7 @@ The Slack side of AgentDock. Holds the code for `agentdock app`, published as it
 - HTTP endpoints: `/healthz`, `/jobs`, `/metrics`
 - Watchdog for stuck jobs
 
-App **does not run agent CLIs**; that is worker's job. In inmem mode, cmd/agentdock starts a local worker pool against app's buses.
+App **does not run agent CLIs**; that is worker's job. App and worker always run as separate processes, communicating through whichever backend `queue.transport` selects.
 
 ## Configuration
 
@@ -34,17 +34,10 @@ agentdock app -c ~/.config/agentdock/app.yaml
 
 ## Mode switching
 
-`queue.transport` decides the runtime:
+`queue.transport` selects the queue backend:
 
-- `inmem` (default): app starts a worker pool in-process, reading the sibling `worker.yaml` (or the path from `--worker-config`).
-- `redis`: app only handles Slack; worker runs in a separate process / pod.
-
-Inmem detail:
-
-```bash
-agentdock app -c ~/.config/agentdock/app.yaml \
-              --worker-config ~/.config/agentdock/worker.yaml
-```
+- `redis` (only value supported today): Redis streams / pub-sub; app and worker are independent processes.
+- Future backends: add a case to the transport switch in `app/app.go`.
 
 ## Tests
 

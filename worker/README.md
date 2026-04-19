@@ -46,7 +46,7 @@ agentdock worker -c ~/.config/agentdock/worker.yaml
 
 ## 模式
 
-Worker 只在 Redis 模式有意義 — inmem 模式下 worker pool 由 cmd/agentdock 直接起，不會呼叫 `worker.Run`。
+Worker 作為獨立 process 跑，透過 `queue.transport` 指定的 backend 與 app 溝通（目前只支援 `redis`）。
 
 ## 測試
 

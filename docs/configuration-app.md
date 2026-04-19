@@ -68,7 +68,7 @@ repo_cache:
 
 queue:
   capacity: 50
-  transport: inmem                    # inmem | redis
+  transport: redis                    # 擴充點；目前僅支援 redis
   job_timeout: 20m                    # watchdog：job 生命週期上限
   agent_idle_timeout: 5m              # stream-json 無事件多久視為卡住
   prepare_timeout: 3m

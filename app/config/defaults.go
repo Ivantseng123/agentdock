@@ -38,7 +38,7 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Queue.Capacity = 50
 	}
 	if cfg.Queue.Transport == "" {
-		cfg.Queue.Transport = "inmem"
+		cfg.Queue.Transport = "redis"
 	}
 	if cfg.ChannelPriority == nil {
 		cfg.ChannelPriority = map[string]int{"default": 50}

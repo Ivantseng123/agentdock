@@ -86,11 +86,10 @@ Slack App 還沒建立？見 [docs/slack-setup.md](docs/slack-setup.md)。
 
 | 模式 | Transport | 說明 |
 |------|-----------|------|
-| In-Memory | `queue.transport: inmem` | 全部在同一個 process，Go channel 通訊（預設） |
-| Redis Worker | `queue.transport: redis` | App 和 Worker 分開部署，Redis Stream/Pub/Sub 通訊 |
-| External Worker | Redis + runner binary | 外部機器跑 `agentdock worker`，連同一個 Redis |
+| Redis Worker | `queue.transport: redis` | App 和 Worker 各自是獨立 process，透過 Redis Stream/Pub/Sub 通訊 |
+| External Worker | Redis + 遠端 runner | 另一台機器跑 `agentdock worker`，連同一個 Redis |
 
-三種模式用同一套 interface（`JobQueue`, `ResultBus`, `StatusBus`, `CommandBus`, `AttachmentStore`），只換 transport 層。切換只改 config，不改代碼。
+兩種部署都走同一套 interface（`JobQueue`, `ResultBus`, `StatusBus`, `CommandBus`, `AttachmentStore`）。`queue.transport` 是擴充點，未來新增 backend 在這裡切換。
 
 詳細部署步驟見 [docs/deployment.md](docs/deployment.md)。
 

@@ -51,7 +51,7 @@ func RegisterFlags(cmd *cobra.Command) {
 	f.Int("queue-capacity", 0, "queue buffer capacity")
 	{
 		var v queueTransportFlag
-		f.Var(&v, "queue-transport", "queue transport: redis|inmem")
+		f.Var(&v, "queue-transport", "queue transport: redis")
 	}
 	f.Duration("queue-job-timeout", 0, "max wall-clock time per job")
 	f.Duration("queue-agent-idle-timeout", 0, "max idle time for agent without output")
@@ -111,17 +111,19 @@ func BuildFlagOverrideMap(cmd *cobra.Command) map[string]any {
 	return out
 }
 
+// queueTransportFlag narrows accepted transports to the set supported today.
+// New backends join the switch without touching the flag surface.
 type queueTransportFlag string
 
 func (q *queueTransportFlag) String() string { return string(*q) }
 func (q *queueTransportFlag) Type() string   { return "queue-transport" }
 func (q *queueTransportFlag) Set(v string) error {
 	switch v {
-	case "redis", "inmem":
+	case "redis":
 		*q = queueTransportFlag(v)
 		return nil
 	}
-	return fmt.Errorf("must be one of [redis inmem]")
+	return fmt.Errorf("must be one of [redis]")
 }
 
 type logLevelFlag string

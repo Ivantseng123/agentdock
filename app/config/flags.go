@@ -72,10 +72,10 @@ func RegisterFlags(cmd *cobra.Command) {
 	f.String("mantis-username", "", "Mantis username (basic auth fallback)")
 	f.String("mantis-password", "", "Mantis password (basic auth fallback)")
 
-	f.Int("queue-capacity", 0, "in-memory queue capacity")
+	f.Int("queue-capacity", 0, "queue buffer capacity")
 	{
 		var v queueTransportFlag
-		f.Var(&v, "queue-transport", "queue transport: redis|inmem")
+		f.Var(&v, "queue-transport", "queue transport: redis")
 	}
 	f.Duration("queue-job-timeout", 0, "max wall-clock time per job")
 	f.Duration("queue-agent-idle-timeout", 0, "max idle time for agent without output")
@@ -148,18 +148,20 @@ func BuildFlagOverrideMap(cmd *cobra.Command) map[string]any {
 	return out
 }
 
-// queueTransportFlag is a pflag.Value that accepts only "redis" or "inmem".
+// queueTransportFlag is a pflag.Value that accepts the set of supported queue
+// transports. Currently only "redis"; future backends (e.g. github runner)
+// widen the switch without reworking the flag surface.
 type queueTransportFlag string
 
 func (q *queueTransportFlag) String() string { return string(*q) }
 func (q *queueTransportFlag) Type() string   { return "queue-transport" }
 func (q *queueTransportFlag) Set(v string) error {
 	switch v {
-	case "redis", "inmem":
+	case "redis":
 		*q = queueTransportFlag(v)
 		return nil
 	}
-	return fmt.Errorf("must be one of [redis inmem]")
+	return fmt.Errorf("must be one of [redis]")
 }
 
 // logLevelFlag is a pflag.Value that accepts debug/info/warn/error.

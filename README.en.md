@@ -86,11 +86,10 @@ Haven't created the Slack App yet? See [docs/slack-setup.en.md](docs/slack-setup
 
 | Mode | Transport | Description |
 |------|-----------|-------------|
-| In-Memory | `queue.transport: inmem` | Everything in one process via Go channels (default) |
-| Redis Worker | `queue.transport: redis` | App + worker as separate deployments over Redis streams |
-| External Worker | Redis + `agentdock worker` | Run the worker on another machine pointing at the same Redis |
+| Redis Worker | `queue.transport: redis` | App and worker are separate processes communicating over Redis streams / pub-sub |
+| External Worker | Redis + remote runner | Run `agentdock worker` on another machine pointing at the same Redis |
 
-All three share the same `JobQueue` / `ResultBus` / `StatusBus` / `CommandBus` / `AttachmentStore` interfaces; only the transport layer swaps. Switching is a config change, not code.
+Both go through the same `JobQueue` / `ResultBus` / `StatusBus` / `CommandBus` / `AttachmentStore` interfaces. `queue.transport` is the extension point — future backends get a new value here.
 
 Detailed deployment steps in [docs/deployment.en.md](docs/deployment.en.md).
 

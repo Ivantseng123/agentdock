@@ -68,7 +68,7 @@ repo_cache:
 
 queue:
   capacity: 50
-  transport: inmem                    # inmem | redis
+  transport: redis                    # extension point; only redis is supported today
   job_timeout: 20m                    # watchdog: max job lifecycle
   agent_idle_timeout: 5m              # stream-json: no-event timeout
   prepare_timeout: 3m

@@ -1,11 +1,13 @@
 # Binary
 /bot
 /agentdock
+/bin/
 
 # Logs
 logs/
 
-# Config with secrets (run `agentdock init` to generate a starter)
+# Config with secrets (run `agentdock init app|worker` to generate a starter)
+app.yaml
 config.yaml
 config.local.yaml
 

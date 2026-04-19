@@ -80,14 +80,14 @@ Image 包含三個 agent CLI：claude、codex、opencode。
 ```bash
 docker build -t agentdock .
 
-# App 模式（inmem，單機）
+# App（Slack 端）
 docker run -e SLACK_BOT_TOKEN=xoxb-... \
            -e SLACK_APP_TOKEN=xapp-... \
            -e GITHUB_TOKEN=ghp_... \
-           -e ANTHROPIC_API_KEY=sk-ant-... \
-           agentdock
+           -e REDIS_ADDR=redis:6379 \
+           agentdock app
 
-# Worker 模式（Redis，獨立消費 job）
+# Worker（獨立消費 job）
 docker run -e REDIS_ADDR=redis:6379 \
            -e GITHUB_TOKEN=ghp_... \
            -e PROVIDERS=claude \

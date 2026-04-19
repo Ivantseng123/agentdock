@@ -121,6 +121,6 @@ agentdock worker               # reads ~/.config/agentdock/worker.yaml by defaul
 ## FAQ
 
 - **Q: startup logs `config file not found: ~/.config/agentdock/app.yaml`** → run `agentdock init app -i` to create it.
-- **Q: inmem mode prints `inmem mode requires worker configuration, but none found`** → run `agentdock init worker -i`, or pass `--worker-config /path/to/worker.yaml` to `agentdock app`.
+- **Q: `unsupported queue.transport`** → v2.1 removes inmem mode. `queue.transport` must be `redis` on both app and worker, with `redis.addr` set.
 - **Q: worker preflight reports `secret_key 與 app 不匹配`** → the secret_key differs from the app's. Copy the value from the app config into worker.yaml.
 - **Q: log warns `未知設定鍵 key=worker.count`** → the schema is flat now. Rename `worker.count` to `count` and `worker.prompt.extra_rules` to `prompt.extra_rules`.

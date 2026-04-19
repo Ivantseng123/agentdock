@@ -35,8 +35,8 @@ func TestBuildKoanf_DefaultsLayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildKoanf: %v", err)
 	}
-	if cfg.Queue.Transport != "inmem" {
-		t.Errorf("Queue.Transport = %q, want inmem", cfg.Queue.Transport)
+	if cfg.Queue.Transport != "redis" {
+		t.Errorf("Queue.Transport = %q, want redis", cfg.Queue.Transport)
 	}
 	if cfg.MaxThreadMessages != 50 {
 		t.Errorf("MaxThreadMessages = %d, want 50", cfg.MaxThreadMessages)
