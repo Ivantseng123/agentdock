@@ -7,8 +7,8 @@ import (
 
 func TestNewRequestID_Format(t *testing.T) {
 	id := NewRequestID()
-	// Expected: YYYYMMDD-HHmmss-xxxx
-	pattern := `^\d{8}-\d{6}-[0-9a-f]{4}$`
+	// Expected: YYYYMMDD-HHmmss-xxxxxxxx
+	pattern := `^\d{8}-\d{6}-[0-9a-f]{8}$`
 	matched, _ := regexp.MatchString(pattern, id)
 	if !matched {
 		t.Errorf("request ID %q does not match pattern %s", id, pattern)
