@@ -1166,6 +1166,28 @@ End of Phase 1. Binary behavior unchanged; one PR ready (Tasks 1-10 roll up into
 
 ## Phase 2 — Worker Module
 
+> **Execution note (2026-04-20):** Phase 2 landed as two PRs (#92 for Tasks 11-18, then
+> #93 for a parse-relocation refactor discovered during PR review). Key gap-fixes folded
+> into the implementation and now part of main:
+>
+> 1. **Task 12 also moved `internal/worker/status.go`** alongside pool.go/executor.go —
+>    it defines `statusAccumulator` used by pool.go, so it has to travel with the package.
+>    Plan listed only pool/executor.
+> 2. **Task 17 scope-expanded** to relocate three cmd-local helpers so `worker.Run` could
+>    compile without importing cmd: `parseLogLevel` → `shared/logging.ParseLevel` (with
+>    new test); `agentRunnerAdapter` → `pool.AgentRunnerAdapter` (exported); `repoCacheAdapter`
+>    → `pool.RepoCacheAdapter` (exported). Folded into the single Task 17 commit.
+> 3. **Between Phase 2 and Phase 3 (PR #93)**: agent-output parse logic moved from
+>    `worker/pool/executor.go` to `internal/bot/result_listener.go::handleResult`.
+>    Worker now only ships `JobResult{Status:"completed", RawOutput:output}`; the app
+>    listener parses and performs REJECTED / ERROR / parse-fail classification. This
+>    eliminated the last `worker → internal/bot` coupling and **unblocks Task 23**:
+>    `parser.go` moves to `app/bot/` cleanly, no `worker → app` violation.
+>
+> Remaining `worker → root` cross-module deps after these changes: only
+> `internal/config.AgentConfig` used by `worker/config/builtin_agents.go`
+> (Phase 4 Task 29 consolidates).
+
 ### Task 11: Introduce Worker Module Skeleton
 
 **Files:**
@@ -1953,10 +1975,18 @@ Skip this task in Phase 3.
 
 ### Task 23: Move Remaining `internal/bot/*` → `app/bot/` + Remove Workflow Dead Code
 
+> **Note (2026-04-20):** The pre-Phase-3 parse-relocation refactor (PR #93) already
+> moved `ParseAgentOutput`'s caller from worker to app. `result_listener.handleResult`
+> now owns the parse block (REJECTED / ERROR / parse-fail → handleFailure or low-confidence
+> lane). Moving `parser.go` here to `app/bot/` therefore creates no architectural
+> violation — it goes where its only remaining caller already lives. The `result_listener.go`
+> file carries its new parse block with it in the `git mv`; no additional edits to
+> handleResult are needed beyond the import path adjustments in Step 4.
+
 **Files:**
 - Git mv: `internal/bot/{workflow.go, result_listener.go, retry_handler.go, status_listener.go, parser.go, enrich.go, skill_provider.go, prompt_context.go}` + `_test.go` counterparts → `app/bot/`
-- Modify: `workflow.go` — remove dead `agentRunner` field (assigned, never read)
-- Modify: `cmd/agentdock/app.go` — import change; remove `bot.NewAgentRunnerFromConfig` call for redis mode (kept in inmem-only path — addressed further in Phase 4 Task 34)
+- Modify: `workflow.go` — remove dead `agentRunner` field (assigned, never read). Also drop the `"github.com/Ivantseng123/agentdock/worker/agent"` import added during Phase 2 Task 14.
+- Modify: `cmd/agentdock/app.go` — import change; the `agentpkg.NewRunnerFromConfig` call (renamed in Phase 2 Task 14 from `bot.NewAgentRunnerFromConfig`) stays inside the inmem-only path — addressed further in Phase 4 Task 34.
 
 - [ ] **Step 1: Move files**
 
