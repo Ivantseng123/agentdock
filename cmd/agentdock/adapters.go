@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/Ivantseng123/agentdock/internal/bot"
-	ghclient "github.com/Ivantseng123/agentdock/internal/github"
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
 )
 
