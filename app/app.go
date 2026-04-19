@@ -174,7 +174,11 @@ func Run(cfg *config.Config) (*Handle, error) {
 			appLogger.Info("Secret beacon 已寫入 Redis", "phase", "完成")
 		}
 	default:
-		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, 0, jobStore)
+		// In inmem mode, worker count lives in worker.yaml which cmd/agentdock
+		// loads after app.Run returns. We size the status bus with a buffer
+		// generous enough for any realistic pool — 10 workers × 2 heartbeats.
+		const inmemStatusBufferSize = 10
+		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, inmemStatusBufferSize, jobStore)
 		appLogger.Info("使用 in-memory transport", "phase", "處理中")
 	}
 
