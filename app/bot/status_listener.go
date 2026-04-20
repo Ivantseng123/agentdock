@@ -164,6 +164,16 @@ func shortWorker(id string) string {
 	return id
 }
 
+// formatWorkerLabel returns the label to display for a worker in human-facing
+// contexts (Slack status). Nickname wins when non-empty; otherwise falls back
+// to shortWorker so the raw hostname/worker-N form still yields worker-N.
+func formatWorkerLabel(workerID, nickname string) string {
+	if nickname != "" {
+		return nickname
+	}
+	return shortWorker(workerID)
+}
+
 func formatElapsed(d time.Duration) string {
 	if d < 0 {
 		d = 0

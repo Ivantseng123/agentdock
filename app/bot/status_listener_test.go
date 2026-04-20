@@ -419,3 +419,19 @@ func TestSlackEscape(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatWorkerLabel(t *testing.T) {
+	cases := []struct {
+		name, workerID, nickname, want string
+	}{
+		{"nickname wins", "host/worker-0", "小明", "小明"},
+		{"empty nickname falls back to shortWorker", "host/worker-2", "", "worker-2"},
+		{"empty nickname empty workerID falls back to empty", "", "", ""},
+		{"nickname beats even multi-slash workerID", "k8s/pod/worker-5", "Alice", "Alice"},
+	}
+	for _, c := range cases {
+		if got := formatWorkerLabel(c.workerID, c.nickname); got != c.want {
+			t.Errorf("%s: formatWorkerLabel(%q, %q) = %q, want %q", c.name, c.workerID, c.nickname, got, c.want)
+		}
+	}
+}
