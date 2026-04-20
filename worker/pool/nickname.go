@@ -24,3 +24,10 @@ func pickNicknames(pool []string, count int, rng *rand.Rand) []string {
 	}
 	return out
 }
+
+// PickNicknames is the exported wrapper around pickNicknames for use by
+// worker.Run. Keeps the core algorithm package-private for tests while
+// exposing a single call site.
+func PickNicknames(pool []string, count int, rng *rand.Rand) []string {
+	return pickNicknames(pool, count, rng)
+}

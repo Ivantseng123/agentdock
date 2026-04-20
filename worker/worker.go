@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
@@ -84,6 +86,13 @@ func Run(cfg *config.Config) error {
 		hostname = "unknown"
 	}
 
+	if n := len(cfg.NicknamePool); n > 0 && n < cfg.Count {
+		appLogger.Warn("nickname 池小於 worker 數，部份 worker 將無暱稱",
+			"phase", "處理中", "pool_size", n, "worker_count", cfg.Count)
+	}
+	nicknameRNG := rand.New(rand.NewSource(time.Now().UnixNano()))
+	nicknames := pool.PickNicknames(cfg.NicknamePool, cfg.Count, nicknameRNG)
+
 	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 	workerPool := pool.NewPool(pool.Config{
 		Queue:          bundle.Queue,
@@ -93,6 +102,7 @@ func Run(cfg *config.Config) error {
 		Runner:         &pool.AgentRunnerAdapter{Runner: agentRunner},
 		RepoCache:      repoAdapter,
 		WorkerCount:    cfg.Count,
+		Nicknames:      nicknames,
 		Hostname:       hostname,
 		SkillDirs:      skillDirs,
 		Commands:       bundle.Commands,
