@@ -13,18 +13,17 @@ import (
 
 const maxRetries = 3
 
-// RunPreflight validates worker-scope requirements (GitHub, Redis + beacon,
-// secret_key, providers, agent CLI availability). Interactive prompts fire
-// only on a terminal with missing values.
+// RunPreflight validates worker-scope requirements (Redis + beacon, secret_key,
+// optional GitHub override, providers, agent CLI availability). Redis/secret_key
+// come first because they establish the encrypted-secret delivery path — once
+// that's in place, the app provides GH_TOKEN via each job and a worker-local
+// github.token is only needed to override it. Interactive prompts fire only on
+// a terminal with missing required values.
 func RunPreflight(cfg *Config) (map[string]any, error) {
 	prompted := map[string]any{}
 	interactive := prompt.IsTerminal() && needsInput(cfg)
 
 	fmt.Fprintln(prompt.Stderr)
-
-	if err := preflightGitHub(cfg, interactive, prompted); err != nil {
-		return prompted, err
-	}
 
 	if cfg.Queue.Transport == "redis" {
 		if err := preflightRedis(cfg, interactive, prompted); err != nil {
@@ -33,6 +32,10 @@ func RunPreflight(cfg *Config) (map[string]any, error) {
 		if err := preflightSecretKey(cfg, interactive, prompted); err != nil {
 			return prompted, err
 		}
+	}
+
+	if err := preflightGitHub(cfg, interactive, prompted); err != nil {
+		return prompted, err
 	}
 
 	if err := preflightProviders(cfg, interactive, prompted); err != nil {
@@ -48,7 +51,7 @@ func RunPreflight(cfg *Config) (map[string]any, error) {
 
 func needsInput(cfg *Config) bool {
 	if cfg.Queue.Transport == "redis" {
-		return cfg.GitHub.Token == "" || cfg.Redis.Addr == "" || cfg.SecretKey == "" || len(cfg.Providers) == 0
+		return cfg.Redis.Addr == "" || cfg.SecretKey == "" || len(cfg.Providers) == 0
 	}
 	return cfg.GitHub.Token == "" || len(cfg.Providers) == 0
 }
@@ -61,6 +64,13 @@ func preflightGitHub(cfg *Config, interactive bool, prompted map[string]any) err
 			return err
 		}
 		prompt.OK("Token valid (user: %s)", username)
+		return nil
+	}
+	// Empty worker github.token is fine when app delivers GH_TOKEN via
+	// encrypted job secrets (redis transport + secret_key path). The worker
+	// token is only a per-worker override.
+	if cfg.Queue.Transport == "redis" && cfg.SecretKey != "" {
+		prompt.OK("GitHub token will be provided by app via encrypted secrets")
 		return nil
 	}
 	if !interactive {
