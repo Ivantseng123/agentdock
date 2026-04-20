@@ -8,19 +8,20 @@ import "time"
 
 // Config is the worker module's yaml-backed configuration.
 type Config struct {
-	LogLevel    string                 `yaml:"log_level"`
-	Logging     LoggingConfig          `yaml:"logging"`
-	GitHub      GitHubConfig           `yaml:"github"`
-	Agents      map[string]AgentConfig `yaml:"agents"`
-	ActiveAgent string                 `yaml:"active_agent"`
-	Providers   []string               `yaml:"providers"`
-	Count       int                    `yaml:"count"`
-	Prompt      PromptConfig           `yaml:"prompt"`
-	RepoCache   RepoCacheConfig        `yaml:"repo_cache"`
-	Queue       QueueConfig            `yaml:"queue"`
-	Redis       RedisConfig            `yaml:"redis"`
-	SecretKey   string                 `yaml:"secret_key"`
-	Secrets     map[string]string      `yaml:"secrets"`
+	LogLevel     string                 `yaml:"log_level"`
+	Logging      LoggingConfig          `yaml:"logging"`
+	GitHub       GitHubConfig           `yaml:"github"`
+	Agents       map[string]AgentConfig `yaml:"agents"`
+	ActiveAgent  string                 `yaml:"active_agent"`
+	Providers    []string               `yaml:"providers"`
+	Count        int                    `yaml:"count"`
+	NicknamePool []string               `yaml:"nickname_pool"`
+	Prompt       PromptConfig           `yaml:"prompt"`
+	RepoCache    RepoCacheConfig        `yaml:"repo_cache"`
+	Queue        QueueConfig            `yaml:"queue"`
+	Redis        RedisConfig            `yaml:"redis"`
+	SecretKey    string                 `yaml:"secret_key"`
+	Secrets      map[string]string      `yaml:"secrets"`
 }
 
 // AgentConfig is the worker's agent CLI description.
