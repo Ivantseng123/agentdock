@@ -25,8 +25,13 @@ var BuiltinAgents = map[string]AgentConfig{
 		SkillDir: ".agents/skills",
 	},
 	"opencode": {
-		Command:  "opencode",
-		Args:     []string{"run", "{prompt}"},
+		Command: "opencode",
+		// --pure skips external plugins (oh-my-openagent et al). Without it,
+		// project-level plugins that dispatch sub-agents via an async
+		// BackgroundManager cause `opencode run` to exit on the main agent's
+		// first "I dispatched" text — before the sub-agents return a parseable
+		// TRIAGE_RESULT. Internal auth plugins still load, so credentials stay intact.
+		Args:     []string{"run", "--pure", "{prompt}"},
 		Timeout:  15 * time.Minute,
 		SkillDir: ".opencode/skills",
 	},
