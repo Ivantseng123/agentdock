@@ -43,6 +43,8 @@ providers: [claude, codex, opencode]  # fallback chain（依序嘗試）
 
 count: 3                              # worker goroutine 數（扁平！舊是 worker.count）
 
+nickname_pool: ["小明", "Alice", "Gary"]  # 可選：每個 worker 啟動時隨機抽一個當 Slack 顯示名
+
 prompt:
   extra_rules:                        # worker 端補上的規則（扁平！舊是 worker.prompt.extra_rules）
     - "列出所有相關的檔案名稱與完整路徑"
@@ -72,6 +74,24 @@ secret_key: 跟-app-同一把             # REQUIRED：從 app.yaml 複製過來
 secrets:
   GH_TOKEN: ghp_worker_override       # 可選：覆蓋 app 給的值
 ```
+
+## Worker Nicknames（選用）
+
+`nickname_pool` 是一個字串池，worker process 啟動時從中隨機抽 `count` 個不重複的當 Slack 狀態顯示的暱稱。
+
+- 池 **≥** count：每個 worker 各抽一個不重複條目（Fisher–Yates）。
+- 池 **<** count：池裡的每個都會被用到一次，剩下的 worker 回退到 `worker-0` / `worker-1` 的機械名。
+- 池為空或省略：全部 worker 都顯示 `worker-N`（跟現行行為一致）。
+- 每個條目 1–32 runes，前後空白會自動 trim，**允許重複**（池裡填兩個 `"小明"` 就有機會兩個 worker 都叫小明）。
+- 暱稱裡的 `<`、`>`、`&` 會在渲染到 Slack 時自動 escape，所以把 `<@U123>` 塞進池不會意外 ping 到人。
+
+Slack 狀態訊息會從冷冰冰的 `:gear: 準備中 · worker-0` 改為擬人化版本：
+
+- 準備階段：`:toolbox: 小明 正在暖機...`
+- 執行中：`:fire: 小明 開工啦！(claude) · 奮鬥 1m23s`
+- 統計行：`小明 已經敲了 15 次工具、翻了 8 份檔`
+
+沒設暱稱時 `worker-N` 還是會套用同樣的句型（robot-worker 人設）。
 
 ## Agent Stream
 

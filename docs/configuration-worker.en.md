@@ -43,6 +43,8 @@ providers: [claude, codex, opencode]  # ordered fallback chain
 
 count: 3                              # worker goroutine count (flat! was worker.count)
 
+nickname_pool: ["Alice", "Bob", "Gary"]  # optional: random display nicknames drawn once at startup
+
 prompt:
   extra_rules:                        # worker-side rules appended to the app prompt (flat!)
     - "List every related file with its full path"
@@ -72,6 +74,24 @@ secret_key: same-hex-as-app           # REQUIRED: copy from app.yaml
 secrets:
   GH_TOKEN: ghp_worker_override       # optional: overrides the app-provided value
 ```
+
+## Worker Nicknames (optional)
+
+`nickname_pool` is a list of display names. At startup each worker process randomly picks one (Fisher–Yates, no replacement when `len(pool) >= count`).
+
+- Pool **≥** count: every worker gets a distinct entry.
+- Pool **<** count: pool is exhausted, remaining workers fall back to `worker-0`, `worker-1`, ...
+- Empty or absent pool: all workers display `worker-N` (current behavior).
+- Each entry is 1–32 runes; leading/trailing whitespace is trimmed at load; **duplicates are allowed** (operator's choice).
+- `<`, `>`, `&` are auto-escaped at render time, so pasting `<@U123>` into the pool will NOT accidentally ping a Slack user.
+
+Slack status messages use a playful template regardless of whether a nickname is set:
+
+- Preparing: `:toolbox: Alice 正在暖機...`
+- Running: `:fire: Alice 開工啦！(claude) · 奮鬥 1m23s`
+- Stats: `Alice 已經敲了 15 次工具、翻了 8 份檔`
+
+(Text is Chinese because this is a zh-first product; the template applies to every worker uniformly.)
 
 ## Agent streaming
 
