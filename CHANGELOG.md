@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.1.0](https://github.com/Ivantseng123/agentdock/compare/v2.0.0...v2.1.0) (2026-04-20)
+
+
+### Features
+
+* **app:** add formatWorkerLabel (nickname wins, else shortWorker) ([cf1d9d5](https://github.com/Ivantseng123/agentdock/commit/cf1d9d59c82489a0eedd1e299c8119bad0ad01d9))
+* **app:** add slackEscape for Slack mrkdwn safety ([c364f29](https://github.com/Ivantseng123/agentdock/commit/c364f295b9bda0578b52de533f82d46906b20ca9))
+* **app:** playful status text + Slack escape ([4cdc3bd](https://github.com/Ivantseng123/agentdock/commit/4cdc3bd4de7c4d997ff0ea8604aa58bb93236cc7))
+* **pool:** statusAccumulator carries nickname ([a75a48a](https://github.com/Ivantseng123/agentdock/commit/a75a48a3f060e81b3d338796d49e361916e095e8))
+* **pool:** thread Nicknames[] into Config and executors ([b5c96b4](https://github.com/Ivantseng123/agentdock/commit/b5c96b4dec08eaeaed7e64f80ff26be706aad1f7))
+* **queue:** add Nickname/WorkerNickname fields ([68376e6](https://github.com/Ivantseng123/agentdock/commit/68376e6702ea5445e85bc3d0df2d466a669da2bc))
+* **queue:** surface Nickname on /jobs workerEntry ([476a084](https://github.com/Ivantseng123/agentdock/commit/476a08470790862d445bb60cf9cb153d7628efc9))
+* worker nicknames in Slack + playful status text ([f4ff9bd](https://github.com/Ivantseng123/agentdock/commit/f4ff9bdfe496a02b45efecbcd232489af48ad199))
+* **worker:** add NicknamePool to Config ([709f4e8](https://github.com/Ivantseng123/agentdock/commit/709f4e838bc45f2efe09ad260acf2cd4a78db158))
+* **worker:** add pickNicknames for nickname pool selection ([458de68](https://github.com/Ivantseng123/agentdock/commit/458de6803b8ce8e388cbf87a8991026ed0fc64ae))
+* **worker:** pick nicknames at startup and warn on undersized pool ([a5009bf](https://github.com/Ivantseng123/agentdock/commit/a5009bfb24066e47b8cdfd97ebebee712a537ecb))
+* **worker:** validate nickname_pool entries ([d76f41c](https://github.com/Ivantseng123/agentdock/commit/d76f41cdff62c4cd2ee639b852270128ddb989e2))
+
 ## [2.0.0](https://github.com/Ivantseng123/agentdock/compare/v1.4.0...v2.0.0) (2026-04-19)
 
 
