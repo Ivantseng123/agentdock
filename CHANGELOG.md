@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.1](https://github.com/Ivantseng123/agentdock/compare/v2.1.0...v2.1.1) (2026-04-20)
+
+
+### Bug Fixes
+
+* **worker:** make github.token optional when app delivers via encrypted secrets ([29f3201](https://github.com/Ivantseng123/agentdock/commit/29f3201af75b3e5f29da46a16d76a7c7895c6efd))
+* **worker:** make github.token optional when app delivers via encrypted secrets ([6608c4b](https://github.com/Ivantseng123/agentdock/commit/6608c4b9045e8ddfa96466bf4a8b18971b8b864a))
+
 ## [2.1.0](https://github.com/Ivantseng123/agentdock/compare/v2.0.0...v2.1.0) (2026-04-20)
 
 
