@@ -126,6 +126,14 @@ func (w *Workflow) HandleRepoSuggestion(query string) []string {
 	return repos
 }
 
+// dSelectorLabel maps task-type values to friendly display labels used when
+// acknowledging a D-selector click.
+var dSelectorLabel = map[string]string{
+	"issue":     "📝 建 Issue",
+	"ask":       "❓ 問問題",
+	"pr_review": "🔍 Review PR",
+}
+
 // HandleSelection handles a button click on a selector message. It looks up
 // the pending state by selectorMsgTS, removes it from the map, and
 // calls dispatcher.HandleSelection.
@@ -142,8 +150,15 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS str
 
 	ctx := context.Background()
 	// Update the selector message to show the selection.
+	// For D-selector clicks use a friendly label; other selectors show the raw value.
+	ackLabel := value
+	if pending.Phase == "d_selector" {
+		if label, ok := dSelectorLabel[value]; ok {
+			ackLabel = label
+		}
+	}
 	_ = w.slack.UpdateMessage(channelID, selectorMsgTS,
-		":white_check_mark: "+value)
+		":white_check_mark: "+ackLabel)
 	step, err := w.dispatcher.HandleSelection(ctx, pending, value)
 	if err != nil {
 		w.logger.Error("HandleSelection dispatch failed", "phase", "失敗", "error", err)
@@ -323,6 +338,14 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 		); err != nil {
 			w.logger.Error("OpenTextInputModal failed", "phase", "失敗", "error", err)
 			// Fall back: submit without extra description.
+			// Consume the pending entry so the timeout goroutine doesn't fire
+			// a spurious ":hourglass: 選擇已超時" after the job is already running.
+			selectorTS := pending.SelectorTS
+			if selectorTS != "" {
+				w.mu.Lock()
+				delete(w.pending, selectorTS)
+				w.mu.Unlock()
+			}
 			if w.onSubmit != nil {
 				w.onSubmit(ctx, pending)
 			}

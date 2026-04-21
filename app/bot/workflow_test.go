@@ -2,6 +2,8 @@ package bot
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
@@ -43,13 +45,6 @@ func (s *shimSlack) FetchThreadContext(c, ts, tts, bot string, lim int) ([]slack
 }
 func (s *shimSlack) DownloadAttachments(msgs []slackclient.ThreadRawMessage, dir string) []slackclient.AttachmentDownload {
 	return nil
-}
-
-// ── fake Dispatcher ────────────────────────────────────────────────────────
-
-type fakeDispatcher struct {
-	dispatchCalled bool
-	dispatchStep   workflow.NextStep
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
@@ -153,6 +148,117 @@ func TestExecuteStep_Error_PostsMessage(t *testing.T) {
 
 	if len(slack.posted) == 0 {
 		t.Fatal("expected error message to be posted")
+	}
+}
+
+// ── shimSlack variant that fails OpenTextInputModal ────────────────────────
+
+type shimSlackModalFail struct {
+	shimSlack
+}
+
+func (s *shimSlackModalFail) OpenTextInputModal(tid, title, label, name, metadata string) error {
+	return errors.New("modal open failed")
+}
+
+// TestHandleSelection_DSelector_DispatchesWorkflow verifies that a D-selector
+// click (Phase == "d_selector", value == "issue") is forwarded to the issue
+// workflow's Trigger and ultimately calls onSubmit.
+func TestHandleSelection_DSelector_DispatchesWorkflow(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil)
+
+	submitted := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		submitted = true
+	})
+
+	// Manually insert a pending entry with Phase="d_selector", mirroring what
+	// postDSelector places in the map after storePending.
+	const selectorTS = "sel-123"
+	p := &workflow.Pending{
+		ChannelID:  "C1",
+		ThreadTS:   "T1",
+		Phase:      "d_selector",
+		SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	wf.HandleSelection("C1", "d_selector", "issue", selectorTS)
+
+	if !submitted {
+		t.Error("expected onSubmit to be called after d_selector click → issue workflow")
+	}
+
+	// Pending must have been consumed.
+	wf.mu.Lock()
+	_, stillPending := wf.pending[selectorTS]
+	wf.mu.Unlock()
+	if stillPending {
+		t.Error("expected pending entry to be removed after HandleSelection")
+	}
+}
+
+// TestHandleDescriptionAction_ModalFail_ConsumesPending verifies that when
+// OpenTextInputModal returns an error the pending entry is removed so the
+// timeout goroutine cannot fire a spurious ":hourglass: 選擇已超時" message.
+func TestHandleDescriptionAction_ModalFail_ConsumesPending(t *testing.T) {
+	sl := &shimSlackModalFail{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	logger := slog.Default()
+	wf := NewWorkflow(cfg, disp, sl, nil, logger)
+
+	submitted := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		submitted = true
+	})
+
+	// Simulate a pending left by the description-prompt selector.
+	const selectorTS = "desc-sel-456"
+	p := &workflow.Pending{
+		ChannelID:  "C1",
+		ThreadTS:   "T1",
+		TaskType:   "issue",
+		Phase:      "description",
+		SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	// The dispatcher's HandleSelection for "description" phase calls
+	// IssueWorkflow.Selection which returns NextStepOpenModal.
+	// We cannot wire that here without a real IssueWorkflow, so we test via
+	// executeStep directly instead — feed it NextStepOpenModal with a valid
+	// triggerID so it tries (and fails) to open the modal.
+	step := workflow.NextStep{
+		Kind:           workflow.NextStepOpenModal,
+		ModalTitle:     "補充說明",
+		ModalLabel:     "說明",
+		ModalInputName: "description_input",
+		ModalMetadata:  selectorTS,
+	}
+	wf.executeStep(context.Background(), p, step, "fake-trigger-id")
+
+	// After the fallback, pending must be gone.
+	wf.mu.Lock()
+	_, stillPending := wf.pending[selectorTS]
+	wf.mu.Unlock()
+	if stillPending {
+		t.Error("expected pending entry to be consumed when OpenTextInputModal fails")
+	}
+
+	if !submitted {
+		t.Error("expected onSubmit to be called as fallback when OpenTextInputModal fails")
 	}
 }
 

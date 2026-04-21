@@ -540,6 +540,8 @@ func handleInteraction(
 		appLogger.Info("收到按鈕互動", "phase", "接收", "action_id", action.ActionID, "value", action.Value, "selector_ts", selectorTS)
 
 		switch {
+		case action.ActionID == "d_selector":
+			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
 		case action.ActionID == "repo_search" && action.SelectedOption.Value != "":
 			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.SelectedOption.Value, selectorTS)
 		case strings.HasPrefix(action.ActionID, "repo_select"):
