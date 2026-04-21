@@ -108,16 +108,16 @@ func TestRepoCloneProvider_ForwardsArgs(t *testing.T) {
 	}
 }
 
-// TestSkillMountInEmptyDir_ForEachRunner validates that each registered
-// agent CLI discovers skills mounted under the agent's configured
-// skill_dir in a non-git empty directory. This test gates PR 5 (Ask
-// workflow): if any runner fails to see the skill, the EmptyDirProvider
-// design needs a fallback (git init / HOME mount) before Ask ships.
+// TestSkillMountInEmptyDir_ForEachRunner validates that for each registered
+// agent's skill_dir convention, mountSkills lays out files correctly in a
+// non-git empty directory. This test gates PR 5 (Ask workflow): if any
+// runner's path layout fails here, EmptyDirProvider needs a fallback
+// (git init / HOME mount) before Ask ships.
 //
-// The "runner" here is a dummy that execs a shell script which inspects the
-// CWD for the expected skill file. In CI, this is effectively a filesystem
-// test — we don't launch the real claude/codex binaries. The value is
-// confirming the path layout and permissions.
+// This is a pure filesystem-layout assertion — no real CLI binaries are
+// launched. If mountSkills ever grows a dependency on `git` commands or
+// other non-empty-dir semantics, at least one of the four sub-tests will
+// trip before Phase 5 regresses.
 func TestSkillMountInEmptyDir_ForEachRunner(t *testing.T) {
 	providers := []struct {
 		name     string
