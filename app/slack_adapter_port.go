@@ -46,11 +46,8 @@ func (a *slackAdapterPort) PostExternalSelector(channelID, prompt, actionID, pla
 	return a.client.PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS)
 }
 
-// OpenTextInputModal delegates to the existing OpenDescriptionModal which
-// renders a hardcoded "補充說明" modal. Phase 6 will make the title/label
-// generic; for now the title/label/inputName params are informational only.
 func (a *slackAdapterPort) OpenTextInputModal(triggerID, title, label, inputName, metadata string) error {
-	return a.client.OpenDescriptionModal(triggerID, metadata)
+	return a.client.OpenTextInputModal(triggerID, title, label, inputName, metadata)
 }
 
 func (a *slackAdapterPort) ResolveUser(userID string) string {

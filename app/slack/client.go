@@ -329,37 +329,43 @@ func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, 
 	return ts, nil
 }
 
-// OpenDescriptionModal opens a modal with a text input for extra description.
-// selectorMsgTS is stored as private_metadata so we can find the pending issue on submit.
-func (c *Client) OpenDescriptionModal(triggerID, selectorMsgTS string) error {
+// OpenTextInputModal opens a modal with a single multiline text input.
+// metadata is stored in the view's private_metadata so the submit handler
+// can resolve the originating pending entry.
+func (c *Client) OpenTextInputModal(triggerID, title, label, inputName, metadata string) error {
 	textInput := slack.NewPlainTextInputBlockElement(
-		slack.NewTextBlockObject(slack.PlainTextType, "輸入補充說明...", false, false),
-		"description_input",
+		slack.NewTextBlockObject(slack.PlainTextType, "請輸入...", false, false),
+		inputName,
 	)
 	textInput.Multiline = true
 
 	inputBlock := slack.NewInputBlock(
-		"description_block",
-		slack.NewTextBlockObject(slack.PlainTextType, "補充說明", false, false),
-		nil,
-		textInput,
+		inputName+"_block",
+		slack.NewTextBlockObject(slack.PlainTextType, label, false, false),
+		nil, textInput,
 	)
-	inputBlock.Optional = true
+	inputBlock.Optional = false
 
 	modalView := slack.ModalViewRequest{
 		Type:            slack.VTModal,
-		Title:           slack.NewTextBlockObject(slack.PlainTextType, "補充說明", false, false),
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, title, false, false),
 		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "送出", false, false),
-		Close:           slack.NewTextBlockObject(slack.PlainTextType, "跳過", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "取消", false, false),
 		Blocks:          slack.Blocks{BlockSet: []slack.Block{inputBlock}},
-		PrivateMetadata: selectorMsgTS,
+		PrivateMetadata: metadata,
 	}
-
 	_, err := c.api.OpenView(triggerID, modalView)
 	if err != nil {
-		return fmt.Errorf("open modal: %w", err)
+		return fmt.Errorf("open text input modal: %w", err)
 	}
 	return nil
+}
+
+// OpenDescriptionModal opens the description modal by delegating to
+// OpenTextInputModal. The optional-empty flavour from the pre-Phase-6
+// implementation is intentionally dropped (spec §modal-generalisation).
+func (c *Client) OpenDescriptionModal(triggerID, selectorMsgTS string) error {
+	return c.OpenTextInputModal(triggerID, "補充說明", "補充說明", "description_input", selectorMsgTS)
 }
 
 // PostMessageWithButton sends a message with a single action button in the thread.
