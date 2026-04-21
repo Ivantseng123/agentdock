@@ -1,7 +1,7 @@
 # Workflow Types — Design
 
 **Date:** 2026-04-20
-**Status:** Revised after grill-me review (2026-04-21)
+**Status:** Revised after grill-me review (2026-04-21); PR Review details re-aligned with `2026-04-21-github-pr-review-skill-design.md` (2026-04-21)
 
 ## Problem
 
@@ -35,12 +35,12 @@ The current architecture cannot accommodate either without forking the pipeline,
 - Splitting Slack manifest / event subscription. Trigger is still `app_mention`; bot parses the verb itself.
 - Per-channel default workflow (e.g. "this channel is always Q&A"). Out of scope for v1; revisit if needed.
 - Agent-side intent classification (option C from brainstorming, rejected). All workflow selection is explicit (verb in mention) or interactive (D-selector).
-- A `Job.WorkflowMeta` generic key/value store rich enough to model arbitrary workflows. v1 uses a small `Job.WorkflowArgs map[string]string` for the few keys we need (`pr_url`, `pr_number`, `pr_base_ref`).
+- A `Job.WorkflowMeta` generic key/value store rich enough to model arbitrary workflows. v1 uses a small `Job.WorkflowArgs map[string]string` for the few keys we need (`pr_url`, `pr_number`).
 - Per-workflow skill manifest in `Job.Skills`. v1 ships the full skill set with every job; agent decides what to load based on prompt. Exception: Ask explicitly skips skill mount to reduce the empty-dir surface area (see §Worker side changes).
 - Smaller / cheaper LLM for Ask. Same agent CLI, same model selection. Optimisation deferred.
 - Migration tool for in-flight production jobs. Pre-launch; no in-flight production jobs to migrate.
 - Enterprise GitHub support for PR Review. v1 only accepts `github.com` URLs; enterprise hosts revisit in v2 via `pr_review.allowed_hosts` config.
-- A `gh` CLI dependency inside the worker container. The `github-pr-review` skill calls the REST API directly via curl + the bot's `GH_TOKEN`, which already flows to the worker through `EncryptedSecrets`.
+- A new external tool dependency for PR Review beyond the `agentdock` binary itself. The `github-pr-review` skill's helper logic ships as an `agentdock pr-review-helper` subcommand, which is necessarily present on any worker (Docker image or colleague's laptop). No `gh`, `jq`, curl-JSON assembly, or scripting-language runtime required. See `2026-04-21-github-pr-review-skill-design.md`.
 - Per-phase retry for PR Review. v1 rejects retry universally once the job has been dispatched — even for pre-agent failures — to keep the failure path simple. Users re-trigger manually with `@bot review <URL>`. A `JobResult.FailurePhase` field is future work (see §Open questions).
 - Automatic recovery if GitHub API is unreachable during URL validation. App refuses the trigger ("GitHub 不可達") and the user re-mentions later.
 
@@ -196,7 +196,7 @@ type Workflow interface {
 - **URL acceptance scope**:
   - **Host**: only `github.com` (enterprise hosts deferred to v2 via `pr_review.allowed_hosts`).
   - **PR state**: closed, merged, and draft PRs all accepted (review of historical PRs is a legitimate use case; agent skill handles "cannot approve a merged PR" edge cases).
-  - **Fork / cross-repo PRs**: accepted. The worker clones `head.repo.full_name @ head.ref` (which may be a fork), and `WorkflowArgs` carries `pr_base_ref` so the skill can compute diff against the base.
+  - **Fork / cross-repo PRs**: accepted. The worker clones `head.repo.full_name @ head.ref` (which may be a fork). Base ref is not propagated in `WorkflowArgs` — the `agentdock pr-review-helper` subcommand fetches PR metadata (including base ref) directly via `GET /pulls/:n/files` when needed.
 - **A-path** (URL in mention):
   1. Validate URL — regex `https://github.com/{owner}/{repo}/pull/{number}` and GitHub API `GET /repos/{owner}/{repo}/pulls/{number}` using the bot's `GH_TOKEN`.
   2. On 404 → `:x: 找不到 PR`. On 403 → `:x: 沒權限存取 PR`. On format failure → `:x: URL 格式錯誤`. On connection error → `:x: GitHub 不可達，請稍後重試`.
@@ -212,22 +212,41 @@ type Workflow interface {
   - `Repo = head.repo.full_name` (may be a fork; not necessarily the base repo)
   - `Branch = head.ref`
   - `CloneURL` derived from `Repo`
-  - `PromptContext.Goal` — from `prompt.pr_review.goal` (config) or hardcoded default: "Review the PR at `<URL>`. Use the `github-pr-review` skill to post line-level comments and a summary comment on the PR via the GitHub REST API with `$GITHUB_TOKEN`. Output `===REVIEW_RESULT===` followed by JSON `{\"summary\": \"...\", \"comments_posted\": <int>, \"verdict\": \"approve|comment|request_changes\"}`."
+  - `PromptContext.Goal` — from `prompt.pr_review.goal` (config) or hardcoded default: "Review the PR at `<URL>`. Use the `github-pr-review` skill to analyze the diff and post line-level comments and a summary review back to the PR. Output `===REVIEW_RESULT===` followed by JSON per the skill's contract (status enum POSTED | SKIPPED | ERROR; see `2026-04-21-github-pr-review-skill-design.md` §Result marker contract)."
   - `Skills` includes whatever the app provides (PR Review does not deliberately strip skills — clone path, known-safe).
-  - `WorkflowArgs = { "pr_url": "<URL>", "pr_number": "<N>", "pr_base_ref": "<base-ref>" }` — used by `HandleResult` to format the Slack message and by the skill to compute diff. Not surfaced directly into the agent prompt (the URL is already in `Goal`).
+  - `WorkflowArgs = { "pr_url": "<URL>", "pr_number": "<N>" }` — `pr_url` used by `HandleResult` to format the Slack result message; `pr_number` for `owner/repo#N` display. Head SHA is **not** captured here — the `agentdock pr-review-helper` on the worker re-resolves it via `git rev-parse HEAD` at post time so the review is tied to the exact commit the agent read. Base ref is fetched by the helper from `GET /pulls/:n/files` if needed. Not surfaced directly into the agent prompt (the URL is already in `Goal`).
 - **Result marker**: `===REVIEW_RESULT===`
-- **Result JSON**:
+- **Result JSON (three-state, per `2026-04-21-github-pr-review-skill-design.md` §Result marker contract)**:
   ```json
+  // POSTED — helper successfully submitted the review to GitHub
   {
-    "summary": "<markdown>",
+    "status": "POSTED",
+    "summary": "<review body, same text posted to GitHub>",
     "comments_posted": 12,
-    "verdict": "approve|comment|request_changes"
+    "comments_skipped": 3,
+    "severity_summary": "clean|minor|major"
+  }
+
+  // SKIPPED — agent short-circuited (lockfile / vendored / generated)
+  {
+    "status": "SKIPPED",
+    "summary": "<explanation>",
+    "reason": "lockfile_only|vendored|generated|pure_docs|pure_config"
+  }
+
+  // ERROR — helper failed (auth / 422 / rate-limit); nothing posted
+  {
+    "status": "ERROR",
+    "error": "<one-liner reason>",
+    "summary": "<agent's intended review text; not posted>"
   }
   ```
-- **HandleResult**:
-  - On `completed`: parse, post `:white_check_mark: Review 完成 (verdict · N comments) on <PR URL>\n> <summary first 200 chars>`.
-  - On `cancelled`: post `:white_check_mark: 已取消。已貼的 N 個 comments 保留於 PR <URL>` (the agent may have posted partial comments before cancellation).
-  - On `failed`: post `:x: Review 失敗：<reason>`. **No retry button** — the agent may have already posted comments; retrying would double-write. User re-mentions `@bot review <URL>` manually to retry after confirming PR state.
+  The GitHub review `event` is always `COMMENT` (see skill spec §Goals — the bot does not auto-approve or auto-request-changes). `severity_summary` carries the bot's assessment informationally and drives the Slack message tone, but does **not** touch GitHub's merge-gating flow.
+- **HandleResult** (dispatch on `status`):
+  - `POSTED` → post `:white_check_mark: Review 完成 (severity: <severity_summary> · <comments_posted> comments, <comments_skipped> skipped) on <PR URL>\n> <summary first 200 chars>`.
+  - `SKIPPED` → post `:information_source: Review 跳過 (<reason>): <summary first 200 chars>`.
+  - `ERROR` → post `:x: Review 失敗：<error>`. **No retry button** — the agent may have already posted comments in a prior attempt; retrying would double-write. User re-mentions `@bot review <URL>` manually.
+  - On `cancelled` job: post `:white_check_mark: 已取消。已貼的 comments 保留於 PR <URL>` (the agent may have posted partial comments before cancellation).
   - Cancel button on status message (consistent).
 
 ### Wire schema changes
@@ -237,7 +256,7 @@ type Workflow interface {
 | Field | Change | Notes |
 |-------|--------|-------|
 | `TaskType string` | **Activated** (existing field, previously unused) | Required. Values: `issue`, `ask`, `pr_review`. **App-side dispatch key only** — the worker does not read or validate it. Adding a new workflow never requires a worker change; the worker acts on `CloneURL`, `Skills`, `PromptContext`, `WorkflowArgs` alone. The natural enforcement point is `registry.Get(taskType)` on the app side — an unknown / empty value short-circuits with "unknown task type" failure in `ResultListener`. |
-| `WorkflowArgs map[string]string` | **New** | Per-workflow KV. v1 keys: `pr_url`, `pr_number`, `pr_base_ref`. |
+| `WorkflowArgs map[string]string` | **New** | Per-workflow KV. v1 keys: `pr_url`, `pr_number`. Head SHA and base ref are re-resolved worker-side (git / GitHub API) — not threaded here. |
 | `Repo`, `Branch`, `CloneURL` | Semantic widening | All three may be empty for `ask` without repo; PR Review fills from URL+API (`Repo = head.repo.full_name`, `Branch = head.ref`). |
 | `Skills` | No change in shape | App still ships skill set; `AskWorkflow.BuildJob` deliberately sets this empty while the empty-dir skill-mount spike test (PR 4) is in flight. |
 
@@ -300,7 +319,7 @@ prompt:
       - "Use fenced code blocks for code references"
 
   pr_review:
-    goal: "Review the PR. Use github-pr-review skill via the GitHub REST API + $GITHUB_TOKEN. Output ===REVIEW_RESULT=== with summary + verdict."
+    goal: "Review the PR. Use github-pr-review skill to analyze the diff and post line-level comments plus a summary. Output ===REVIEW_RESULT=== with status (POSTED|SKIPPED|ERROR) + summary + severity_summary."
     output_rules:
       - "Focus on correctness, security, style"
       - "Summary ≤ 2000 chars"
@@ -422,7 +441,7 @@ Operator Grafana dashboards are rebuilt against the new schema. Pre-launch, so n
   Subject to the existing 1-minute `pendingTimeout` (`app/bot/workflow.go:22`); after expiry the user is asked to re-mention the bot. After a button is clicked, the selector message is updated to `:white_check_mark: 已選：<workflow>` (consistent with the existing repo-selector UX).
 - **Issue**: identical to today. Status text: `:mag: 分析 codebase 中...`.
 - **Ask**: 1 confirmation button (attach repo? yes/no) → optional repo selector → submit. Status text: `:thinking_face: 思考中...`. Result is the bot's answer, posted by editing the status message.
-- **PR Review**: URL via mention or auto-detection from thread; modal fallback. Validation → submit. Status text: `:eyes: Reviewing owner/repo#N...`. Result line includes verdict, comment count, PR URL, and a summary excerpt.
+- **PR Review**: URL via mention or auto-detection from thread; modal fallback. Validation → submit. Status text: `:eyes: Reviewing owner/repo#N...`. Result line includes severity summary (clean/minor/major), comment count (posted + skipped), PR URL, and a summary excerpt. Status is always `COMMENT` on GitHub — the bot never auto-approves or auto-requests-changes (see `2026-04-21-github-pr-review-skill-design.md` §Goals).
 - **Cancel button**: present on all three workflows' status messages for consistency. Cancellation UX text is workflow-specific (Ask is a silent "已取消"; PR Review explains that already-posted comments are preserved on the PR).
 - **Failure**:
   - Issue: retry button on first failure (current behaviour).
@@ -454,7 +473,7 @@ Eight PRs, each independently reviewable. The end state is the polymorphic desig
 3. **`JobResult` cleanup + `ResultListener` thinning + metrics overhaul** — Remove Issue-specific fields from `JobResult`. Make `ResultListener.handleResult` a dispatcher. `IssueWorkflow.HandleResult` owns retry button logic. Remove old `IssueCreatedTotal` / `IssueRejectedTotal` / `IssueRetryTotal`; introduce unified `WorkflowCompletionsTotal{workflow, status}` etc. Behaviour unchanged from a user's perspective.
 4. **Worker `WorkDirProvider` + empty-dir skill spike** — Add the abstraction and `EmptyDirProvider`. Wire `executeJob` through `selectProvider`. **Add the skill-mount spike test for every agent runner.** If any fail, implement the chosen fallback (`git init` or HOME-mount) before moving on. Existing repo-clone path verified by tests.
 5. **`AskWorkflow`** — New file `app/workflow/ask.go`, wizard, `BuildJob` (with `Skills = nil` by default), `HandleResult`, parser. Add Slack UX (the optional repo button). Add `prompt.ask.*` config. Tests cover both with-repo and without-repo paths, plus the 38K truncate fallback.
-6. **`PRReviewWorkflow` + feature flag** — New file `app/workflow/pr_review.go`. URL parser + validator (regex + GitHub API, including fork head detection). Wizard for both A-path and D-path, generalised `OpenTextInputModal`. `BuildJob` populates `Repo`, `Branch`, `WorkflowArgs` (`pr_url`, `pr_number`, `pr_base_ref`). Add `pr_review.enabled` config flag (default `false`) — dispatcher rejects triggers when disabled. Draft the `github-pr-review` skill contract (separate deliverable; this PR does not block on its completion).
+6. **`PRReviewWorkflow` + feature flag** — New file `app/workflow/pr_review.go`. URL parser + validator (regex + GitHub API, including fork head detection). Wizard for both A-path and D-path, generalised `OpenTextInputModal`. `BuildJob` populates `Repo`, `Branch`, `WorkflowArgs` (`pr_url`, `pr_number`). Parses three-state `===REVIEW_RESULT===` (POSTED / SKIPPED / ERROR). Add `pr_review.enabled` config flag (default `false`) — dispatcher rejects triggers when disabled. The `github-pr-review` skill and its `agentdock pr-review-helper` subcommand are a separate deliverable tracked by `2026-04-21-github-pr-review-skill-design.md`; this PR merely wires the workflow and trusts the skill to exist in the repo's baked-in set.
 7. **D-selector + dispatcher integration** — Wire the three buttons. Confirm `@bot foo/bar` still goes to Issue (legacy compat). Confirm verb routing, case-insensitivity, Slack-URL-strip, and unknown-verb warnings.
 8. **End-to-end smoke** — Run all three workflows against staging (PR Review only if its skill is ready; otherwise test with feature flag disabled). Tag and ship.
 
@@ -462,7 +481,7 @@ Eight PRs, each independently reviewable. The end state is the polymorphic desig
 
 - **Per-channel default workflow.** If usage shows that a channel almost always wants Q&A, channel config could default `task_type: ask` so users can skip the verb. Not in v1.
 - **Per-workflow skill manifest.** Currently every job ships every skill. Ask jobs in particular pay the full skill-payload wire cost despite often not needing any of them. Acceptable for v1 (skills are small text files); if the skill set grows large or Ask volume dominates, add a `Workflow.Skills() []string` filter so each job only ships what it needs.
-- **`github-pr-review` skill package.** Tracked as a separate deliverable (new npm package fetched by the skill loader in `app/skill/loader.go`). PR 6 ships the workflow behind the feature flag so the orchestration can be reviewed independently of skill progress. Once the skill is available, operators flip `pr_review.enabled: true` in `app.yaml`; no app-side code change needed unless the stub goal text needs upgrading.
+- **`github-pr-review` skill package.** Tracked as a separate deliverable: baked-in skill at `agents/skills/github-pr-review/` plus an `agentdock pr-review-helper` subcommand in `cmd/agentdock/` backed by `shared/prreview/`. Ships as one implementation plan derived from `2026-04-21-github-pr-review-skill-design.md`. PR 6 here ships the workflow behind the feature flag so orchestration can be reviewed independently of skill progress. Once the skill is merged, operators flip `pr_review.enabled: true` in `app.yaml`; no app-side code change needed.
 - **Line-level vs summary-only review.** v1 can ship with a stub goal that asks the agent for a summary-only review (safer while the skill is immature). Upgrade to line-level is a pure goal-text change once the skill is stable.
 - **`JobResult.FailurePhase`.** For a future iteration of PR Review retry, worker could populate a `FailurePhase` enum (`prepare` / `clone` / `running` / `cleanup`) so the app can safely retry pre-agent failures without risk of double-writing. Adds a wire-level field; revisit after observing real-world failure distribution.
 - **Enterprise GitHub.** `pr_review.allowed_hosts: [github.com, github.example.com]` unlocks enterprise URLs; not a priority until an enterprise deployment appears.
