@@ -193,6 +193,9 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 		}
 		w.logger.Warn("ask parse failed", "phase", "失敗", "output", truncated, "err", err)
 		metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "parse_failed").Inc()
+		// Intentionally keep r.Status="completed" — Ask is best-effort with no
+		// retry lane, so letting the listener clear dedup on this path is
+		// correct. IssueWorkflow flips to "failed" to gate its retry button.
 		return w.post(job, fmt.Sprintf(":x: 解析失敗：%v", err))
 	}
 
