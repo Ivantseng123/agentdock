@@ -3,9 +3,11 @@ package workflow
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 func TestAskWorkflow_Type(t *testing.T) {
@@ -163,5 +165,65 @@ func TestAskWorkflow_BuildJob_WithRepo_PopulatesCloneURL(t *testing.T) {
 	}
 	if job.CloneURL != "https://github.com/foo/bar.git" {
 		t.Errorf("CloneURL = %q", job.CloneURL)
+	}
+}
+
+func TestAskWorkflow_HandleResult_SuccessPostsAnswer(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "ask"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "===ASK_RESULT===\n{\"answer\":\"the answer is 42\"}",
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "42") {
+		t.Errorf("expected answer in posted text, got: %v", slack.Posted)
+	}
+}
+
+func TestAskWorkflow_HandleResult_Truncates38K(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+	long := strings.Repeat("a", 50000)
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "===ASK_RESULT===\n{\"answer\":\"" + long + "\"}",
+	}
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "ask"}
+	state := &queue.JobState{Job: job}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	last := slack.Posted[len(slack.Posted)-1]
+	if len(last) > 38000+len("\n…(已截斷)") {
+		t.Errorf("posted text exceeds truncate limit: %d chars", len(last))
+	}
+	if !strings.Contains(last, "已截斷") {
+		t.Error("truncate suffix missing")
+	}
+}
+
+func TestAskWorkflow_HandleResult_FailureNoRetryButton(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", TaskType: "ask"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "timeout"}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "思考失敗") {
+		t.Errorf("expected 思考失敗 text, got: %v", slack.Posted)
+	}
+}
+
+func TestAskWorkflow_HandleResult_NilStateReturnsError(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	result := &queue.JobResult{JobID: "j1", Status: "completed"}
+	if err := w.HandleResult(context.Background(), nil, result); err == nil {
+		t.Error("expected error on nil state")
 	}
 }

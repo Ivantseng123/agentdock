@@ -9,6 +9,7 @@ import (
 	"github.com/Ivantseng123/agentdock/app/config"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
@@ -166,4 +167,49 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 		Skills: nil,
 	}
 	return job, ":thinking_face: 思考中...", nil
+}
+
+const askMaxChars = 38000
+
+// HandleResult renders the agent output into the Slack thread. Failure paths
+// are posted without a retry button (Ask is best-effort). Parse failures and
+// answers are both final — no retry lane.
+func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r *queue.JobResult) error {
+	if state == nil || state.Job == nil {
+		return fmt.Errorf("HandleResult: state or state.Job is nil")
+	}
+	job := state.Job
+
+	if r.Status == "failed" {
+		text := fmt.Sprintf(":x: 思考失敗：%s", r.Error)
+		return w.post(job, text)
+	}
+
+	parsed, err := ParseAskOutput(r.RawOutput)
+	if err != nil {
+		truncated := r.RawOutput
+		if len(truncated) > 2000 {
+			truncated = truncated[:2000] + "…(truncated)"
+		}
+		w.logger.Warn("ask parse failed", "phase", "失敗", "output", truncated, "err", err)
+		metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "parse_failed").Inc()
+		return w.post(job, fmt.Sprintf(":x: 解析失敗：%v", err))
+	}
+
+	answer := parsed.Answer
+	if len(answer) > askMaxChars {
+		answer = answer[:askMaxChars] + "\n…(已截斷)"
+	}
+
+	metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "success").Inc()
+	return w.post(job, answer)
+}
+
+// post writes to the job's status message if set, else posts a new message
+// in the thread.
+func (w *AskWorkflow) post(job *queue.Job, text string) error {
+	if job.StatusMsgTS != "" {
+		return w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+	}
+	return w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
 }
