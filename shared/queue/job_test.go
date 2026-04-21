@@ -81,10 +81,6 @@ func TestPromptContext_JSONRoundTrip(t *testing.T) {
 // Issue-specific fields (Title, Body, Labels, Confidence, FilesFound,
 // Questions, Message). These are now owned by workflow-local types (e.g.
 // TriageResult) and must not appear on the wire type.
-// TestJobResult_NoIssueSpecificFields asserts that JobResult does NOT carry
-// Issue-specific fields (Title, Body, Labels, Confidence, FilesFound,
-// Questions, Message). These are now owned by workflow-local types (e.g.
-// TriageResult) and must not appear on the wire type.
 func TestJobResult_NoIssueSpecificFields(t *testing.T) {
 	r := JobResult{}
 	data, err := json.Marshal(r)

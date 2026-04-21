@@ -230,6 +230,41 @@ func TestIssueWorkflow_HandleResult_Failed_Retried_NoButton(t *testing.T) {
 	}
 }
 
+func TestIssueWorkflow_HandleResult_ErrorStatus_RoutesToFailure(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	result := &queue.JobResult{
+		JobID:  "j1",
+		Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"ERROR","message":"gh exploded"}`,
+	}
+	if err := w.HandleResult(context.Background(), job, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "agent error") {
+		t.Errorf("expected failure text containing \"agent error\", got: %v", slack.Posted)
+	}
+}
+
+func TestIssueWorkflow_HandleResult_ParseFailed_RoutesToFailure(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	result := &queue.JobResult{
+		JobID:     "j1",
+		Status:    "completed",
+		RawOutput: "totally not valid agent output",
+	}
+	if err := w.HandleResult(context.Background(), job, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "分析失敗") {
+		t.Errorf("expected failure text containing \"分析失敗\", got: %v", slack.Posted)
+	}
+}
+
 // ── test helpers ─────────────────────────────────────────────────────────────
 
 type issueOpt func(*config.Config)
