@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 )
 
 var errBoomGitHub = errors.New("github down")
@@ -58,7 +59,7 @@ func TestResultListener_CompletedCreatesIssue(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -104,7 +105,7 @@ func TestResultListener_IssueCreationFailureMarksJobFailed(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jcerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -132,7 +133,7 @@ func TestResultListener_FailedPostsError(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -168,7 +169,7 @@ func TestResultListener_LowConfidenceRejects(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -211,7 +212,7 @@ func TestResultListener_LowConfidenceIncludesMessage(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jmsg", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -247,7 +248,7 @@ func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", RetryCount: 0})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -294,7 +295,7 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", RetryCount: 1})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -347,7 +348,7 @@ func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jcan", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -386,7 +387,7 @@ func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(
 	store.Put(&queue.Job{ID: "jrace", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
 	store.UpdateStatus("jrace", queue.JobCancelled)
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -426,7 +427,7 @@ func TestResultListener_DedupDropsDuplicateResult(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -460,7 +461,7 @@ func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
 	})
 	store.UpdateStatus("jdouble", queue.JobCompleted)
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	gh := &mockIssueCreator{url: "https://github.com/o/r/issues/1"}
@@ -513,7 +514,7 @@ func TestResultListener_ParseCompletedCreatesIssue(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jparse", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -560,7 +561,7 @@ func TestResultListener_ParseRejectedRoutesToLowConfidence(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jrej", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -623,7 +624,7 @@ func TestResultListener_ParseErrorRoutesToFailure(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -684,7 +685,7 @@ func TestResultListener_ParseMalformedRoutesToFailure(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jbad", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -744,7 +745,7 @@ func TestResultListener_DiagnosticsPrefersWorkerNickname(t *testing.T) {
 		FilesRead:      1,
 	})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -799,7 +800,7 @@ func TestResultListener_FailureShowsNicknameAndWorkerID(t *testing.T) {
 		WorkerNickname: "小明",
 	})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
@@ -846,7 +847,7 @@ func TestResultListener_FailureWithoutNicknameShowsWorkerID(t *testing.T) {
 		WorkerID: "host/worker-3",
 	})
 
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}

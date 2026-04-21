@@ -115,13 +115,3 @@ In Redis mode, app owns all secrets and ships them encrypted to workers:
 4. Worker decrypts and injects the values as env vars on the agent subprocess.
 
 `github.token` is auto-merged into `secrets["GH_TOKEN"]`. `AGENTDOCK_SECRET_<NAME>` env vars are also slurped into `secrets`.
-
-## Inmem mode and worker.yaml
-
-With `queue.transport != redis`, the app also starts a local worker pool. Worker-scope settings (agents, providers, count, extra_rules) come from the file passed via `--worker-config`; absent, the app looks for `worker.yaml` as a sibling of app.yaml.
-
-```bash
-agentdock app -c ~/.config/agentdock/app.yaml --worker-config ~/.config/agentdock/worker.yaml
-```
-
-See [configuration-worker.en.md](configuration-worker.en.md) for the worker schema.

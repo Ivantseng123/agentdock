@@ -1,4 +1,4 @@
-package queue
+package queuetest
 
 import (
 	"context"
@@ -6,14 +6,16 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
-func TestInMemJobQueue_SubmitAndReceive(t *testing.T) {
-	bundle := NewInMemBundle(10, 3, NewMemJobStore())
+func TestJobQueue_SubmitAndReceive(t *testing.T) {
+	bundle := NewBundle(10, 3, queue.NewMemJobStore())
 	defer bundle.Close()
 	ctx := context.Background()
 	ch, _ := bundle.Queue.Receive(ctx)
-	bundle.Queue.Submit(ctx, &Job{ID: "j1", Priority: 50, ChannelID: "C1"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, ChannelID: "C1"})
 	select {
 	case job := <-ch:
 		if job.ID != "j1" {
@@ -24,12 +26,12 @@ func TestInMemJobQueue_SubmitAndReceive(t *testing.T) {
 	}
 }
 
-func TestInMemJobQueue_SeqAutoAssigned(t *testing.T) {
-	bundle := NewInMemBundle(10, 3, NewMemJobStore())
+func TestJobQueue_SeqAutoAssigned(t *testing.T) {
+	bundle := NewBundle(10, 3, queue.NewMemJobStore())
 	defer bundle.Close()
 	ctx := context.Background()
-	j1 := &Job{ID: "j1", Priority: 50}
-	j2 := &Job{ID: "j2", Priority: 50}
+	j1 := &queue.Job{ID: "j1", Priority: 50}
+	j2 := &queue.Job{ID: "j2", Priority: 50}
 	bundle.Queue.Submit(ctx, j1)
 	bundle.Queue.Submit(ctx, j2)
 	if j1.Seq == 0 || j2.Seq == 0 {
@@ -40,12 +42,12 @@ func TestInMemJobQueue_SeqAutoAssigned(t *testing.T) {
 	}
 }
 
-func TestInMemResultBus_PublishAndSubscribe(t *testing.T) {
-	bundle := NewInMemBundle(10, 3, NewMemJobStore())
+func TestResultBus_PublishAndSubscribe(t *testing.T) {
+	bundle := NewBundle(10, 3, queue.NewMemJobStore())
 	defer bundle.Close()
 	ctx := context.Background()
 	ch, _ := bundle.Results.Subscribe(ctx)
-	bundle.Results.Publish(ctx, &JobResult{JobID: "j1", Status: "completed", Title: "test"})
+	bundle.Results.Publish(ctx, &queue.JobResult{JobID: "j1", Status: "completed", Title: "test"})
 	select {
 	case r := <-ch:
 		if r.JobID != "j1" {
@@ -56,8 +58,8 @@ func TestInMemResultBus_PublishAndSubscribe(t *testing.T) {
 	}
 }
 
-func TestInMemJobQueue_ConcurrentSubmitReceive(t *testing.T) {
-	bundle := NewInMemBundle(100, 3, NewMemJobStore())
+func TestJobQueue_ConcurrentSubmitReceive(t *testing.T) {
+	bundle := NewBundle(100, 3, queue.NewMemJobStore())
 	defer bundle.Close()
 	ctx := context.Background()
 	ch, _ := bundle.Queue.Receive(ctx)
@@ -68,7 +70,7 @@ func TestInMemJobQueue_ConcurrentSubmitReceive(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(id int) {
 			defer wg.Done()
-			bundle.Queue.Submit(ctx, &Job{ID: fmt.Sprintf("j%d", id), Priority: 50})
+			bundle.Queue.Submit(ctx, &queue.Job{ID: fmt.Sprintf("j%d", id), Priority: 50})
 		}(i)
 	}
 

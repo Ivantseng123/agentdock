@@ -1,21 +1,24 @@
-package queue
+package queue_test
 
 import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 )
 
 func TestCoordinator_RoutesToRegisteredQueue(t *testing.T) {
-	store := NewMemJobStore()
-	bundleA := NewInMemBundle(10, 1, store)
+	store := queue.NewMemJobStore()
+	bundleA := queuetest.NewBundle(10, 1, store)
 	defer bundleA.Close()
-	bundleB := NewInMemBundle(10, 1, store)
+	bundleB := queuetest.NewBundle(10, 1, store)
 	defer bundleB.Close()
-	fallback := NewInMemBundle(10, 1, store)
+	fallback := queuetest.NewBundle(10, 1, store)
 	defer fallback.Close()
 
-	coord := NewCoordinator(fallback.Queue)
+	coord := queue.NewCoordinator(fallback.Queue)
 	coord.RegisterQueue("triage", bundleA.Queue)
 	coord.RegisterQueue("review", bundleB.Queue)
 
@@ -24,8 +27,8 @@ func TestCoordinator_RoutesToRegisteredQueue(t *testing.T) {
 	chA, _ := bundleA.Queue.Receive(ctx)
 	chB, _ := bundleB.Queue.Receive(ctx)
 
-	coord.Submit(ctx, &Job{ID: "t1", TaskType: "triage", Priority: 50})
-	coord.Submit(ctx, &Job{ID: "r1", TaskType: "review", Priority: 50})
+	coord.Submit(ctx, &queue.Job{ID: "t1", TaskType: "triage", Priority: 50})
+	coord.Submit(ctx, &queue.Job{ID: "r1", TaskType: "review", Priority: 50})
 
 	select {
 	case job := <-chA:
@@ -47,19 +50,19 @@ func TestCoordinator_RoutesToRegisteredQueue(t *testing.T) {
 }
 
 func TestCoordinator_FallbackForEmptyTaskType(t *testing.T) {
-	store := NewMemJobStore()
-	bundleTriage := NewInMemBundle(10, 1, store)
+	store := queue.NewMemJobStore()
+	bundleTriage := queuetest.NewBundle(10, 1, store)
 	defer bundleTriage.Close()
-	fallback := NewInMemBundle(10, 1, store)
+	fallback := queuetest.NewBundle(10, 1, store)
 	defer fallback.Close()
 
-	coord := NewCoordinator(fallback.Queue)
+	coord := queue.NewCoordinator(fallback.Queue)
 	coord.RegisterQueue("triage", bundleTriage.Queue)
 
 	ctx := context.Background()
 	chFallback, _ := fallback.Queue.Receive(ctx)
 
-	coord.Submit(ctx, &Job{ID: "f1", TaskType: "", Priority: 50})
+	coord.Submit(ctx, &queue.Job{ID: "f1", TaskType: "", Priority: 50})
 
 	select {
 	case job := <-chFallback:
@@ -72,22 +75,22 @@ func TestCoordinator_FallbackForEmptyTaskType(t *testing.T) {
 }
 
 func TestCoordinator_QueueDepthSumsAll(t *testing.T) {
-	store := NewMemJobStore()
-	bundleA := NewInMemBundle(10, 1, store)
+	store := queue.NewMemJobStore()
+	bundleA := queuetest.NewBundle(10, 1, store)
 	defer bundleA.Close()
-	bundleB := NewInMemBundle(10, 1, store)
+	bundleB := queuetest.NewBundle(10, 1, store)
 	defer bundleB.Close()
-	fallback := NewInMemBundle(10, 1, store)
+	fallback := queuetest.NewBundle(10, 1, store)
 	defer fallback.Close()
 
-	coord := NewCoordinator(fallback.Queue)
+	coord := queue.NewCoordinator(fallback.Queue)
 	coord.RegisterQueue("triage", bundleA.Queue)
 	coord.RegisterQueue("review", bundleB.Queue)
 
 	ctx := context.Background()
 
-	coord.Submit(ctx, &Job{ID: "t1", TaskType: "triage", Priority: 50})
-	coord.Submit(ctx, &Job{ID: "r1", TaskType: "review", Priority: 50})
+	coord.Submit(ctx, &queue.Job{ID: "t1", TaskType: "triage", Priority: 50})
+	coord.Submit(ctx, &queue.Job{ID: "r1", TaskType: "review", Priority: 50})
 
 	// Give dispatch loops a moment to move jobs, but QueueDepth counts
 	// items still in the priority queue, so check quickly.
@@ -98,19 +101,19 @@ func TestCoordinator_QueueDepthSumsAll(t *testing.T) {
 	// Use capacity=2 bundles without consuming to ensure items stay in pq or channel.
 
 	// Reset with fresh bundles where we don't consume.
-	bundleC := NewInMemBundle(10, 1, store)
+	bundleC := queuetest.NewBundle(10, 1, store)
 	defer bundleC.Close()
-	bundleD := NewInMemBundle(10, 1, store)
+	bundleD := queuetest.NewBundle(10, 1, store)
 	defer bundleD.Close()
-	fallback2 := NewInMemBundle(10, 1, store)
+	fallback2 := queuetest.NewBundle(10, 1, store)
 	defer fallback2.Close()
 
-	coord2 := NewCoordinator(fallback2.Queue)
+	coord2 := queue.NewCoordinator(fallback2.Queue)
 	coord2.RegisterQueue("triage", bundleC.Queue)
 	coord2.RegisterQueue("review", bundleD.Queue)
 
-	coord2.Submit(ctx, &Job{ID: "t2", TaskType: "triage", Priority: 50})
-	coord2.Submit(ctx, &Job{ID: "r2", TaskType: "review", Priority: 50})
+	coord2.Submit(ctx, &queue.Job{ID: "t2", TaskType: "triage", Priority: 50})
+	coord2.Submit(ctx, &queue.Job{ID: "r2", TaskType: "review", Priority: 50})
 
 	// Allow time for dispatch to move items
 	time.Sleep(50 * time.Millisecond)
@@ -125,17 +128,17 @@ func TestCoordinator_QueueDepthSumsAll(t *testing.T) {
 	}
 
 	// Test dedup: register the same queue for two task types.
-	bundleE := NewInMemBundle(10, 1, store)
+	bundleE := queuetest.NewBundle(10, 1, store)
 	defer bundleE.Close()
-	fallback3 := NewInMemBundle(10, 1, store)
+	fallback3 := queuetest.NewBundle(10, 1, store)
 	defer fallback3.Close()
 
-	coord3 := NewCoordinator(fallback3.Queue)
+	coord3 := queue.NewCoordinator(fallback3.Queue)
 	coord3.RegisterQueue("triage", bundleE.Queue)
 	coord3.RegisterQueue("review", bundleE.Queue) // same queue!
 
-	coord3.Submit(ctx, &Job{ID: "t3", TaskType: "triage", Priority: 50})
-	coord3.Submit(ctx, &Job{ID: "r3", TaskType: "review", Priority: 50})
+	coord3.Submit(ctx, &queue.Job{ID: "t3", TaskType: "triage", Priority: 50})
+	coord3.Submit(ctx, &queue.Job{ID: "r3", TaskType: "review", Priority: 50})
 
 	time.Sleep(50 * time.Millisecond)
 

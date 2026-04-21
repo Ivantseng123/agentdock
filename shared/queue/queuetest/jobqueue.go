@@ -1,33 +1,35 @@
-package queue
+package queuetest
 
 import (
 	"container/heap"
 	"context"
 	"sync"
 	"sync/atomic"
+
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
-type InMemJobQueue struct {
+type JobQueue struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
 	pq         priorityQueue
 	capacity   int
 	seqCounter atomic.Uint64
-	store      JobStore
-	jobCh      chan *Job
+	store      queue.JobStore
+	jobCh      chan *queue.Job
 	closed     chan struct{}
 
 	workerMu sync.Mutex
-	workers  map[string]WorkerInfo
+	workers  map[string]queue.WorkerInfo
 }
 
-func NewInMemJobQueue(capacity int, store JobStore) *InMemJobQueue {
-	q := &InMemJobQueue{
+func NewJobQueue(capacity int, store queue.JobStore) *JobQueue {
+	q := &JobQueue{
 		capacity: capacity,
 		store:    store,
-		jobCh:    make(chan *Job, capacity),
+		jobCh:    make(chan *queue.Job, capacity),
 		closed:   make(chan struct{}),
-		workers:  make(map[string]WorkerInfo),
+		workers:  make(map[string]queue.WorkerInfo),
 	}
 	q.cond = sync.NewCond(&q.mu)
 	heap.Init(&q.pq)
@@ -35,7 +37,7 @@ func NewInMemJobQueue(capacity int, store JobStore) *InMemJobQueue {
 	return q
 }
 
-func (q *InMemJobQueue) dispatchLoop() {
+func (q *JobQueue) dispatchLoop() {
 	for {
 		q.mu.Lock()
 		for q.pq.Len() == 0 {
@@ -58,11 +60,11 @@ func (q *InMemJobQueue) dispatchLoop() {
 	}
 }
 
-func (q *InMemJobQueue) Submit(ctx context.Context, job *Job) error {
+func (q *JobQueue) Submit(ctx context.Context, job *queue.Job) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.pq.Len() >= q.capacity {
-		return ErrQueueFull
+		return queue.ErrQueueFull
 	}
 	job.Seq = q.seqCounter.Add(1)
 	heap.Push(&q.pq, &queueEntry{job: job})
@@ -71,53 +73,53 @@ func (q *InMemJobQueue) Submit(ctx context.Context, job *Job) error {
 	return nil
 }
 
-func (q *InMemJobQueue) QueuePosition(jobID string) (int, error) {
+func (q *JobQueue) QueuePosition(jobID string) (int, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	pos := q.pq.position(jobID)
 	return pos, nil
 }
 
-func (q *InMemJobQueue) QueueDepth() int {
+func (q *JobQueue) QueueDepth() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.pq.Len()
 }
 
-func (q *InMemJobQueue) Receive(ctx context.Context) (<-chan *Job, error) {
+func (q *JobQueue) Receive(ctx context.Context) (<-chan *queue.Job, error) {
 	return q.jobCh, nil
 }
 
-func (q *InMemJobQueue) Ack(ctx context.Context, jobID string) error {
-	q.store.UpdateStatus(jobID, JobPreparing)
+func (q *JobQueue) Ack(ctx context.Context, jobID string) error {
+	q.store.UpdateStatus(jobID, queue.JobPreparing)
 	return nil
 }
 
-func (q *InMemJobQueue) Register(ctx context.Context, info WorkerInfo) error {
+func (q *JobQueue) Register(ctx context.Context, info queue.WorkerInfo) error {
 	q.workerMu.Lock()
 	defer q.workerMu.Unlock()
 	q.workers[info.WorkerID] = info
 	return nil
 }
 
-func (q *InMemJobQueue) Unregister(ctx context.Context, workerID string) error {
+func (q *JobQueue) Unregister(ctx context.Context, workerID string) error {
 	q.workerMu.Lock()
 	defer q.workerMu.Unlock()
 	delete(q.workers, workerID)
 	return nil
 }
 
-func (q *InMemJobQueue) ListWorkers(ctx context.Context) ([]WorkerInfo, error) {
+func (q *JobQueue) ListWorkers(ctx context.Context) ([]queue.WorkerInfo, error) {
 	q.workerMu.Lock()
 	defer q.workerMu.Unlock()
-	result := make([]WorkerInfo, 0, len(q.workers))
+	result := make([]queue.WorkerInfo, 0, len(q.workers))
 	for _, w := range q.workers {
 		result = append(result, w)
 	}
 	return result, nil
 }
 
-func (q *InMemJobQueue) Close() error {
+func (q *JobQueue) Close() error {
 	select {
 	case <-q.closed:
 	default:

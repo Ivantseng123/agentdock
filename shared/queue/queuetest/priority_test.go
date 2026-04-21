@@ -1,17 +1,19 @@
-package queue
+package queuetest
 
 import (
 	"container/heap"
 	"testing"
+
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 func TestPriorityQueue_HigherPriorityFirst(t *testing.T) {
 	pq := &priorityQueue{}
 	heap.Init(pq)
 
-	heap.Push(pq, &queueEntry{job: &Job{ID: "low", Priority: 10, Seq: 1}})
-	heap.Push(pq, &queueEntry{job: &Job{ID: "high", Priority: 100, Seq: 2}})
-	heap.Push(pq, &queueEntry{job: &Job{ID: "mid", Priority: 50, Seq: 3}})
+	heap.Push(pq, &queueEntry{job: &queue.Job{ID: "low", Priority: 10, Seq: 1}})
+	heap.Push(pq, &queueEntry{job: &queue.Job{ID: "high", Priority: 100, Seq: 2}})
+	heap.Push(pq, &queueEntry{job: &queue.Job{ID: "mid", Priority: 50, Seq: 3}})
 
 	got := heap.Pop(pq).(*queueEntry).job.ID
 	if got != "high" {
@@ -31,9 +33,9 @@ func TestPriorityQueue_FIFOWithinSamePriority(t *testing.T) {
 	pq := &priorityQueue{}
 	heap.Init(pq)
 
-	heap.Push(pq, &queueEntry{job: &Job{ID: "first", Priority: 50, Seq: 1}})
-	heap.Push(pq, &queueEntry{job: &Job{ID: "second", Priority: 50, Seq: 2}})
-	heap.Push(pq, &queueEntry{job: &Job{ID: "third", Priority: 50, Seq: 3}})
+	heap.Push(pq, &queueEntry{job: &queue.Job{ID: "first", Priority: 50, Seq: 1}})
+	heap.Push(pq, &queueEntry{job: &queue.Job{ID: "second", Priority: 50, Seq: 2}})
+	heap.Push(pq, &queueEntry{job: &queue.Job{ID: "third", Priority: 50, Seq: 3}})
 
 	got := heap.Pop(pq).(*queueEntry).job.ID
 	if got != "first" {
@@ -53,7 +55,7 @@ func TestPriorityQueue_LenAndEmpty(t *testing.T) {
 		t.Errorf("empty queue Len() = %d", pq.Len())
 	}
 
-	heap.Push(pq, &queueEntry{job: &Job{ID: "a", Priority: 50, Seq: 1}})
+	heap.Push(pq, &queueEntry{job: &queue.Job{ID: "a", Priority: 50, Seq: 1}})
 	if pq.Len() != 1 {
 		t.Errorf("after push Len() = %d, want 1", pq.Len())
 	}

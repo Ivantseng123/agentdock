@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -13,7 +14,7 @@ import (
 func TestRegister_NoPanic(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 1, store)
+	bundle := queuetest.NewBundle(10, 1, store)
 	defer bundle.Close()
 	Register(reg, bundle.Queue, store)
 
@@ -30,12 +31,12 @@ func TestRegister_NoPanic(t *testing.T) {
 func TestRegister_GaugeFuncWorks(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 1, store)
+	bundle := queuetest.NewBundle(10, 1, store)
 	defer bundle.Close()
 	Register(reg, bundle.Queue, store)
 
 	// Submit a job so queue_depth has something to report.
-	// Note: the InMemJobQueue dispatch loop moves jobs from the priority
+	// Note: the queuetest JobQueue dispatch loop moves jobs from the priority
 	// queue to the buffered channel very quickly, so QueueDepth() (which
 	// reads the priority queue length) may already be 0 by the time we
 	// gather. Instead we verify the gauge metric exists and is gatherable.
@@ -73,7 +74,7 @@ func TestRegister_GaugeFuncWorks(t *testing.T) {
 func TestRegister_AllMetricFamilies(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 1, store)
+	bundle := queuetest.NewBundle(10, 1, store)
 	defer bundle.Close()
 	Register(reg, bundle.Queue, store)
 
