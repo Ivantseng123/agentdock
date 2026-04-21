@@ -34,7 +34,7 @@ agents:
     skill_dir: .agents/skills         # Codex discovers skills in .agents/skills, not .codex/skills
   opencode:
     command: opencode
-    args: ["run", "{prompt}"]
+    args: ["run", "--pure", "{prompt}"]  # --pure skips external plugins (e.g. oh-my-openagent) that spawn async background agents
     timeout: 15m
     skill_dir: .opencode/skills
 
