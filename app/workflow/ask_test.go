@@ -81,3 +81,35 @@ func TestAskWorkflow_Selection_RepoChoiceGoesToSubmit(t *testing.T) {
 		t.Errorf("SelectedRepo = %q", st.SelectedRepo)
 	}
 }
+
+// TestAskWorkflow_Selection_AttachWithNoReposUsesExternalSearch covers the
+// fallback path that fires when ChannelDefaults.Repos and Channels[ID] are
+// both empty. The dispatcher routes NextStepPostExternalSelector to a
+// searchable Slack modal rather than a button selector. Regression guard
+// for the Task 5.2 plan-deviation (plan's NextStepPostSelector+empty-actions
+// approach was broken — see commit 37bc67b).
+func TestAskWorkflow_Selection_AttachWithNoReposUsesExternalSearch(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	// ChannelDefaults.Repos left empty on purpose — no Channels override either.
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "attach")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepPostExternalSelector {
+		t.Errorf("expected NextStepPostExternalSelector, got %v", step.Kind)
+	}
+	if step.SelectorActionID != "ask_repo" {
+		t.Errorf("SelectorActionID = %q, want ask_repo", step.SelectorActionID)
+	}
+	if step.SelectorPlaceholder == "" {
+		t.Error("SelectorPlaceholder should be set for external search")
+	}
+	if p.Phase != "ask_repo_select" {
+		t.Errorf("Phase = %q, want ask_repo_select", p.Phase)
+	}
+	st := p.State.(*askState)
+	if !st.AttachRepo {
+		t.Error("AttachRepo should be true after attach value")
+	}
+}
