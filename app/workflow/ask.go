@@ -138,7 +138,7 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 
 	cloneURL := ""
 	if st.AttachRepo && st.SelectedRepo != "" {
-		cloneURL = fmt.Sprintf("https://github.com/%s.git", st.SelectedRepo)
+		cloneURL = cleanCloneURL(st.SelectedRepo)
 	}
 
 	job := &queue.Job{
