@@ -133,3 +133,66 @@ func TestHTTPCallRetry_403RateLimitRetries(t *testing.T) {
 		t.Errorf("want 2 hits, got %d", hits)
 	}
 }
+
+func TestParseDiffMap_AddedAndContextLines(t *testing.T) {
+	files := []PRFile{
+		{
+			Filename: "foo.go",
+			Patch: "@@ -5,3 +5,4 @@\n" +
+				" context\n" +
+				"-old\n" +
+				"+added1\n" +
+				"+added2\n",
+		},
+	}
+	m := parseDiffMap(files)
+	valid := m["foo.go"]
+
+	for _, ln := range []int{5, 6, 7} {
+		if !valid.has(ln, string(SideRight)) {
+			t.Errorf("want (line=%d, RIGHT) to be valid", ln)
+		}
+	}
+	if !valid.has(6, string(SideLeft)) {
+		t.Errorf("want (line=6, LEFT) valid for removed line")
+	}
+}
+
+func TestParseDiffMap_MultipleHunks(t *testing.T) {
+	files := []PRFile{
+		{
+			Filename: "bar.py",
+			Patch: "@@ -1,2 +1,3 @@\n" +
+				" a\n" +
+				"+b\n" +
+				" c\n" +
+				"@@ -10,1 +11,2 @@\n" +
+				"+z\n" +
+				" y\n",
+		},
+	}
+	m := parseDiffMap(files)
+	valid := m["bar.py"]
+
+	for _, ln := range []int{1, 2, 3} {
+		if !valid.has(ln, string(SideRight)) {
+			t.Errorf("hunk1: want (line=%d, RIGHT) valid", ln)
+		}
+	}
+	for _, ln := range []int{11, 12} {
+		if !valid.has(ln, string(SideRight)) {
+			t.Errorf("hunk2: want (line=%d, RIGHT) valid", ln)
+		}
+	}
+}
+
+func TestParseDiffMap_EmptyPatch(t *testing.T) {
+	files := []PRFile{{Filename: "binary.png", Patch: ""}}
+	m := parseDiffMap(files)
+	if v, ok := m["binary.png"]; !ok || v == nil {
+		t.Fatalf("want empty valid-set entry for %q, got %+v", "binary.png", m)
+	}
+	if len(m["binary.png"].set) != 0 {
+		t.Errorf("want 0 valid lines for empty patch, got %d", len(m["binary.png"].set))
+	}
+}

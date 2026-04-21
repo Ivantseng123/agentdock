@@ -204,3 +204,57 @@ func listDiffFiles(ctx context.Context, apiBase, prURL, token string, maxWallTim
 	}
 	return all, nil
 }
+
+// validLines holds the (line, side) tuples that may host a comment on one file.
+type validLines struct {
+	set map[string]bool
+}
+
+func newValidLines() *validLines { return &validLines{set: map[string]bool{}} }
+
+func (v *validLines) add(line int, side string) {
+	v.set[fmt.Sprintf("%d:%s", line, side)] = true
+}
+
+func (v *validLines) has(line int, side string) bool {
+	return v.set[fmt.Sprintf("%d:%s", line, side)]
+}
+
+func parseDiffMap(files []PRFile) map[string]*validLines {
+	out := map[string]*validLines{}
+	for _, f := range files {
+		out[f.Filename] = parsePatch(f.Patch)
+	}
+	return out
+}
+
+var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+
+func parsePatch(patch string) *validLines {
+	v := newValidLines()
+	lines := strings.Split(patch, "\n")
+	var leftLine, rightLine int
+	for _, ln := range lines {
+		if m := hunkHeaderPattern.FindStringSubmatch(ln); m != nil {
+			leftLine, _ = strconv.Atoi(m[1])
+			rightLine, _ = strconv.Atoi(m[2])
+			continue
+		}
+		if ln == "" {
+			continue
+		}
+		switch ln[0] {
+		case '+':
+			v.add(rightLine, string(SideRight))
+			rightLine++
+		case '-':
+			v.add(leftLine, string(SideLeft))
+			leftLine++
+		case ' ':
+			v.add(rightLine, string(SideRight))
+			leftLine++
+			rightLine++
+		}
+	}
+	return v
+}
