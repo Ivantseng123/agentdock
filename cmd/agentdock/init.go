@@ -198,13 +198,13 @@ func promptAppInit(cfg *appconfig.Config) error {
 			prompt.Fail("Slack bot token is required")
 			continue
 		}
-		userID, err := connectivity.CheckSlackToken(tok)
+		identity, err := connectivity.CheckSlackToken(tok)
 		if err != nil {
 			prompt.Fail("%v (attempt %d/3)", err, attempt)
 			continue
 		}
 		cfg.Slack.BotToken = tok
-		prompt.OK("Slack bot token valid (user_id: %s)", userID)
+		prompt.OK("Slack bot token valid (user_id: %s)", identity.UserID)
 		break
 	}
 

@@ -9,14 +9,21 @@ import (
 	"time"
 )
 
+// SlackIdentity holds the bot's identifiers returned by auth.test.
+type SlackIdentity struct {
+	UserID string
+	BotID  string
+}
+
 // CheckSlackToken verifies the bot token via Slack auth.test API.
-// Returns the bot's user_id on success.
-func CheckSlackToken(token string) (string, error) {
+// Returns the authenticated identity (user_id + bot_id) on success.
+func CheckSlackToken(token string) (SlackIdentity, error) {
+	var zero SlackIdentity
 	if token == "" {
-		return "", errors.New("token is empty")
+		return zero, errors.New("token is empty")
 	}
 	if !strings.HasPrefix(token, "xoxb-") {
-		return "", errors.New("Slack bot token must start with xoxb-")
+		return zero, errors.New("Slack bot token must start with xoxb-")
 	}
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
@@ -25,20 +32,21 @@ func CheckSlackToken(token string) (string, error) {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return zero, err
 	}
 	defer resp.Body.Close()
 
 	var body struct {
 		OK     bool   `json:"ok"`
 		UserID string `json:"user_id"`
+		BotID  string `json:"bot_id"`
 		Error  string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
+		return zero, err
 	}
 	if !body.OK {
-		return "", fmt.Errorf("auth.test failed: %s", body.Error)
+		return zero, fmt.Errorf("auth.test failed: %s", body.Error)
 	}
-	return body.UserID, nil
+	return SlackIdentity{UserID: body.UserID, BotID: body.BotID}, nil
 }

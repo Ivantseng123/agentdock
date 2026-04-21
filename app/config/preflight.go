@@ -57,12 +57,14 @@ func needsInput(cfg *Config) bool {
 
 func preflightSlackBot(cfg *Config, interactive bool, prompted map[string]any) error {
 	if cfg.Slack.BotToken != "" {
-		userID, err := connectivity.CheckSlackToken(cfg.Slack.BotToken)
+		identity, err := connectivity.CheckSlackToken(cfg.Slack.BotToken)
 		if err != nil {
 			prompt.Fail("Slack bot token invalid: %v", err)
 			return err
 		}
-		prompt.OK("Slack bot token valid (user_id: %s)", userID)
+		prompt.OK("Slack bot token valid (user_id: %s)", identity.UserID)
+		prompted["slack.bot_user_id"] = identity.UserID
+		prompted["slack.bot_id"] = identity.BotID
 		return nil
 	}
 	if !interactive {
@@ -79,7 +81,7 @@ func preflightSlackBot(cfg *Config, interactive bool, prompted map[string]any) e
 			}
 			continue
 		}
-		userID, err := connectivity.CheckSlackToken(token)
+		identity, err := connectivity.CheckSlackToken(token)
 		if err != nil {
 			prompt.Fail("%v (attempt %d/%d)", err, attempt, maxRetries)
 			if attempt == maxRetries {
@@ -89,7 +91,9 @@ func preflightSlackBot(cfg *Config, interactive bool, prompted map[string]any) e
 		}
 		cfg.Slack.BotToken = token
 		prompted["slack.bot_token"] = token
-		prompt.OK("Slack bot token valid (user_id: %s)", userID)
+		prompted["slack.bot_user_id"] = identity.UserID
+		prompted["slack.bot_id"] = identity.BotID
+		prompt.OK("Slack bot token valid (user_id: %s)", identity.UserID)
 		return nil
 	}
 	return fmt.Errorf("unreachable")
