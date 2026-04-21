@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Ivantseng123/agentdock/app"
+	"github.com/Ivantseng123/agentdock/app/bot"
 	appconfig "github.com/Ivantseng123/agentdock/app/config"
 
 	"github.com/spf13/cobra"
@@ -23,11 +24,20 @@ var appCmd = &cobra.Command{
 		if err := appconfig.Validate(appCfg); err != nil {
 			return err
 		}
-		if _, err := appconfig.RunPreflight(appCfg); err != nil {
+		prompted, err := appconfig.RunPreflight(appCfg)
+		if err != nil {
 			return fmt.Errorf("preflight: %w", err)
 		}
 
-		handle, err := app.Run(appCfg)
+		identity := bot.Identity{}
+		if v, ok := prompted["slack.bot_user_id"].(string); ok {
+			identity.UserID = v
+		}
+		if v, ok := prompted["slack.bot_id"].(string); ok {
+			identity.BotID = v
+		}
+
+		handle, err := app.Run(appCfg, identity)
 		if err != nil {
 			return err
 		}
