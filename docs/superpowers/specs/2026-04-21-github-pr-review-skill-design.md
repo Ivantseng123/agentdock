@@ -495,9 +495,9 @@ Run once at implementation time as baseline. Re-run when SKILL.md or helper beha
 
 If future volume warrants, a dedicated `agentdock-e2e-fixtures` repo + bot account can be set up. Not in v1.
 
-## Parent spec revisions required
+## Parent spec alignment (applied in this spec's commit)
 
-Applying these decisions cleanly requires edits to `docs/superpowers/specs/2026-04-20-workflow-types-design.md`. All five ride in the same commit as this spec's revision.
+Applying these decisions cleanly required edits to `docs/superpowers/specs/2026-04-20-workflow-types-design.md`. All six landed in the same commit as this spec's revision (`5c5e458`). Listed here as an audit trail; implementation work derived from the combined specs is handed off to a separate session.
 
 1. **§Non-goals:** Remove the "A `gh` CLI dependency inside the worker container" bullet. Replace with "No new external tool dependency for PR Review beyond the `agentdock` binary itself; the `github-pr-review` skill's helper ships as an `agentdock pr-review-helper` subcommand."
 2. **§PR Review — `Job` fields — `PromptContext.Goal` default text:** Remove "via the GitHub REST API with `$GITHUB_TOKEN`". Replace with "Use the `github-pr-review` skill to analyze the diff and post line-level comments and a summary back to the PR. Output `===REVIEW_RESULT===` followed by JSON per the skill's contract."
