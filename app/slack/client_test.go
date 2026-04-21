@@ -192,3 +192,40 @@ func TestExtractMessageText_RichTextQuoteAndPreformatted(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveBotDisplayName_PrefersBotProfileName(t *testing.T) {
+	m := slack.Message{Msg: slack.Msg{
+		BotProfile: &slack.BotProfile{Name: "GitHub"},
+		Username:   "github[bot]",
+		BotID:      "B123",
+	}}
+	if got := resolveBotDisplayName(m); got != "GitHub" {
+		t.Errorf("got %q, want GitHub", got)
+	}
+}
+
+func TestResolveBotDisplayName_FallsBackToUsername(t *testing.T) {
+	m := slack.Message{Msg: slack.Msg{
+		Username: "my-webhook",
+		BotID:    "B123",
+	}}
+	if got := resolveBotDisplayName(m); got != "my-webhook" {
+		t.Errorf("got %q, want my-webhook", got)
+	}
+}
+
+func TestResolveBotDisplayName_FallsBackToBotID(t *testing.T) {
+	m := slack.Message{Msg: slack.Msg{
+		BotID: "B123",
+	}}
+	if got := resolveBotDisplayName(m); got != "B123" {
+		t.Errorf("got %q, want B123", got)
+	}
+}
+
+func TestResolveBotDisplayName_ReturnsEmptyForNonBot(t *testing.T) {
+	m := slack.Message{Msg: slack.Msg{}}
+	if got := resolveBotDisplayName(m); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}

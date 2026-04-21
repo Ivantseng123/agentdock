@@ -642,6 +642,22 @@ func extractFromAttachments(atts []slack.Attachment) string {
 	return strings.Join(segments, "\n\n")
 }
 
+// resolveBotDisplayName picks the best human-friendly name for a bot
+// message, preferring BotProfile.Name (what Slack's UI shows) over
+// Username (integration-set) and falling back to BotID.
+func resolveBotDisplayName(m slack.Message) string {
+	if m.BotProfile != nil && m.BotProfile.Name != "" {
+		return m.BotProfile.Name
+	}
+	if m.Username != "" {
+		return m.Username
+	}
+	if m.BotID != "" {
+		return m.BotID
+	}
+	return ""
+}
+
 func ExtractKeywords(message string) []string {
 	stopWords := map[string]bool{
 		"the": true, "a": true, "an": true, "is": true, "are": true,
