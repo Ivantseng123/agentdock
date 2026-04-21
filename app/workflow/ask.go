@@ -32,15 +32,20 @@ func NewAskWorkflow(cfg *config.Config, slack SlackPort, repoCache *ghclient.Rep
 	return &AskWorkflow{cfg: cfg, slack: slack, repoCache: repoCache, logger: logger}
 }
 
+// Type returns the TaskType discriminator.
 func (w *AskWorkflow) Type() string { return "ask" }
 
 // Trigger posts the attach-repo selector regardless of whether args has
 // question text; if args is empty, the thread content is the question.
 func (w *AskWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string) (NextStep, error) {
 	pending := &Pending{
-		ChannelID: ev.ChannelID, ThreadTS: ev.ThreadTS, TriggerTS: ev.TriggerTS, UserID: ev.UserID,
-		Phase: "ask_repo_prompt",
-		State: &askState{Question: args},
+		ChannelID: ev.ChannelID,
+		ThreadTS:  ev.ThreadTS,
+		TriggerTS: ev.TriggerTS,
+		UserID:    ev.UserID,
+		Phase:     "ask_repo_prompt",
+		TaskType:  "ask",
+		State:     &askState{Question: args},
 	}
 	return NextStep{
 		Kind:           NextStepPostSelector,
