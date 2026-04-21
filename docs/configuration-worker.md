@@ -34,7 +34,7 @@ agents:
     skill_dir: .agents/skills         # Codex 讀 .agents/skills，不是 .codex/skills
   opencode:
     command: opencode
-    args: ["run", "{prompt}"]
+    args: ["run", "--pure", "{prompt}"]  # --pure 跳過 external plugins（例如 oh-my-openagent）避免 async 背景 agent
     timeout: 15m
     skill_dir: .opencode/skills
 
