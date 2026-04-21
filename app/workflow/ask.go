@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/Ivantseng123/agentdock/app/config"
@@ -56,4 +57,56 @@ func (w *AskWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string)
 		},
 		Pending: pending,
 	}, nil
+}
+
+// Selection handles follow-up button clicks for the ask wizard. Two phases
+// are possible: ask_repo_prompt (attach/skip decision) and ask_repo_select
+// (user picked a specific repo, or supplied one via external search).
+func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (NextStep, error) {
+	st, ok := p.State.(*askState)
+	if !ok {
+		return NextStep{Kind: NextStepError, ErrorText: "invalid pending state"}, nil
+	}
+
+	switch p.Phase {
+	case "ask_repo_prompt":
+		if value == "skip" {
+			st.AttachRepo = false
+			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
+		}
+		// "attach" → move to repo selection.
+		st.AttachRepo = true
+		channelCfg := w.cfg.ChannelDefaults
+		if cc, ok := w.cfg.Channels[p.ChannelID]; ok {
+			channelCfg = cc
+		}
+		repos := channelCfg.GetRepos()
+		p.Phase = "ask_repo_select"
+		if len(repos) == 0 {
+			// No repos configured — fall back to external search.
+			return NextStep{
+				Kind:                NextStepPostExternalSelector,
+				SelectorPrompt:      ":point_right: Search and select a repo:",
+				SelectorActionID:    "ask_repo",
+				SelectorPlaceholder: "Type to search repos...",
+				Pending:             p,
+			}, nil
+		}
+		actions := make([]SelectorAction, len(repos))
+		for i, r := range repos {
+			actions[i] = SelectorAction{ActionID: "ask_repo", Label: r, Value: r}
+		}
+		return NextStep{
+			Kind:            NextStepPostSelector,
+			SelectorPrompt:  ":point_right: Which repo?",
+			SelectorActions: actions,
+			Pending:         p,
+		}, nil
+
+	case "ask_repo_select":
+		st.SelectedRepo = value
+		return NextStep{Kind: NextStepSubmit, Pending: p}, nil
+	}
+
+	return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf("unknown phase %q", p.Phase)}, nil
 }

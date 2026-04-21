@@ -36,3 +36,48 @@ func newTestAskWorkflow(t *testing.T) (*AskWorkflow, *fakeSlackPort) {
 	slack := newFakeSlackPort()
 	return NewAskWorkflow(cfg, slack, nil, slog.Default()), slack
 }
+
+func TestAskWorkflow_Selection_SkipGoesToSubmit(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "skip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSubmit {
+		t.Errorf("expected NextStepSubmit, got %v", step.Kind)
+	}
+	st := p.State.(*askState)
+	if st.AttachRepo {
+		t.Error("AttachRepo should be false")
+	}
+}
+
+func TestAskWorkflow_Selection_AttachShowsRepoSelector(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "attach")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected NextStepPostSelector (repo choice), got %v", step.Kind)
+	}
+}
+
+func TestAskWorkflow_Selection_RepoChoiceGoesToSubmit(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_repo_select", State: &askState{Question: "Q", AttachRepo: true}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "foo/bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSubmit {
+		t.Errorf("expected NextStepSubmit, got %v", step.Kind)
+	}
+	st := p.State.(*askState)
+	if st.SelectedRepo != "foo/bar" {
+		t.Errorf("SelectedRepo = %q", st.SelectedRepo)
+	}
+}
