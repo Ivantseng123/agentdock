@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
@@ -233,10 +235,198 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 	return job, ":mag: 分析 codebase 中...", nil
 }
 
-// HandleResult parses the agent's ===TRIAGE_RESULT=== output and posts back
-// to Slack / creates the GitHub issue. Task 2.5 ports the real logic.
+// HandleResult routes the JobResult through REJECTED / ERROR / CREATED / parse-fail / failure branches.
+// Slack posting and GitHub issue creation happen here. Store status transitions and dedup-clearing
+// remain the ResultListener's responsibility (Phase 3 delegates through).
 func (w *IssueWorkflow) HandleResult(ctx context.Context, job *queue.Job, r *queue.JobResult) error {
-	return fmt.Errorf("IssueWorkflow.HandleResult not yet implemented")
+	if r.Status == "failed" {
+		w.handleFailure(job, r)
+		return nil
+	}
+	if r.RawOutput == "" {
+		return fmt.Errorf("empty RawOutput for completed job")
+	}
+	parsed, err := ParseAgentOutput(r.RawOutput)
+	if err != nil {
+		truncated := r.RawOutput
+		if len(truncated) > 2000 {
+			truncated = truncated[:2000] + "…(truncated)"
+		}
+		w.logger.Warn("issue parse failed", "phase", "失敗", "output", truncated)
+		r.Status = "failed"
+		r.Error = fmt.Sprintf("parse failed: %v", err)
+		w.handleFailure(job, r)
+		return nil
+	}
+	switch parsed.Status {
+	case "REJECTED":
+		w.postLowConfidence(job, parsed.Message)
+		return nil
+	case "ERROR":
+		msg := parsed.Message
+		if msg == "" {
+			msg = "agent reported ERROR without message"
+		}
+		r.Status = "failed"
+		r.Error = "agent error: " + msg
+		w.handleFailure(job, r)
+		return nil
+	case "CREATED":
+		return w.createAndPostIssue(ctx, job, r, parsed)
+	default:
+		return fmt.Errorf("unknown parsed status %q", parsed.Status)
+	}
+}
+
+// handleFailure posts either a retry button (first attempt) or an exhausted-retry
+// message (subsequent attempts). Store status transitions are omitted here;
+// ResultListener handles those in Phase 3.
+func (w *IssueWorkflow) handleFailure(job *queue.Job, result *queue.JobResult) {
+	// Worker-label derivation (WorkerID / WorkerNickname) was dropped in the Task 2.5
+	// port because store.Get is no longer available here. Phase 3 re-threads it via JobState.
+	workerInfo := ""
+
+	// Extract short error reason for Slack (before first colon detail, max 80 chars).
+	errMsg := result.Error
+	if idx := strings.Index(errMsg, ":"); idx > 0 {
+		errMsg = errMsg[:idx]
+	}
+	if len(errMsg) > 80 {
+		errMsg = errMsg[:80] + "…"
+	}
+
+	if job.RetryCount < 1 {
+		// Show retry button.
+		text := fmt.Sprintf(":x: 分析失敗: %s\nrepo: `%s` | job: `%s`%s", errMsg, job.Repo, job.ID, workerInfo)
+		_, _ = w.slack.PostMessageWithButton(job.ChannelID, text, job.ThreadTS,
+			"retry_job", "🔄 重試", job.ID)
+		// Do NOT clear dedup — user should use retry button.
+	} else {
+		// Retry exhausted, no button.
+		metrics.IssueRetryTotal.WithLabelValues("exhausted").Inc()
+		text := fmt.Sprintf(":x: 分析失敗（重試後仍失敗）: %s\nrepo: `%s` | job: `%s`%s", errMsg, job.Repo, job.ID, workerInfo)
+		w.updateStatus(job, text)
+	}
+}
+
+// postLowConfidence posts the REJECTED / low-confidence message to the thread.
+func (w *IssueWorkflow) postLowConfidence(job *queue.Job, message string) {
+	metrics.IssueRejectedTotal.WithLabelValues("low_confidence").Inc()
+	text := ":warning: 判斷不屬於此 repo，已跳過"
+	if message != "" {
+		text = text + "\n> " + message
+	}
+	w.updateStatus(job, text)
+}
+
+// createAndPostIssue calls w.github.CreateIssue and posts the issue URL + diagnostics to Slack.
+// The degraded flag is computed inline: files_found == 0 || open_questions >= 5 strips triage sections.
+// Store status transitions are omitted here; ResultListener handles them in Phase 3.
+func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, job *queue.Job, r *queue.JobResult, parsed TriageResult) error {
+	if w.github == nil {
+		metrics.IssueRejectedTotal.WithLabelValues("no_github").Inc()
+		_ = w.slack.PostMessage(job.ChannelID,
+			":warning: GitHub client not configured", job.ThreadTS)
+		return nil
+	}
+
+	degraded := parsed.FilesFound == 0 || parsed.Questions >= 5
+	body := parsed.Body
+	if degraded {
+		body = stripTriageSection(body)
+	}
+
+	branchInfo := ""
+	if job.Branch != "" {
+		branchInfo = fmt.Sprintf(" (branch: `%s`)", job.Branch)
+	}
+
+	owner, repo := splitRepo(job.Repo)
+	url, err := w.github.CreateIssue(ctx, owner, repo, parsed.Title, body, []string(parsed.Labels))
+	if err != nil {
+		w.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
+		return nil
+	}
+
+	confidence := parsed.Confidence
+	if confidence == "" {
+		confidence = "unknown"
+	}
+	metrics.IssueCreatedTotal.WithLabelValues(confidence, strconv.FormatBool(degraded)).Inc()
+
+	// Preserve worker diagnostics on the final message so the thread captures
+	// what the job actually consumed.
+	line := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url)
+	if diag := w.formatDiagnostics(job, r); diag != "" {
+		line = line + "\n" + diag
+	}
+	w.updateStatus(job, line)
+	return nil
+}
+
+// formatDiagnostics renders the elapsed time and cost diagnostics line.
+// The worker-label segment (WorkerID / WorkerNickname) was dropped in the Task 2.5 port
+// because store.Get is no longer available here. Phase 3 re-threads it via JobState.
+func (w *IssueWorkflow) formatDiagnostics(job *queue.Job, result *queue.JobResult) string {
+	var parts []string
+	// Worker-label segment was dropped in the Task 2.5 port because store.Get
+	// is no longer available here. Phase 3 re-threads it via JobState.
+	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
+		parts = append(parts, humanDuration(elapsed))
+	}
+	if result.CostUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.2f", result.CostUSD))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// updateStatus updates the status message if StatusMsgTS is set, otherwise posts a new message.
+// A defensive re-write 2 seconds later narrows the race with StatusListener's in-flight update.
+func (w *IssueWorkflow) updateStatus(job *queue.Job, text string) {
+	if job.StatusMsgTS != "" {
+		_ = w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+		ch, ts, finalText := job.ChannelID, job.StatusMsgTS, text
+		time.AfterFunc(2*time.Second, func() {
+			_ = w.slack.UpdateMessage(ch, ts, finalText)
+		})
+	} else {
+		_ = w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
+	}
+}
+
+// splitRepo splits "owner/repo" into its components. If the string has no slash,
+// it returns the whole string as owner and an empty repo.
+func splitRepo(repo string) (string, string) {
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) != 2 {
+		return repo, ""
+	}
+	return parts[0], parts[1]
+}
+
+// stripTriageSection strips advanced triage sections from the issue body when
+// the analysis is degraded (no files found or too many open questions).
+func stripTriageSection(body string) string {
+	for _, marker := range []string{"## Root Cause Analysis", "## TDD Fix Plan"} {
+		if idx := strings.Index(body, marker); idx > 0 {
+			body = strings.TrimSpace(body[:idx])
+		}
+	}
+	return body
+}
+
+// humanDuration formats a duration as a compact human-readable string.
+func humanDuration(d time.Duration) string {
+	s := int(d.Seconds())
+	if s < 60 {
+		return fmt.Sprintf("%ds", s)
+	}
+	m := s / 60
+	s = s % 60
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm %ds", m, s)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

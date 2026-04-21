@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 func TestIssueWorkflow_Type(t *testing.T) {
@@ -17,7 +18,7 @@ func TestIssueWorkflow_Type(t *testing.T) {
 }
 
 func TestIssueWorkflow_TriggerWithRepoArg_ShortCircuits(t *testing.T) {
-	w, _ := newTestIssueWorkflow(t)
+	w, _, _ := newTestIssueWorkflow(t)
 	ctx := context.Background()
 	ev := TriggerEvent{ChannelID: "C1", ThreadTS: "1.0", UserID: "U1"}
 
@@ -38,7 +39,7 @@ func TestIssueWorkflow_TriggerWithRepoArg_ShortCircuits(t *testing.T) {
 func TestIssueWorkflow_Trigger_NoRepoSingleConfigured(t *testing.T) {
 	// Single-repo channel config: Trigger should short-circuit the repo picker
 	// and return a description prompt — not a repo-selector listing repos.
-	w, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar"}))
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar"}))
 	ev := TriggerEvent{ChannelID: "C1", ThreadTS: "1.0", UserID: "U1"}
 
 	step, err := w.Trigger(context.Background(), ev, "")
@@ -64,7 +65,7 @@ func TestIssueWorkflow_Trigger_NoRepoSingleConfigured(t *testing.T) {
 }
 
 func TestIssueWorkflow_Trigger_MultiRepoShowsSelector(t *testing.T) {
-	w, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux"}))
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux"}))
 	ev := TriggerEvent{ChannelID: "C1", ThreadTS: "1.0", UserID: "U1"}
 
 	step, err := w.Trigger(context.Background(), ev, "")
@@ -82,7 +83,7 @@ func TestIssueWorkflow_Trigger_MultiRepoShowsSelector(t *testing.T) {
 func TestIssueWorkflow_Selection_RepoPhase_TransitionsToBranchOrDescription(t *testing.T) {
 	// After picking a repo, workflow transitions to branch selector (if
 	// multi-branch) or description prompt (if single/no branch list).
-	w, _ := newTestIssueWorkflow(t)
+	w, _, _ := newTestIssueWorkflow(t)
 	p := &Pending{Phase: "repo", State: &issueState{}, ChannelID: "C1", ThreadTS: "1.0"}
 
 	step, err := w.Selection(context.Background(), p, "foo/bar")
@@ -105,7 +106,7 @@ func TestIssueWorkflow_Selection_RepoPhase_TransitionsToBranchOrDescription(t *t
 }
 
 func TestIssueWorkflow_BuildJob_SetsTaskType(t *testing.T) {
-	w, _ := newTestIssueWorkflow(t)
+	w, _, _ := newTestIssueWorkflow(t)
 	p := &Pending{
 		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
 		State: &issueState{SelectedRepo: "foo/bar", SelectedBranch: "main"},
@@ -136,7 +137,7 @@ func TestIssueWorkflow_Trigger_NoChannelRepos_UsesExternalSelector(t *testing.T)
 	// When channel config has no repos, Trigger falls back to external-search
 	// selector so the user can type a repo name. This preserves the old
 	// PostExternalSelector path.
-	w, _ := newTestIssueWorkflow(t) // no withChannelRepos opts → empty repos
+	w, _, _ := newTestIssueWorkflow(t) // no withChannelRepos opts → empty repos
 	ev := TriggerEvent{ChannelID: "C1", ThreadTS: "1.0", UserID: "U1"}
 
 	step, err := w.Trigger(context.Background(), ev, "")
@@ -165,6 +166,70 @@ func TestIssueWorkflow_Trigger_NoChannelRepos_UsesExternalSelector(t *testing.T)
 	}
 }
 
+// ── new tests for Task 2.5 ────────────────────────────────────────────────────
+
+func TestIssueWorkflow_HandleResult_Created_PostsIssueURL(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	result := &queue.JobResult{
+		JobID:  "j1",
+		Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"CREATED","title":"T","body":"B","confidence":"high","files_found":3,"open_questions":0}`,
+	}
+	if err := w.HandleResult(context.Background(), job, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "Issue created") {
+		t.Errorf("expected issue URL post, got: %v", slack.Posted)
+	}
+}
+
+func TestIssueWorkflow_HandleResult_Rejected_PostsLowConfidence(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "issue"}
+	result := &queue.JobResult{
+		JobID:  "j1",
+		Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"REJECTED","message":"not our repo"}`,
+	}
+	if err := w.HandleResult(context.Background(), job, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "判斷不屬於此 repo") {
+		t.Errorf("expected low-confidence text, got: %v", slack.Posted)
+	}
+}
+
+func TestIssueWorkflow_HandleResult_Failed_FirstAttempt_AttachesRetryButton(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "agent timeout"}
+	if err := w.HandleResult(context.Background(), job, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "分析失敗") {
+		t.Errorf("expected failure text, got: %v", slack.Posted)
+	}
+}
+
+func TestIssueWorkflow_HandleResult_Failed_Retried_NoButton(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", TaskType: "issue", RetryCount: 1, StatusMsgTS: "s-ts"}
+	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "agent timeout"}
+	if err := w.HandleResult(context.Background(), job, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "重試後仍失敗") {
+		t.Errorf("expected exhausted-retry text, got: %v", slack.Posted)
+	}
+}
+
 // ── test helpers ─────────────────────────────────────────────────────────────
 
 type issueOpt func(*config.Config)
@@ -175,7 +240,7 @@ func withChannelRepos(repos []string) issueOpt {
 	}
 }
 
-func newTestIssueWorkflow(t *testing.T, opts ...issueOpt) (*IssueWorkflow, *fakeSlackPort) {
+func newTestIssueWorkflow(t *testing.T, opts ...issueOpt) (*IssueWorkflow, *fakeSlackPort, *fakeIssueCreator) {
 	t.Helper()
 	cfg := &config.Config{}
 	config.ApplyDefaults(cfg) // populates Prompt.Issue defaults
@@ -183,6 +248,7 @@ func newTestIssueWorkflow(t *testing.T, opts ...issueOpt) (*IssueWorkflow, *fake
 		o(cfg)
 	}
 	slack := newFakeSlackPort()
-	w := NewIssueWorkflow(cfg, slack, &fakeIssueCreator{}, nil, nil, slog.Default())
-	return w, slack
+	ic := &fakeIssueCreator{}
+	w := NewIssueWorkflow(cfg, slack, ic, nil, nil, slog.Default())
+	return w, slack, ic
 }
