@@ -1,9 +1,13 @@
-package queue
+package queuetest
 
-import "container/heap"
+import (
+	"container/heap"
+
+	"github.com/Ivantseng123/agentdock/shared/queue"
+)
 
 type queueEntry struct {
-	job   *Job
+	job   *queue.Job
 	index int
 }
 

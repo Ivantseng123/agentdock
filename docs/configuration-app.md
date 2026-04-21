@@ -115,13 +115,3 @@ Redis 模式下，app 集中管理 secrets 並加密傳給 worker：
 4. Worker 解密後把值注入 agent 子進程的環境變數。
 
 `github.token` 會自動 merge 進 `secrets["GH_TOKEN"]`。`AGENTDOCK_SECRET_<NAME>` 環境變數也會被收進 `secrets`。
-
-## Inmem 模式與 worker.yaml
-
-`queue.transport != redis` 時，app 會同時啟動本地 worker pool。Worker-scope 的設定（agents、providers、count、extra_rules）從 `--worker-config` 指定的檔案讀；沒傳 flag 就找 app.yaml 旁邊的 `worker.yaml`。
-
-```bash
-agentdock app -c ~/.config/agentdock/app.yaml --worker-config ~/.config/agentdock/worker.yaml
-```
-
-詳見 [configuration-worker.md](configuration-worker.md)。

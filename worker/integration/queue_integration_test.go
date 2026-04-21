@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 	"github.com/Ivantseng123/agentdock/worker/pool"
 )
@@ -43,7 +44,7 @@ func (f *fakeRepo) PurgeStale() error                { return nil }
 
 func TestFullFlow_SubmitToResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	p := pool.NewPool(pool.Config{
@@ -106,7 +107,7 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 
 func TestFullFlow_PriorityOrdering(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	ctx := context.Background()

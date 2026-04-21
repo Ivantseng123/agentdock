@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 )
 
@@ -115,7 +116,7 @@ func TestExecuteJob_NilPromptContextFailsMalformed(t *testing.T) {
 	store.Put(job)
 
 	deps := executionDeps{
-		attachments: queue.NewInMemAttachmentStore(),
+		attachments: queuetest.NewAttachmentStore(),
 		repoCache:   &mockRepo{path: "/tmp/r"},
 		runner:      &mockRunner{},
 		store:       store,
@@ -144,7 +145,7 @@ func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
 
 	prepareCalled := false
 	deps := executionDeps{
-		attachments: queue.NewInMemAttachmentStore(),
+		attachments: queuetest.NewAttachmentStore(),
 		repoCache: &mockRepo{
 			path:        "/tmp/r",
 			prepareHook: func() { prepareCalled = true },
