@@ -77,10 +77,15 @@ func (f *fakeSlackPort) DownloadAttachments(msgs []slackclient.ThreadRawMessage,
 type fakeIssueCreator struct {
 	URL     string
 	LastArg string
+	// err, when non-nil, is returned by CreateIssue instead of a URL.
+	err error
 }
 
 func (f *fakeIssueCreator) CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (string, error) {
 	f.LastArg = fmt.Sprintf("%s/%s %s", owner, repo, title)
+	if f.err != nil {
+		return "", f.err
+	}
 	if f.URL == "" {
 		f.URL = fmt.Sprintf("https://github.com/%s/%s/issues/1", owner, repo)
 	}

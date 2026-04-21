@@ -345,7 +345,7 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, job *queue.Job, 
 	url, err := w.github.CreateIssue(ctx, owner, repo, parsed.Title, body, []string(parsed.Labels))
 	if err != nil {
 		w.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
-		return nil
+		return fmt.Errorf("github create issue: %w", err)
 	}
 
 	confidence := parsed.Confidence

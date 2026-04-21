@@ -15,8 +15,6 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 )
 
-var errBoomGitHub = errors.New("github down")
-
 type updateCall struct{ ChannelID, MessageTS, Text string }
 
 type mockSlackPoster struct {
@@ -430,20 +428,29 @@ func TestResultListener_CompletedDispatchesToWorkflow(t *testing.T) {
 	defer cancel()
 	go listener.Listen(ctx)
 
-	bundle.Results.Publish(ctx, &queue.JobResult{
+	published := &queue.JobResult{
 		JobID:     "jdisp",
 		Status:    "completed",
 		RawOutput: "===TRIAGE_RESULT===\n{\"status\":\"CREATED\",\"title\":\"Bug\"}",
-	})
+	}
+	bundle.Results.Publish(ctx, published)
 
 	time.Sleep(200 * time.Millisecond)
 
 	fw.mu.Lock()
 	calls := fw.handleCalls
+	gotJob := fw.lastJob
+	gotResult := fw.lastResult
 	fw.mu.Unlock()
 
 	if calls != 1 {
 		t.Errorf("expected workflow.HandleResult called once, got %d", calls)
+	}
+	if gotJob == nil || gotJob.ID != "jdisp" {
+		t.Errorf("workflow received wrong job: %+v", gotJob)
+	}
+	if gotResult == nil || gotResult.JobID != published.JobID {
+		t.Errorf("workflow received wrong result: %+v", gotResult)
 	}
 
 	state, _ := store.Get("jdisp")
@@ -482,13 +489,26 @@ func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 	defer cancel()
 	go listener.Listen(ctx)
 
-	bundle.Results.Publish(ctx, &queue.JobResult{
+	published := &queue.JobResult{
 		JobID:     "jmfail",
 		Status:    "completed",
 		RawOutput: "===TRIAGE_RESULT===\n{\"status\":\"ERROR\",\"message\":\"gh exploded\"}",
-	})
+	}
+	bundle.Results.Publish(ctx, published)
 
 	time.Sleep(200 * time.Millisecond)
+
+	fw.mu.Lock()
+	gotJob := fw.lastJob
+	gotResult := fw.lastResult
+	fw.mu.Unlock()
+
+	if gotJob == nil || gotJob.ID != "jmfail" {
+		t.Errorf("workflow received wrong job: %+v", gotJob)
+	}
+	if gotResult == nil || gotResult.JobID != published.JobID {
+		t.Errorf("workflow received wrong result: %+v", gotResult)
+	}
 
 	state, _ := store.Get("jmfail")
 	if state.Status != queue.JobFailed {
@@ -500,6 +520,65 @@ func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 	dedupMu.Unlock()
 	if actual {
 		t.Error("dedup must NOT be cleared when workflow routes to failure (retry button path)")
+	}
+}
+
+// TestResultListener_WorkflowErrorMarksJobFailed verifies that when
+// HandleResult returns a non-nil error (e.g. GitHub create-issue failure), the
+// listener marks the job JobFailed, clears dedup, and does NOT post a retry
+// button (non-retriable internal error). This covers the handleResultErr path
+// on fakeWorkflow and restores the pre-diff behaviour asserted by the deleted
+// TestResultListener_IssueCreationFailureMarksJobFailed test.
+func TestResultListener_WorkflowErrorMarksJobFailed(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+
+	bundle := queuetest.NewBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	var dedupMu sync.Mutex
+	dedupCleared := false
+
+	fw := newFakeWorkflow()
+	fw.handleResultErr = errors.New("github create issue: API 503")
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw,
+		func(channelID, threadTS string) {
+			dedupMu.Lock()
+			dedupCleared = true
+			dedupMu.Unlock()
+		}, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID:  "jerr",
+		Status: "completed",
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	state, _ := store.Get("jerr")
+	if state.Status != queue.JobFailed {
+		t.Errorf("store status = %q, want JobFailed", state.Status)
+	}
+
+	dedupMu.Lock()
+	actual := dedupCleared
+	dedupMu.Unlock()
+	if !actual {
+		t.Error("dedup should be cleared on workflow-error (non-retriable path)")
+	}
+
+	// No retry button should be posted.
+	slackMock.mu.Lock()
+	buttons := len(slackMock.buttons)
+	slackMock.mu.Unlock()
+	if buttons != 0 {
+		t.Errorf("expected 0 retry buttons on internal workflow error, got %d", buttons)
 	}
 }
 

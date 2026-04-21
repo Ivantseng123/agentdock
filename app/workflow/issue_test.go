@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -245,6 +246,26 @@ func TestIssueWorkflow_HandleResult_ErrorStatus_RoutesToFailure(t *testing.T) {
 	joined := strings.Join(slack.Posted, " | ")
 	if !strings.Contains(joined, "agent error") {
 		t.Errorf("expected failure text containing \"agent error\", got: %v", slack.Posted)
+	}
+}
+
+func TestIssueWorkflow_HandleResult_GitHubCreateFails_ReturnsErrorAndPostsWarning(t *testing.T) {
+	w, slack, ic := newTestIssueWorkflow(t)
+	ic.err = errors.New("github API 503")
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	result := &queue.JobResult{
+		JobID:  "j1",
+		Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"CREATED","title":"T","body":"B","confidence":"high","files_found":3,"open_questions":0}`,
+	}
+	err := w.HandleResult(context.Background(), job, result)
+	if err == nil {
+		t.Fatal("expected non-nil error from HandleResult when GitHub create-issue fails")
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "Triage 完成但建立 issue 失敗") {
+		t.Errorf("expected warning message in Slack posts, got: %v", slack.Posted)
 	}
 }
 
