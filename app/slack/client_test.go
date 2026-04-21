@@ -164,3 +164,31 @@ func TestExtractMessageText_AllEmpty(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+func TestExtractMessageText_RichTextQuoteAndPreformatted(t *testing.T) {
+	msg := slack.Message{Msg: slack.Msg{Blocks: slack.Blocks{BlockSet: []slack.Block{
+		&slack.RichTextBlock{
+			Type: slack.MBTRichText,
+			Elements: []slack.RichTextElement{
+				&slack.RichTextQuote{
+					Type: slack.RTEQuote,
+					Elements: []slack.RichTextSectionElement{
+						&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "quoted text"},
+					},
+				},
+				&slack.RichTextPreformatted{
+					Type: slack.RTEPreformatted,
+					Elements: []slack.RichTextSectionElement{
+						&slack.RichTextSectionTextElement{Type: slack.RTSEText, Text: "preformatted text"},
+					},
+				},
+			},
+		},
+	}}}}
+	got := extractMessageText(msg)
+	for _, want := range []string{"quoted text", "preformatted text"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("got %q, missing %q", got, want)
+		}
+	}
+}

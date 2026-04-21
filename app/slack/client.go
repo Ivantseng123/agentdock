@@ -592,11 +592,18 @@ func extractFromBlocks(blocks []slack.Block) string {
 			}
 		case *slack.RichTextBlock:
 			for _, el := range bb.Elements {
-				if s, ok := el.(*slack.RichTextSection); ok {
-					for _, inner := range s.Elements {
-						if te, ok := inner.(*slack.RichTextSectionTextElement); ok && te.Text != "" {
-							parts = append(parts, te.Text)
-						}
+				var sectionElems []slack.RichTextSectionElement
+				switch v := el.(type) {
+				case *slack.RichTextSection:
+					sectionElems = v.Elements
+				case *slack.RichTextQuote:
+					sectionElems = v.Elements
+				case *slack.RichTextPreformatted:
+					sectionElems = v.Elements
+				}
+				for _, inner := range sectionElems {
+					if te, ok := inner.(*slack.RichTextSectionTextElement); ok && te.Text != "" {
+						parts = append(parts, te.Text)
 					}
 				}
 			}
