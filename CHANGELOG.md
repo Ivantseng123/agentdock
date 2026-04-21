@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.3](https://github.com/Ivantseng123/agentdock/compare/v2.1.2...v2.1.3) (2026-04-21)
+
+
+### Bug Fixes
+
+* **app:** show worker nickname in Slack result and failure messages ([#115](https://github.com/Ivantseng123/agentdock/issues/115)) ([91fb917](https://github.com/Ivantseng123/agentdock/commit/91fb9172b641207c5dba85733f85b64b6a9d8d6c))
+
 ## [2.1.2](https://github.com/Ivantseng123/agentdock/compare/v2.1.1...v2.1.2) (2026-04-21)
 
 
