@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"log/slog"
 	"strings"
 )
@@ -126,4 +127,114 @@ func NewDispatcher(reg *Registry, slack SlackPort, logger *slog.Logger) *Dispatc
 		panic("workflow: NewDispatcher called with nil registry")
 	}
 	return &Dispatcher{registry: reg, slack: slack, logger: logger}
+}
+
+// Dispatch parses the trigger event and routes it to the matching workflow.
+// Unknown verbs / no-verb-no-args cases return a D-selector NextStep.
+// Returns the initial Pending (the dispatcher fills SelectorTS after the
+// caller posts the selector/modal) and the NextStep to execute.
+func (d *Dispatcher) Dispatch(ctx context.Context, ev TriggerEvent) (*Pending, NextStep, error) {
+	tp := ParseTrigger(ev.Text)
+
+	if tp.Verb == "" && tp.Args == "" {
+		// Plain @bot with no args → D-selector.
+		return d.postDSelector(ev, "")
+	}
+	if tp.KnownVerb {
+		wf, ok := d.registry.Get(tp.Verb)
+		if !ok {
+			// Verb declared known but no workflow registered — registry
+			// misconfiguration; fail loudly.
+			return nil, NextStep{Kind: NextStepError, ErrorText: "workflow " + tp.Verb + " not registered"}, nil
+		}
+		step, err := wf.Trigger(ctx, ev, tp.Args)
+		if err != nil {
+			return nil, NextStep{Kind: NextStepError, ErrorText: err.Error()}, err
+		}
+		if step.Pending != nil {
+			step.Pending.TaskType = wf.Type()
+		}
+		return step.Pending, step, nil
+	}
+	// Not a known verb. Either legacy bare-repo (LooksLikeRepo) → Issue,
+	// or unknown verb → D-selector with warning.
+	if tp.Verb == "" && LooksLikeRepo(tp.Args) {
+		wf, _ := d.registry.Get("issue")
+		if wf == nil {
+			return nil, NextStep{Kind: NextStepError, ErrorText: "issue workflow not registered"}, nil
+		}
+		step, err := wf.Trigger(ctx, ev, tp.Args)
+		if err != nil {
+			return nil, NextStep{Kind: NextStepError, ErrorText: err.Error()}, err
+		}
+		if step.Pending != nil {
+			step.Pending.TaskType = "issue"
+		}
+		return step.Pending, step, nil
+	}
+
+	// Unknown verb — D-selector with warning.
+	warning := ""
+	if tp.Verb != "" {
+		warning = ":warning: 不認得 `" + tp.Verb + "`，請選一個："
+	}
+	return d.postDSelector(ev, warning)
+}
+
+// postDSelector returns a NextStep that renders the three-button selector.
+// warning prepends a :warning: line (empty string = no warning).
+func (d *Dispatcher) postDSelector(ev TriggerEvent, warning string) (*Pending, NextStep, error) {
+	prompt := warning
+	if prompt != "" {
+		prompt += "\n"
+	}
+	prompt += ":point_right: 你想做什麼？"
+
+	pending := &Pending{
+		ChannelID: ev.ChannelID,
+		ThreadTS:  ev.ThreadTS,
+		TriggerTS: ev.TriggerTS,
+		UserID:    ev.UserID,
+		Phase:     "d_selector",
+	}
+	step := NextStep{
+		Kind:           NextStepPostSelector,
+		SelectorPrompt: prompt,
+		SelectorActions: []SelectorAction{
+			{ActionID: "d_selector", Label: "📝 建 Issue", Value: "issue"},
+			{ActionID: "d_selector", Label: "❓ 問問題", Value: "ask"},
+			{ActionID: "d_selector", Label: "🔍 Review PR", Value: "pr_review"},
+		},
+		Pending: pending,
+	}
+	return pending, step, nil
+}
+
+// HandleSelection routes a button-click or modal-submit to the owning workflow.
+// For D-selector clicks, synthesises a fresh TriggerEvent and re-enters
+// the workflow's Trigger.
+func (d *Dispatcher) HandleSelection(ctx context.Context, p *Pending, value string) (NextStep, error) {
+	if p.Phase == "d_selector" {
+		// Value is one of the registered task types. Treat like a synthetic
+		// @bot <verb> with no args.
+		wf, ok := d.registry.Get(value)
+		if !ok {
+			return NextStep{Kind: NextStepError, ErrorText: "unknown workflow: " + value}, nil
+		}
+		ev := TriggerEvent{ChannelID: p.ChannelID, ThreadTS: p.ThreadTS, TriggerTS: p.TriggerTS, UserID: p.UserID}
+		step, err := wf.Trigger(ctx, ev, "")
+		if err != nil {
+			return NextStep{Kind: NextStepError, ErrorText: err.Error()}, err
+		}
+		if step.Pending != nil {
+			step.Pending.TaskType = wf.Type()
+		}
+		return step, nil
+	}
+
+	wf, ok := d.registry.Get(p.TaskType)
+	if !ok {
+		return NextStep{Kind: NextStepError, ErrorText: "unknown task_type: " + p.TaskType}, nil
+	}
+	return wf.Selection(ctx, p, value)
 }

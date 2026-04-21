@@ -1,6 +1,11 @@
 package workflow
 
-import "testing"
+import (
+	"context"
+	"log/slog"
+	"strings"
+	"testing"
+)
 
 func TestParseTrigger(t *testing.T) {
 	tests := []struct {
@@ -65,5 +70,32 @@ func TestLooksLikeRepo(t *testing.T) {
 				t.Errorf("LooksLikeRepo(%q) = %v, want %v", in, got, want)
 			}
 		})
+	}
+}
+
+func TestDispatcher_UnknownVerb_YieldsDSelectorWithWarning(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&fakeWorkflow{typ: "issue"})
+	d := NewDispatcher(r, newFakeSlackPort(), slog.Default())
+	_, step, err := d.Dispatch(context.Background(), TriggerEvent{Text: "askme something"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected NextStepPostSelector, got %v", step.Kind)
+	}
+	if !strings.Contains(step.SelectorPrompt, "不認得") {
+		t.Errorf("expected warning text, got %q", step.SelectorPrompt)
+	}
+}
+
+func TestDispatcher_BareRepo_RoutesToIssue(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&fakeWorkflow{typ: "issue"})
+	d := NewDispatcher(r, newFakeSlackPort(), slog.Default())
+	_, step, _ := d.Dispatch(context.Background(), TriggerEvent{Text: "foo/bar"})
+	// fakeWorkflow.Trigger returns NextStep{Kind: NextStepSubmit}
+	if step.Kind != NextStepSubmit {
+		t.Errorf("expected NextStepSubmit (from fakeWorkflow), got %v", step.Kind)
 	}
 }
