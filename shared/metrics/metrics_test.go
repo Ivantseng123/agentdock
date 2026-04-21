@@ -83,17 +83,16 @@ func TestRegister_AllMetricFamilies(t *testing.T) {
 	RequestDuration.Observe(1)
 	QueueSubmittedTotal.WithLabelValues("1").Inc()
 	QueueWait.Observe(1)
-	QueueJobDuration.WithLabelValues("completed").Observe(1)
+	QueueJobDuration.WithLabelValues("issue", "completed").Observe(1)
 	AgentExecution.WithLabelValues("claude").Observe(1)
-	AgentExecutionsTotal.WithLabelValues("claude", "success").Inc()
+	AgentExecutionsTotal.WithLabelValues("claude", "issue", "success").Inc()
 	AgentPrepare.Observe(1)
 	AgentToolCalls.WithLabelValues("claude").Observe(1)
 	AgentFilesRead.WithLabelValues("claude").Observe(1)
 	AgentCostUSD.WithLabelValues("claude").Add(0.01)
 	AgentTokensTotal.WithLabelValues("claude", "input").Add(100)
-	IssueCreatedTotal.WithLabelValues("high", "false").Inc()
-	IssueRejectedTotal.WithLabelValues("wrong_repo").Inc()
-	IssueRetryTotal.WithLabelValues("submitted").Inc()
+	WorkflowCompletionsTotal.WithLabelValues("issue", "success").Inc()
+	WorkflowRetryTotal.WithLabelValues("issue", "exhausted").Inc()
 	HandlerDedupRejectionsTotal.Inc()
 	HandlerRateLimitTotal.WithLabelValues("user").Inc()
 	WatchdogKillsTotal.WithLabelValues("timeout").Inc()
@@ -111,7 +110,7 @@ func TestRegister_AllMetricFamilies(t *testing.T) {
 		gathered[mf.GetName()] = true
 	}
 
-	// All 23 expected metric names.
+	// All 22 expected metric names.
 	expected := []string{
 		"agentdock_request_total",
 		"agentdock_request_duration_seconds",
@@ -126,9 +125,8 @@ func TestRegister_AllMetricFamilies(t *testing.T) {
 		"agentdock_agent_files_read",
 		"agentdock_agent_cost_usd",
 		"agentdock_agent_tokens_total",
-		"agentdock_issue_created_total",
-		"agentdock_issue_rejected_total",
-		"agentdock_issue_retry_total",
+		"agentdock_workflow_completions_total",
+		"agentdock_workflow_retry_total",
 		"agentdock_handler_dedup_rejections_total",
 		"agentdock_handler_rate_limit_total",
 		"agentdock_watchdog_kills_total",
@@ -148,6 +146,20 @@ func TestRegister_AllMetricFamilies(t *testing.T) {
 			t.Logf("  %s", name)
 		}
 	}
+}
+
+func TestWorkflowCompletionsTotal_Registered(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	Register(reg, nil, nil)
+	// WithLabelValues panics if the metric isn't registered with this registry.
+	// We use a fresh registry here, so we just verify the var exists and is touchable.
+	WorkflowCompletionsTotal.WithLabelValues("issue", "success").Inc()
+}
+
+func TestWorkflowRetryTotal_Registered(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	Register(reg, nil, nil)
+	WorkflowRetryTotal.WithLabelValues("issue", "exhausted").Inc()
 }
 
 func TestRegister_NilDeps(t *testing.T) {

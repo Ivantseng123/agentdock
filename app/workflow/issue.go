@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -303,7 +302,7 @@ func (w *IssueWorkflow) handleFailure(job *queue.Job, result *queue.JobResult) {
 		// Do NOT clear dedup — user should use retry button.
 	} else {
 		// Retry exhausted, no button.
-		metrics.IssueRetryTotal.WithLabelValues("exhausted").Inc()
+		metrics.WorkflowRetryTotal.WithLabelValues("issue", "exhausted").Inc()
 		text := fmt.Sprintf(":x: 分析失敗（重試後仍失敗）: %s\nrepo: `%s` | job: `%s`%s", errMsg, job.Repo, job.ID, workerInfo)
 		w.updateStatus(job, text)
 	}
@@ -311,7 +310,8 @@ func (w *IssueWorkflow) handleFailure(job *queue.Job, result *queue.JobResult) {
 
 // postLowConfidence posts the REJECTED / low-confidence message to the thread.
 func (w *IssueWorkflow) postLowConfidence(job *queue.Job, message string) {
-	metrics.IssueRejectedTotal.WithLabelValues("low_confidence").Inc()
+	w.logger.Info("issue rejected", "reason", "low_confidence", "job_id", job.ID, "repo", job.Repo)
+	metrics.WorkflowCompletionsTotal.WithLabelValues("issue", "rejected").Inc()
 	text := ":warning: 判斷不屬於此 repo，已跳過"
 	if message != "" {
 		text = text + "\n> " + message
@@ -324,7 +324,8 @@ func (w *IssueWorkflow) postLowConfidence(job *queue.Job, message string) {
 // Store status transitions are omitted here; ResultListener handles them in Phase 3.
 func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, job *queue.Job, r *queue.JobResult, parsed TriageResult) error {
 	if w.github == nil {
-		metrics.IssueRejectedTotal.WithLabelValues("no_github").Inc()
+		w.logger.Info("issue rejected", "reason", "no_github", "job_id", job.ID, "repo", job.Repo)
+		metrics.WorkflowCompletionsTotal.WithLabelValues("issue", "rejected").Inc()
 		_ = w.slack.PostMessage(job.ChannelID,
 			":warning: GitHub client not configured", job.ThreadTS)
 		return nil
@@ -352,7 +353,9 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, job *queue.Job, 
 	if confidence == "" {
 		confidence = "unknown"
 	}
-	metrics.IssueCreatedTotal.WithLabelValues(confidence, strconv.FormatBool(degraded)).Inc()
+	// confidence and degraded go into the log to avoid label cardinality blow-ups.
+	w.logger.Info("issue created", "job_id", job.ID, "repo", job.Repo, "confidence", confidence, "degraded", degraded)
+	metrics.WorkflowCompletionsTotal.WithLabelValues("issue", "success").Inc()
 
 	// Preserve worker diagnostics on the final message so the thread captures
 	// what the job actually consumed.

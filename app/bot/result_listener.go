@@ -159,7 +159,7 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 	if !job.SubmittedAt.IsZero() {
 		elapsed := time.Since(job.SubmittedAt).Seconds()
 		metrics.RequestDuration.Observe(elapsed)
-		metrics.QueueJobDuration.WithLabelValues(result.Status).Observe(elapsed)
+		metrics.QueueJobDuration.WithLabelValues(workflowLabel(job), result.Status).Observe(elapsed)
 	}
 
 	// Queue wait time (computed by MemJobStore when status transitions to Running).
@@ -200,7 +200,7 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 		case "cancelled":
 			status = "cancelled"
 		}
-		metrics.AgentExecutionsTotal.WithLabelValues(provider, status).Inc()
+		metrics.AgentExecutionsTotal.WithLabelValues(provider, workflowLabel(job), status).Inc()
 
 		// Tool calls and files read.
 		if as.ToolCalls > 0 {
@@ -222,9 +222,9 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 		}
 	} else if result.Status == "failed" {
 		// No agent status — job failed before agent started.
-		metrics.AgentExecutionsTotal.WithLabelValues("unknown", "error").Inc()
+		metrics.AgentExecutionsTotal.WithLabelValues("unknown", workflowLabel(job), "error").Inc()
 	} else if result.Status == "cancelled" {
-		metrics.AgentExecutionsTotal.WithLabelValues("unknown", "cancelled").Inc()
+		metrics.AgentExecutionsTotal.WithLabelValues("unknown", workflowLabel(job), "cancelled").Inc()
 	}
 }
 
@@ -270,7 +270,7 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 		// Do NOT clear dedup — user should use retry button.
 	} else {
 		// Retry exhausted, no button.
-		metrics.IssueRetryTotal.WithLabelValues("exhausted").Inc()
+		metrics.WorkflowRetryTotal.WithLabelValues(workflowLabel(job), "exhausted").Inc()
 		text := fmt.Sprintf(":x: 分析失敗（重試後仍失敗）: %s\nrepo: `%s` | job: `%s`%s", errMsg, job.Repo, job.ID, workerInfo)
 		r.updateStatus(job, text)
 		r.clearDedup(job)
@@ -311,4 +311,13 @@ func (r *ResultListener) clearDedup(job *queue.Job) {
 	if r.onDedupClear != nil {
 		r.onDedupClear(job.ChannelID, job.ThreadTS)
 	}
+}
+
+// workflowLabel returns the job's TaskType for use as a metric label, falling
+// back to "unknown" for empty strings (e.g. older jobs or test fixtures).
+func workflowLabel(job *queue.Job) string {
+	if job.TaskType == "" {
+		return "unknown"
+	}
+	return job.TaskType
 }

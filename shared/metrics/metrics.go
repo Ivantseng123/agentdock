@@ -50,9 +50,9 @@ var QueueWait = prometheus.NewHistogram(prometheus.HistogramOpts{
 var QueueJobDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 	Namespace: namespace,
 	Name:      "queue_job_duration_seconds",
-	Help:      "Total job duration from dequeue to completion/failure.",
+	Help:      "Total job duration from dequeue to completion/failure, labelled by workflow and status.",
 	Buckets:   []float64{30, 60, 120, 300, 600, 900, 1200},
-}, []string{"status"})
+}, []string{"workflow", "status"})
 
 // ---- Agent ----
 
@@ -67,7 +67,7 @@ var AgentExecutionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: namespace,
 	Name:      "agent_executions_total",
 	Help:      "Agent execution outcomes.",
-}, []string{"provider", "status"})
+}, []string{"provider", "workflow", "status"})
 
 var AgentPrepare = prometheus.NewHistogram(prometheus.HistogramOpts{
 	Namespace: namespace,
@@ -102,25 +102,19 @@ var AgentTokensTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Cumulative token usage.",
 }, []string{"provider", "type"})
 
-// ---- Issue ----
+// ---- Workflow ----
 
-var IssueCreatedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+var WorkflowCompletionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: namespace,
-	Name:      "issue_created_total",
-	Help:      "GitHub issues created.",
-}, []string{"confidence", "degraded"})
+	Name:      "workflow_completions_total",
+	Help:      "Count of workflow completions, labelled by workflow and outcome status.",
+}, []string{"workflow", "status"})
 
-var IssueRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+var WorkflowRetryTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: namespace,
-	Name:      "issue_rejected_total",
-	Help:      "Agent rejections.",
-}, []string{"reason"})
-
-var IssueRetryTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-	Namespace: namespace,
-	Name:      "issue_retry_total",
-	Help:      "Retry button presses.",
-}, []string{"status"})
+	Name:      "workflow_retry_total",
+	Help:      "Count of workflow retry attempts and exhaustions.",
+}, []string{"workflow", "outcome"})
 
 // ---- Handler ----
 
@@ -183,9 +177,8 @@ func Register(reg prometheus.Registerer, q queue.JobQueue, store queue.JobStore)
 		AgentFilesRead,
 		AgentCostUSD,
 		AgentTokensTotal,
-		IssueCreatedTotal,
-		IssueRejectedTotal,
-		IssueRetryTotal,
+		WorkflowCompletionsTotal,
+		WorkflowRetryTotal,
 		HandlerDedupRejectionsTotal,
 		HandlerRateLimitTotal,
 		WatchdogKillsTotal,
