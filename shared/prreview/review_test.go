@@ -1,9 +1,17 @@
 package prreview
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+var _ = bytes.NewReader
 
 func TestFilterAndTruncate_AllValid(t *testing.T) {
 	files := []PRFile{
@@ -114,5 +122,156 @@ func TestFilterAndTruncate_SummaryTruncated(t *testing.T) {
 	}
 	if !strings.HasSuffix(r.Summary, summaryTruncSuffix) {
 		t.Errorf("truncated summary should end with suffix, got %q", r.Summary[len(r.Summary)-60:])
+	}
+}
+
+func TestValidateAndPost_HappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/pulls/42/files") && r.Method == "GET":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{"filename":"a.go","status":"modified","patch":"@@ -1 +1,2 @@\n a\n+b\n"}]`)
+		case strings.Contains(r.URL.Path, "/pulls/42/reviews") && r.Method == "POST":
+			body, _ := io.ReadAll(r.Body)
+			var got CreateReviewReq
+			_ = json.Unmarshal(body, &got)
+			if got.Event != "COMMENT" {
+				t.Errorf("event: want COMMENT, got %q", got.Event)
+			}
+			if got.CommitID != "deadbeef" {
+				t.Errorf("commit_id: want deadbeef, got %q", got.CommitID)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id": 12345}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	r := ReviewJSON{
+		Summary: "ok", SeveritySummary: SummaryMinor,
+		Comments: []CommentJSON{
+			{Path: "a.go", Line: 2, Side: SideRight, Body: "nit", Severity: SeverityNit},
+		},
+	}
+	res, err := ValidateAndPost(context.Background(), ValidateAndPostInput{
+		Review:   &r,
+		PRURL:    "https://github.com/x/y/pull/42",
+		CommitID: "deadbeef",
+		Token:    "tok",
+		APIBase:  srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("ValidateAndPost: %v", err)
+	}
+	if res.Posted != 1 {
+		t.Errorf("posted: want 1, got %d", res.Posted)
+	}
+	if res.ReviewID != 12345 {
+		t.Errorf("review_id: want 12345, got %d", res.ReviewID)
+	}
+	if res.CommitID != "deadbeef" {
+		t.Errorf("commit_id: want deadbeef, got %q", res.CommitID)
+	}
+	if res.DryRun {
+		t.Error("expected DryRun=false")
+	}
+}
+
+func TestValidateAndPost_DryRun(t *testing.T) {
+	var postHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/pulls/42/files") && r.Method == "GET" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `[{"filename":"a.go","status":"modified","patch":"@@ -1 +1,2 @@\n a\n+b\n"}]`)
+			return
+		}
+		if r.Method == "POST" {
+			postHits++
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	r := ReviewJSON{
+		Summary: "ok", SeveritySummary: SummaryMinor,
+		Comments: []CommentJSON{
+			{Path: "a.go", Line: 2, Side: SideRight, Body: "nit", Severity: SeverityNit},
+		},
+	}
+	res, err := ValidateAndPost(context.Background(), ValidateAndPostInput{
+		Review:   &r,
+		PRURL:    "https://github.com/x/y/pull/42",
+		CommitID: "deadbeef",
+		Token:    "tok",
+		APIBase:  srv.URL,
+		DryRun:   true,
+	})
+	if err != nil {
+		t.Fatalf("ValidateAndPost(DryRun): %v", err)
+	}
+	if !res.DryRun {
+		t.Error("want DryRun=true")
+	}
+	if res.WouldPost != 1 {
+		t.Errorf("would_post: want 1, got %d", res.WouldPost)
+	}
+	if res.Payload == nil {
+		t.Error("Payload should be populated in dry-run")
+	}
+	if postHits != 0 {
+		t.Errorf("POST should never be called in dry-run, got %d", postHits)
+	}
+}
+
+func TestValidateAndPost_StaleCommit422(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/files") {
+			_, _ = io.WriteString(w, `[{"filename":"a.go","status":"modified","patch":"@@ -1 +1,2 @@\n a\n+b\n"}]`)
+			return
+		}
+		w.WriteHeader(422)
+		_, _ = io.WriteString(w, `{"message":"commit_id not in PR"}`)
+	}))
+	defer srv.Close()
+
+	r := ReviewJSON{
+		Summary: "ok", SeveritySummary: SummaryMinor,
+		Comments: []CommentJSON{
+			{Path: "a.go", Line: 2, Side: SideRight, Body: "nit", Severity: SeverityNit},
+		},
+	}
+	_, err := ValidateAndPost(context.Background(), ValidateAndPostInput{
+		Review:   &r,
+		PRURL:    "https://github.com/x/y/pull/42",
+		CommitID: "stale",
+		Token:    "tok",
+		APIBase:  srv.URL,
+	})
+	if err == nil {
+		t.Fatal("want error on 422")
+	}
+	if !strings.Contains(err.Error(), ErrGitHubStaleCommit) {
+		t.Errorf("want stale-commit error, got %v", err)
+	}
+}
+
+func TestValidateAndPost_Unauth401(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+	}))
+	defer srv.Close()
+
+	r := ReviewJSON{Summary: "ok", SeveritySummary: SummaryClean, Comments: []CommentJSON{}}
+	_, err := ValidateAndPost(context.Background(), ValidateAndPostInput{
+		Review:   &r,
+		PRURL:    "https://github.com/x/y/pull/42",
+		CommitID: "x",
+		Token:    "bad",
+		APIBase:  srv.URL,
+	})
+	if err == nil || !strings.Contains(err.Error(), ErrGitHubUnauth) {
+		t.Errorf("want unauth error, got %v", err)
 	}
 }

@@ -258,3 +258,60 @@ func parsePatch(patch string) *validLines {
 	}
 	return v
 }
+
+// createReview POSTs /pulls/:n/reviews. Returns review ID on 2xx; maps known
+// failure statuses to constants from errors.go.
+func createReview(ctx context.Context, apiBase, prURL, token string, payload *CreateReviewReq, maxWallTime time.Duration) (int64, error) {
+	owner, repo, num, err := parsePRURL(prURL)
+	if err != nil {
+		return 0, err
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("marshal review: %w", err)
+	}
+	u := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews",
+		strings.TrimRight(apiBase, "/"), url.PathEscape(owner), url.PathEscape(repo), num)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+	}
+
+	resp, err := httpCallWithRetry(ctx, req, maxWallTime)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case 401:
+		return 0, fmt.Errorf("%s", ErrGitHubUnauth)
+	case 403:
+		return 0, fmt.Errorf("%s", ErrGitHubForbidden)
+	case 404:
+		return 0, fmt.Errorf("%s", ErrGitHubNotFound)
+	case 422:
+		return 0, fmt.Errorf("%s", ErrGitHubStaleCommit)
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("create review: %d %s", resp.StatusCode, string(body))
+	}
+	var ok struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ok); err != nil {
+		return 0, fmt.Errorf("decode review response: %w", err)
+	}
+	return ok.ID, nil
+}
