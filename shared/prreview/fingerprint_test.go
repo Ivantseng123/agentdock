@@ -135,7 +135,7 @@ func TestFingerprint_PRAware(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
-	fp, err := Fingerprint(ctx, dir, "https://github.com/x/y/pull/42", "tok", fingerprintOptions{apiBase: srv.URL})
+	fp, err := Fingerprint(ctx, dir, "https://github.com/x/y/pull/42", "tok", FingerprintOptions{APIBase: srv.URL})
 	if err != nil {
 		t.Fatalf("Fingerprint: %v", err)
 	}

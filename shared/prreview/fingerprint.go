@@ -9,21 +9,21 @@ import (
 	"strings"
 )
 
-// fingerprintOptions is for tests to inject a mock GitHub API base URL.
-// Production callers pass the zero value. (Renamed to FingerprintOptions in Task 10.)
-type fingerprintOptions struct {
-	apiBase string
+// FingerprintOptions lets callers (tests) override the GitHub API base URL.
+// Production callers pass the zero value; APIBase defaults to https://api.github.com.
+type FingerprintOptions struct {
+	APIBase string
 }
 
 // Fingerprint returns a full FingerprintResult combining local probes with
 // PR-aware fields fetched from the GitHub API.
-func Fingerprint(ctx context.Context, repoDir, prURL, token string, opts fingerprintOptions) (*FingerprintResult, error) {
+func Fingerprint(ctx context.Context, repoDir, prURL, token string, opts FingerprintOptions) (*FingerprintResult, error) {
 	fp, err := fingerprintLocal(repoDir)
 	if err != nil {
 		return nil, err
 	}
 
-	apiBase := opts.apiBase
+	apiBase := opts.APIBase
 	if apiBase == "" {
 		apiBase = "https://api.github.com"
 	}
