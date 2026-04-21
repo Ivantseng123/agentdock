@@ -61,8 +61,8 @@ func TestApplyDefaults_Timeouts(t *testing.T) {
 
 func TestApplyDefaults_PromptGoal(t *testing.T) {
 	cfg := loadFromString(t, ``)
-	if cfg.Prompt.Goal != defaultPromptGoal {
-		t.Errorf("default Goal = %q", cfg.Prompt.Goal)
+	if cfg.Prompt.Issue.Goal != defaultIssueGoal {
+		t.Errorf("default Issue.Goal = %q, want %q", cfg.Prompt.Issue.Goal, defaultIssueGoal)
 	}
 }
 
@@ -91,5 +91,55 @@ func TestDefaultsMap_ShapeMatchesYAMLTags(t *testing.T) {
 	q, _ := m["queue"].(map[string]any)
 	if q["transport"] != "redis" {
 		t.Errorf("queue.transport = %v, want redis", q["transport"])
+	}
+}
+
+func TestPromptConfig_LegacyFlatAliasedToIssue(t *testing.T) {
+	cfg := loadFromString(t, `
+prompt:
+  language: "zh-TW"
+  goal: "legacy flat goal"
+  output_rules:
+    - "legacy rule"
+`)
+	if cfg.Prompt.Issue.Goal != "legacy flat goal" {
+		t.Errorf("Issue.Goal = %q, want legacy flat alias", cfg.Prompt.Issue.Goal)
+	}
+	if len(cfg.Prompt.Issue.OutputRules) != 1 || cfg.Prompt.Issue.OutputRules[0] != "legacy rule" {
+		t.Errorf("Issue.OutputRules = %v", cfg.Prompt.Issue.OutputRules)
+	}
+}
+
+func TestPromptConfig_NestedOverridesFlat(t *testing.T) {
+	cfg := loadFromString(t, `
+prompt:
+  goal: "legacy"
+  issue:
+    goal: "nested issue goal"
+`)
+	if cfg.Prompt.Issue.Goal != "nested issue goal" {
+		t.Errorf("nested must win over flat: got %q", cfg.Prompt.Issue.Goal)
+	}
+}
+
+func TestPromptConfig_DefaultsPopulated(t *testing.T) {
+	cfg := &Config{}
+	ApplyDefaults(cfg)
+	if cfg.Prompt.Issue.Goal == "" {
+		t.Error("Issue.Goal default is empty")
+	}
+	if cfg.Prompt.Ask.Goal == "" {
+		t.Error("Ask.Goal default is empty")
+	}
+	if cfg.Prompt.PRReview.Goal == "" {
+		t.Error("PRReview.Goal default is empty")
+	}
+}
+
+func TestPRReviewConfig_DefaultDisabled(t *testing.T) {
+	cfg := &Config{}
+	ApplyDefaults(cfg)
+	if cfg.PRReview.Enabled {
+		t.Error("PRReview.Enabled default should be false (opt-in)")
 	}
 }

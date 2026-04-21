@@ -21,6 +21,7 @@ type Config struct {
 	Mantis            MantisConfig             `yaml:"mantis"`
 	ChannelPriority   map[string]int           `yaml:"channel_priority"`
 	Prompt            PromptConfig             `yaml:"prompt"`
+	PRReview          PRReviewConfig           `yaml:"pr_review"`
 	SkillsConfig      string                   `yaml:"skills_config"`
 	Attachments       AttachmentsConfig        `yaml:"attachments"`
 	RepoCache         RepoCacheConfig          `yaml:"repo_cache"`
@@ -44,14 +45,31 @@ type GitHubConfig struct {
 	Token string `yaml:"token"`
 }
 
-// PromptConfig is the app-owned prompt assembly. Worker holds ExtraRules
-// separately (worker/config.PromptConfig); app controls whether worker rules
-// are allowed via AllowWorkerRules.
+// PromptConfig nests per-workflow goal / output rules. Legacy flat
+// Goal / OutputRules are aliased at load time into Issue.* so pre-v2.2
+// operators keep working.
 type PromptConfig struct {
-	Language         string   `yaml:"language"`
-	Goal             string   `yaml:"goal"`
-	OutputRules      []string `yaml:"output_rules"`
-	AllowWorkerRules *bool    `yaml:"allow_worker_rules"`
+	Language         string `yaml:"language"`
+	AllowWorkerRules *bool  `yaml:"allow_worker_rules"`
+
+	// Legacy flat fields — at load time, these are copied into Issue.* if
+	// Issue.* is unset. Operators may remove these from their yaml once they
+	// migrate to the nested form.
+	Goal        string   `yaml:"goal,omitempty"`
+	OutputRules []string `yaml:"output_rules,omitempty"`
+
+	// Per-workflow sections.
+	Issue    WorkflowPromptConfig `yaml:"issue"`
+	Ask      WorkflowPromptConfig `yaml:"ask"`
+	PRReview WorkflowPromptConfig `yaml:"pr_review"`
+}
+
+// WorkflowPromptConfig holds one workflow's prompt knobs. All fields are
+// optional at the yaml layer; ApplyDefaults fills gaps with hardcoded
+// defaults so zero-config is valid.
+type WorkflowPromptConfig struct {
+	Goal        string   `yaml:"goal"`
+	OutputRules []string `yaml:"output_rules"`
 }
 
 // IsWorkerRulesAllowed returns whether worker-side ExtraRules should be
@@ -59,6 +77,13 @@ type PromptConfig struct {
 // callers don't have to duplicate the ApplyDefaults invariant.
 func (p PromptConfig) IsWorkerRulesAllowed() bool {
 	return p.AllowWorkerRules == nil || *p.AllowWorkerRules
+}
+
+// PRReviewConfig gates the PR Review workflow. Disabled by default so
+// operators opt in after verifying the github-pr-review skill and its
+// agentdock pr-review-helper subcommand are available on their workers.
+type PRReviewConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type ChannelConfig struct {
@@ -133,6 +158,3 @@ type QueueConfig struct {
 	StatusInterval   time.Duration `yaml:"status_interval"`
 }
 
-// defaultPromptGoal is the hardcoded Goal applied when the operator hasn't
-// set one in YAML.
-const defaultPromptGoal = "Use the /triage-issue skill to investigate and produce a triage result."
