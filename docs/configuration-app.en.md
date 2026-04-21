@@ -40,10 +40,8 @@ rate_limit:
   window: 1m
 
 mantis:
-  base_url: https://mantis.example.com
-  api_token: xxxxx
-  username: ""
-  password: ""
+  base_url: https://mantis.example.com    # host root; no /api/rest suffix needed
+  api_token: xxxxx                        # both fields must be set, or both empty
 
 channel_priority:
   C_INCIDENTS: 100
@@ -115,3 +113,30 @@ In Redis mode, app owns all secrets and ships them encrypted to workers:
 4. Worker decrypts and injects the values as env vars on the agent subprocess.
 
 `github.token` is auto-merged into `secrets["GH_TOKEN"]`. `AGENTDOCK_SECRET_<NAME>` env vars are also slurped into `secrets`.
+
+## Mantis (optional)
+
+When a thread contains Mantis issue URLs (`view.php?id=` or `/issues/`), the agent calls the
+bundled `mantis` skill to fetch issue title, description, and attachments. Config is two fields:
+
+```yaml
+mantis:
+  base_url: https://mantis.example.com    # host root; no /api/rest suffix needed
+  api_token: <your-mantis-api-token>
+```
+
+Both fields must be set, or both left empty — setting only one fails validation at startup.
+
+**How it works**: on app startup, `base_url + /api/rest` is stored in `secrets["MANTIS_API_URL"]`
+and `api_token` goes into `secrets["MANTIS_API_TOKEN"]`. The worker forwards both as env vars
+when spawning the agent subprocess. The bundled `mantis` skill reads those env vars; the agent
+invokes the skill whenever it sees a Mantis URL in the thread context.
+
+**Basic auth removed**: the bundled skill only supports API token auth. If your Mantis version
+is too old for API tokens, upgrade Mantis or leave the `mantis` block empty (skill disabled).
+
+**When unconfigured**: the agent still sees Mantis URLs in the thread, but does not fetch issue
+content — URLs pass through to the GitHub issue body as-is.
+
+**Worker host prerequisite**: the worker needs Node.js 18+ to execute the JS in the bundled
+mantis skill. The official Docker image already includes it.

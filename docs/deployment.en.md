@@ -48,6 +48,7 @@ If you download the binary from GitHub Release and run `agentdock worker` on an 
   - `gemini` (if used)
 - **`gh` CLI** (for creating GitHub issues)
 - **`git`** (for cloning repos)
+- **Node.js 18+** (worker host; only needed when Mantis is configured, to run the bundled `mantis` skill)
 
 If you don't want to manage these dependencies, use the Docker image: `ghcr.io/ivantseng123/agentdock:<version>` includes all runtimes.
 

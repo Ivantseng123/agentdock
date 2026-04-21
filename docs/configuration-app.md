@@ -40,10 +40,8 @@ rate_limit:
   window: 1m
 
 mantis:
-  base_url: https://mantis.example.com
-  api_token: xxxxx
-  username: ""
-  password: ""
+  base_url: https://mantis.example.com    # host 根即可，不必含 /api/rest
+  api_token: xxxxx                        # 兩個欄位必須同時填或同時留空
 
 channel_priority:
   C_INCIDENTS: 100
@@ -115,3 +113,29 @@ Redis 模式下，app 集中管理 secrets 並加密傳給 worker：
 4. Worker 解密後把值注入 agent 子進程的環境變數。
 
 `github.token` 會自動 merge 進 `secrets["GH_TOKEN"]`。`AGENTDOCK_SECRET_<NAME>` 環境變數也會被收進 `secrets`。
+
+## Mantis（選用）
+
+當 thread 中出現 Mantis issue URL（`view.php?id=` 或 `/issues/`），agent 會透過內建的
+`mantis` skill 抓 issue title/description/附件。設定兩個欄位即可：
+
+```yaml
+mantis:
+  base_url: https://mantis.example.com    # host 根即可，不必含 /api/rest
+  api_token: <your-mantis-api-token>
+```
+
+兩個欄位必須同時填寫或同時留空；只填一個會在啟動驗證時失敗。
+
+**運作機制**：app 啟動時把 `base_url + /api/rest` 存入 `secrets["MANTIS_API_URL"]`、
+`api_token` 存入 `secrets["MANTIS_API_TOKEN"]`，worker 在啟動 agent 子程序時把這兩個值當 env
+var 推入。bundled `mantis` skill 讀 env，agent 看到 thread 裡的 Mantis URL 就主動呼叫 skill
+擷取內容。
+
+**Basic auth 已移除**：bundled skill 只支援 API token。若 Mantis 版本太舊不支援 API token，
+請升級 Mantis 或留空 Mantis 區段（不啟用）。
+
+**未配置行為**：agent 仍會看到 thread 裡的 Mantis URL，只是不會擷取內容——URL 照原樣留在輸出。
+
+**Worker host 先決條件**：worker 需要 Node.js 18+ 才能執行 bundled mantis skill 裡的 JS。若
+使用官方 Docker image，已內建。
