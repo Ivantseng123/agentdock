@@ -8,16 +8,17 @@ import (
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 type fakeGitHubPR struct {
-	pr      *PullRequest
+	pr      *ghclient.PullRequest
 	err     error
 	calledN int
 }
 
-func (f *fakeGitHubPR) GetPullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
+func (f *fakeGitHubPR) GetPullRequest(ctx context.Context, owner, repo string, number int) (*ghclient.PullRequest, error) {
 	f.calledN = number
 	return f.pr, f.err
 }
@@ -30,7 +31,7 @@ func TestPRReviewWorkflow_Type(t *testing.T) {
 }
 
 func TestPRReviewWorkflow_TriggerAPath_Valid(t *testing.T) {
-	pr := &PullRequest{Number: 7, State: "open", Title: "T"}
+	pr := &ghclient.PullRequest{Number: 7, State: "open", Title: "T"}
 	pr.Head.Ref = "feature-x"
 	pr.Head.SHA = "abc123"
 	pr.Head.Repo.FullName = "forker/bar"

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 )
 
 // SlackPort is the narrow Slack surface each workflow + the dispatcher need.
@@ -34,30 +35,9 @@ type IssueCreator interface {
 
 // GitHubPR abstracts the PR endpoints PR Review needs for URL validation.
 // PRReviewWorkflow uses this to verify a URL references a real, accessible PR
-// before submitting work.
+// before submitting work. The concrete type (shared/github.Client) lives in
+// shared/github so the module-import direction (shared cannot import app) is
+// preserved; the struct moved along with it to shared/github/pr_types.go.
 type GitHubPR interface {
-	GetPullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error)
-}
-
-// PullRequest is the subset of the GitHub PR payload we care about. Field
-// names match the GitHub REST response so shared/github can populate this
-// from its httpGet directly.
-type PullRequest struct {
-	Number  int    `json:"number"`
-	State   string `json:"state"` // "open" / "closed"
-	Draft   bool   `json:"draft"`
-	Merged  bool   `json:"merged"`
-	Title   string `json:"title"`
-	HTMLURL string `json:"html_url"`
-	Head    struct {
-		Ref  string `json:"ref"`
-		SHA  string `json:"sha"`
-		Repo struct {
-			FullName string `json:"full_name"`
-			CloneURL string `json:"clone_url"`
-		} `json:"repo"`
-	} `json:"head"`
-	Base struct {
-		Ref string `json:"ref"`
-	} `json:"base"`
+	GetPullRequest(ctx context.Context, owner, repo string, number int) (*ghclient.PullRequest, error)
 }

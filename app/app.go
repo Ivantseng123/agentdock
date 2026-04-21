@@ -163,14 +163,17 @@ func Run(cfg *config.Config) (*Handle, error) {
 	}
 
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
+	githubClient := ghclient.NewClient(cfg.GitHub.Token)
 
 	// Build workflow registry + dispatcher.
 	slackPort := &slackAdapterPort{client: slackClient, logger: slackLogger}
 	issueWorkflow := workflow.NewIssueWorkflow(cfg, slackPort, issueClient, repoCache, repoDiscovery, agentLogger)
 	askWorkflow := workflow.NewAskWorkflow(cfg, slackPort, repoCache, agentLogger)
+	prReviewWorkflow := workflow.NewPRReviewWorkflow(cfg, slackPort, githubClient, repoCache, agentLogger)
 	reg := workflow.NewRegistry()
 	reg.Register(issueWorkflow)
 	reg.Register(askWorkflow)
+	reg.Register(prReviewWorkflow)
 	dispatcher := workflow.NewDispatcher(reg, slackPort, appLogger)
 
 	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger)
