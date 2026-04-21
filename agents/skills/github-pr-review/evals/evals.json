@@ -1,0 +1,42 @@
+{
+  "skill_name": "github-pr-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review the pull request at https://github.com/Ivantseng123/agentdock/pull/EXAMPLE_A — a Go PR that violates the import-direction rule documented in the repository's CLAUDE.md (app/ imports worker/). Post a review with line-level comments identifying the violation.",
+      "expected_output": "===REVIEW_RESULT=== with status=POSTED, severity_summary=major, at least one inline comment on the violating import line, and a summary that explicitly mentions CLAUDE.md or the import-direction rule.",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===REVIEW_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "POSTED"},
+        {"kind": "json_has_field", "field": "severity_summary", "equals": "major"},
+        {"kind": "json_field_gte", "field": "comments_posted", "value": 1},
+        {"kind": "summary_mentions", "needles": ["CLAUDE.md", "import direction"]}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review the pull request at https://github.com/Ivantseng123/agentdock/pull/EXAMPLE_B — a Python PR adding an untested helper function, in a repository with no linter configs and no CLAUDE.md.",
+      "expected_output": "===REVIEW_RESULT=== with status=POSTED, severity_summary=minor or major, summary notes the lack of style guidance, at least one comment suggests adding a test.",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===REVIEW_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "POSTED"},
+        {"kind": "json_field_in", "field": "severity_summary", "values": ["minor", "major"]},
+        {"kind": "summary_mentions", "needles": ["no project style file", "general"]},
+        {"kind": "any_comment_mentions", "needles": ["test", "coverage"]}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review the pull request at https://github.com/Ivantseng123/agentdock/pull/EXAMPLE_C — a PR whose diff is 100% `pnpm-lock.yaml` changes from a routine dependency bump.",
+      "expected_output": "===REVIEW_RESULT=== with status=SKIPPED, reason=lockfile_only, no inline comments, summary explains why detailed review was skipped.",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===REVIEW_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "SKIPPED"},
+        {"kind": "json_has_field", "field": "reason", "equals": "lockfile_only"}
+      ]
+    }
+  ]
+}
