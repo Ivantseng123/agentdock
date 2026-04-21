@@ -270,7 +270,7 @@ func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
 // concurrent "completed" result is routed to cancellation, not the workflow.
 func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(t *testing.T) {
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jrace", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
+	store.Put(&queue.Job{ID: "jrace", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1", TaskType: "issue"})
 	store.UpdateStatus("jrace", queue.JobCancelled)
 
 	bundle := queuetest.NewBundle(10, 3, store)
@@ -278,7 +278,9 @@ func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(
 
 	slackMock := &mockSlackPoster{}
 	fw := newFakeWorkflow()
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw, nil, slog.Default())
+	reg := workflow.NewRegistry()
+	reg.Register(fw)
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, reg, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -414,15 +416,17 @@ func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
 // to JobCompleted on success.
 func TestResultListener_CompletedDispatchesToWorkflow(t *testing.T) {
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jdisp", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.Put(&queue.Job{ID: "jdisp", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
 	fw := newFakeWorkflow()
+	reg := workflow.NewRegistry()
+	reg.Register(fw)
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw, nil, slog.Default())
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, reg, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -464,7 +468,7 @@ func TestResultListener_CompletedDispatchesToWorkflow(t *testing.T) {
 // the listener records JobFailed in the store and does NOT clear dedup.
 func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jmfail", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.Put(&queue.Job{ID: "jmfail", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -477,8 +481,10 @@ func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 	fw.onHandleResult = func(job *queue.Job, result *queue.JobResult) {
 		result.Status = "failed"
 	}
+	reg := workflow.NewRegistry()
+	reg.Register(fw)
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw,
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, reg,
 		func(channelID, threadTS string) {
 			dedupMu.Lock()
 			dedupCleared = true
@@ -531,7 +537,7 @@ func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 // TestResultListener_IssueCreationFailureMarksJobFailed test.
 func TestResultListener_WorkflowErrorMarksJobFailed(t *testing.T) {
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.Put(&queue.Job{ID: "jerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -542,8 +548,10 @@ func TestResultListener_WorkflowErrorMarksJobFailed(t *testing.T) {
 
 	fw := newFakeWorkflow()
 	fw.handleResultErr = errors.New("github create issue: API 503")
+	reg := workflow.NewRegistry()
+	reg.Register(fw)
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw,
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, reg,
 		func(channelID, threadTS string) {
 			dedupMu.Lock()
 			dedupCleared = true
@@ -673,5 +681,128 @@ func TestResultListener_FailureWithoutNicknameShowsWorkerID(t *testing.T) {
 	}
 	if !strings.Contains(fail, "host/worker-3") {
 		t.Errorf("failure should show raw worker id when no nickname, got %q", fail)
+	}
+}
+
+// ── tests: registry dispatch ──────────────────────────────────────────────────
+
+// TestResultListener_DispatchesByTaskType verifies that a completed result for
+// a job with TaskType "issue" is routed to the registered "issue" workflow.
+func TestResultListener_DispatchesByTaskType(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jreg", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
+
+	bundle := queuetest.NewBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	fw := newFakeWorkflow()
+	reg := workflow.NewRegistry()
+	reg.Register(fw)
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, reg, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	published := &queue.JobResult{
+		JobID:     "jreg",
+		Status:    "completed",
+		RawOutput: "===TRIAGE_RESULT===\n{\"status\":\"CREATED\",\"title\":\"Bug\"}",
+	}
+	bundle.Results.Publish(ctx, published)
+
+	time.Sleep(200 * time.Millisecond)
+
+	fw.mu.Lock()
+	calls := fw.handleCalls
+	gotJob := fw.lastJob
+	gotResult := fw.lastResult
+	fw.mu.Unlock()
+
+	if calls != 1 {
+		t.Errorf("expected workflow.HandleResult called once, got %d", calls)
+	}
+	if gotJob == nil || gotJob.ID != "jreg" {
+		t.Errorf("workflow received wrong job: %+v", gotJob)
+	}
+	if gotResult == nil || gotResult.JobID != published.JobID {
+		t.Errorf("workflow received wrong result: %+v", gotResult)
+	}
+}
+
+// TestResultListener_UnknownTaskType_FailsSafely verifies that a completed
+// result whose job has an unregistered TaskType is handled gracefully: the
+// listener posts an error message to Slack, clears dedup so the user can
+// re-trigger, cleans up attachments, and does NOT call any workflow.
+func TestResultListener_UnknownTaskType_FailsSafely(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "junk", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "nonsense"})
+
+	bundle := queuetest.NewBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	fw := newFakeWorkflow() // registered as "issue" only
+	reg := workflow.NewRegistry()
+	reg.Register(fw)
+
+	var dedupMu sync.Mutex
+	dedupCleared := false
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, reg,
+		func(channelID, threadTS string) {
+			dedupMu.Lock()
+			dedupCleared = true
+			dedupMu.Unlock()
+		}, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID:  "junk",
+		Status: "completed",
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Workflow must NOT have been called.
+	fw.mu.Lock()
+	calls := fw.handleCalls
+	fw.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("workflow.HandleResult must not be called for unknown task_type; got %d calls", calls)
+	}
+
+	// Slack must contain the unknown-type message.
+	slackMock.mu.Lock()
+	msgs := append([]string(nil), slackMock.messages...)
+	slackMock.mu.Unlock()
+
+	found := false
+	for _, msg := range msgs {
+		if strings.Contains(msg, "未知的工作類型") && strings.Contains(msg, "nonsense") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected unknown-task-type Slack message, got %v", msgs)
+	}
+
+	// Dedup must be cleared so the user can re-trigger.
+	dedupMu.Lock()
+	actual := dedupCleared
+	dedupMu.Unlock()
+	if !actual {
+		t.Error("dedup should be cleared for unknown task_type so user can re-trigger")
+	}
+
+	// Store status must remain untouched (Pending/Running, not Completed/Failed).
+	state, _ := store.Get("junk")
+	if state.Status == queue.JobCompleted || state.Status == queue.JobFailed {
+		t.Errorf("store status should not be completed/failed for unknown task_type, got %q", state.Status)
 	}
 }

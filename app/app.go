@@ -371,7 +371,7 @@ func Run(cfg *config.Config) (*Handle, error) {
 	}
 	wf.SetSubmitHook(submitJob)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
-		&slackPosterAdapter{client: slackClient, logger: slackLogger}, issueWorkflow,
+		&slackPosterAdapter{client: slackClient, logger: slackLogger}, reg,
 		func(channelID, threadTS string) {
 			handler.ClearThreadDedup(channelID, threadTS)
 		}, agentLogger)

@@ -21,13 +21,13 @@ type SlackPoster interface {
 }
 
 type ResultListener struct {
-	results       queue.ResultBus
-	store         queue.JobStore
-	attachments   queue.AttachmentStore
-	slack         SlackPoster
-	issueWorkflow workflow.Workflow
-	onDedupClear  func(channelID, threadTS string)
-	logger        *slog.Logger
+	results      queue.ResultBus
+	store        queue.JobStore
+	attachments  queue.AttachmentStore
+	slack        SlackPoster
+	registry     *workflow.Registry
+	onDedupClear func(channelID, threadTS string)
+	logger       *slog.Logger
 
 	mu                 sync.Mutex
 	processedJobs      map[string]bool
@@ -39,7 +39,7 @@ func NewResultListener(
 	store queue.JobStore,
 	attachments queue.AttachmentStore,
 	slack SlackPoster,
-	issueWorkflow workflow.Workflow,
+	registry *workflow.Registry,
 	onDedupClear func(channelID, threadTS string),
 	logger *slog.Logger,
 ) *ResultListener {
@@ -48,7 +48,7 @@ func NewResultListener(
 		store:         store,
 		attachments:   attachments,
 		slack:         slack,
-		issueWorkflow: issueWorkflow,
+		registry:      registry,
 		onDedupClear:  onDedupClear,
 		logger:        logger,
 		processedJobs: make(map[string]bool),
@@ -114,8 +114,18 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	// The workflow owns parsing (REJECTED/ERROR/CREATED), Slack posting, and
 	// GitHub side-effects. The listener keeps store-status transitions,
 	// dedup-clearing, and attachment cleanup.
-	if r.issueWorkflow != nil {
-		if err := r.issueWorkflow.HandleResult(ctx, job, result); err != nil {
+	if r.registry != nil {
+		wf, ok := r.registry.Get(job.TaskType)
+		if !ok {
+			r.logger.Error("unknown task_type", "phase", "失敗", "job_id", result.JobID, "task_type", job.TaskType)
+			r.slack.PostMessage(job.ChannelID,
+				fmt.Sprintf(":x: 未知的工作類型 `%s`", job.TaskType),
+				job.ThreadTS)
+			r.clearDedup(job)
+			r.attachments.Cleanup(ctx, result.JobID)
+			return
+		}
+		if err := wf.HandleResult(ctx, job, result); err != nil {
 			r.logger.Error("工作完成處理失敗", "phase", "失敗", "job_id", result.JobID, "error", err)
 			// Treat as failure — no retry button on internal errors.
 			r.store.UpdateStatus(job.ID, queue.JobFailed)
