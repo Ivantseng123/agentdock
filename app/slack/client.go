@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,6 +38,15 @@ const (
 	maxImageSize  = 20 * 1024 * 1024 // 20 MB
 	maxImageCount = 5
 )
+
+var slackUserIDPattern = regexp.MustCompile(`^[UW][A-Z0-9]+$`)
+
+// isSlackUserID reports whether s matches the shape of a Slack user ID
+// (uppercase U or W followed by alphanumeric uppercase). Used to short-
+// circuit API calls for strings we know aren't resolvable.
+func isSlackUserID(s string) bool {
+	return slackUserIDPattern.MatchString(s)
+}
 
 func NewClient(botToken string, logger *slog.Logger) *Client {
 	return &Client{
@@ -179,6 +189,11 @@ func isVisionImage(filetype string) bool {
 }
 
 func (c *Client) ResolveUser(userID string) string {
+	if !isSlackUserID(userID) {
+		// Not a Slack-shaped ID (bot display name, already-resolved name,
+		// etc.). Skip the API call and return as-is.
+		return userID
+	}
 	user, err := c.api.GetUserInfo(userID)
 	if err != nil {
 		c.logger.Warn("使用者名稱解析失敗", "phase", "失敗", "user_id", userID, "error", err)

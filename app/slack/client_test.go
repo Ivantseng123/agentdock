@@ -229,3 +229,26 @@ func TestResolveBotDisplayName_ReturnsEmptyForNonBot(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+func TestIsSlackUserID(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"UABC123", true},
+		{"WXYZ789", true},
+		{"U1", true},
+		{"bot:GitHub", false},
+		{"ivan", false},
+		{"abc123", false},
+		{"", false},
+		{"U abc", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := isSlackUserID(tc.in); got != tc.want {
+				t.Errorf("isSlackUserID(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
