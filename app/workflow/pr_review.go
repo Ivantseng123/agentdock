@@ -11,6 +11,7 @@ import (
 	"github.com/Ivantseng123/agentdock/app/config"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
@@ -273,8 +274,69 @@ func (w *PRReviewWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job
 	return job, fmt.Sprintf(":eyes: Reviewing `%s/%s#%d`...", st.Owner, st.Repo, st.Number), nil
 }
 
-// HandleResult is implemented in Task 6.4. PRReviewWorkflow must satisfy the
-// Workflow interface once registered, so provide a stub that never runs in 6.3.
+// HandleResult routes the review output through POSTED / SKIPPED / ERROR /
+// parse-fail / failure / cancelled branches. Metrics go to
+// WorkflowCompletionsTotal("pr_review", status).
 func (w *PRReviewWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r *queue.JobResult) error {
-	return fmt.Errorf("PRReviewWorkflow.HandleResult: not yet implemented (Task 6.4)")
+	if state == nil || state.Job == nil {
+		return fmt.Errorf("HandleResult: state or state.Job is nil")
+	}
+	job := state.Job
+	prURL := job.WorkflowArgs["pr_url"]
+
+	if r.Status == "failed" {
+		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "error").Inc()
+		text := fmt.Sprintf(":x: Review 失敗：%s", r.Error)
+		return w.post(job, text)
+	}
+
+	if r.Status == "cancelled" {
+		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "cancelled").Inc()
+		return w.post(job, fmt.Sprintf(":white_check_mark: 已取消。已貼的 comments 保留於 PR %s", prURL))
+	}
+
+	parsed, err := ParseReviewOutput(r.RawOutput)
+	if err != nil {
+		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "parse_failed").Inc()
+		w.logger.Warn("pr_review parse failed", "output_head", firstN(r.RawOutput, 2000))
+		return w.post(job, fmt.Sprintf(":x: Review 失敗：parse error: %v", err))
+	}
+
+	switch parsed.Status {
+	case "POSTED":
+		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "posted").Inc()
+		return w.post(job, fmt.Sprintf(
+			":white_check_mark: Review 完成 (severity: %s · %d comments, %d skipped) on %s\n> %s",
+			fallback(parsed.Severity, "unknown"), parsed.CommentsPosted, parsed.CommentsSkipped, prURL,
+			firstN(parsed.Summary, 200),
+		))
+	case "SKIPPED":
+		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "skipped").Inc()
+		return w.post(job, fmt.Sprintf(":information_source: Review 跳過 (%s): %s", parsed.Reason, firstN(parsed.Summary, 200)))
+	case "ERROR":
+		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "error").Inc()
+		return w.post(job, fmt.Sprintf(":x: Review 失敗：%s", parsed.Error))
+	}
+	return nil
+}
+
+func (w *PRReviewWorkflow) post(job *queue.Job, text string) error {
+	if job.StatusMsgTS != "" {
+		return w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+	}
+	return w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
+}
+
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+func fallback(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }

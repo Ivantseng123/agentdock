@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 type fakeGitHubPR struct {
@@ -88,6 +89,71 @@ func TestPRReviewWorkflow_DisabledErrorTextNoPrefix(t *testing.T) {
 	}
 	if !strings.Contains(step.ErrorText, "尚未啟用") {
 		t.Errorf("disabled message lost its intent: %q", step.ErrorText)
+	}
+}
+
+func TestPRReviewWorkflow_HandleResult_Posted(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "pr_review",
+		WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7"},
+	}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "===REVIEW_RESULT===\n" + `{"status":"POSTED","summary":"ok","comments_posted":2,"severity_summary":"clean"}`,
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "Review 完成") {
+		t.Errorf("got: %v", slack.Posted)
+	}
+}
+
+func TestPRReviewWorkflow_HandleResult_Failed_NoRetry(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "pr_review",
+		WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7"},
+	}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "timeout"}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "Review 失敗") {
+		t.Errorf("got: %v", slack.Posted)
+	}
+}
+
+func TestPRReviewWorkflow_HandleResult_Skipped(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "pr_review",
+		WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7"},
+	}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "===REVIEW_RESULT===\n" + `{"status":"SKIPPED","reason":"lockfile_only","summary":"nothing to review"}`,
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "Review 跳過") {
+		t.Errorf("got: %v", slack.Posted)
+	}
+}
+
+func TestPRReviewWorkflow_HandleResult_NilStateReturnsError(t *testing.T) {
+	w, _ := newTestPRReviewWorkflow(t)
+	result := &queue.JobResult{JobID: "j1", Status: "completed"}
+	if err := w.HandleResult(context.Background(), nil, result); err == nil {
+		t.Error("expected error on nil state")
 	}
 }
 
