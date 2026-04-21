@@ -62,7 +62,7 @@ func (w *PRReviewWorkflow) Type() string { return "pr_review" }
 // / RequestID / TaskType) populated so BuildJob can reuse them later.
 func (w *PRReviewWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string) (NextStep, error) {
 	if !w.cfg.PRReview.Enabled {
-		return NextStep{Kind: NextStepError, ErrorText: ":warning: PR Review 尚未啟用，請聯絡管理員"}, nil
+		return NextStep{Kind: NextStepError, ErrorText: "PR Review 尚未啟用，請聯絡管理員"}, nil
 	}
 
 	// Identity resolution shared by all three paths — matches IssueWorkflow /
@@ -138,11 +138,11 @@ func (w *PRReviewWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args st
 func (w *PRReviewWorkflow) validateAndBuild(ctx context.Context, ev TriggerEvent, reqID, reporter, channelName, urlStr string) (NextStep, error) {
 	parts, err := ParsePRURL(urlStr)
 	if err != nil {
-		return NextStep{Kind: NextStepError, ErrorText: ":x: 請貼完整 PR URL"}, nil
+		return NextStep{Kind: NextStepError, ErrorText: "請貼完整 PR URL"}, nil
 	}
 
 	if w.github == nil {
-		return NextStep{Kind: NextStepError, ErrorText: ":x: GitHub client not configured"}, nil
+		return NextStep{Kind: NextStepError, ErrorText: "GitHub client not configured"}, nil
 	}
 
 	pr, err := w.github.GetPullRequest(ctx, parts.Owner, parts.Repo, parts.Number)
@@ -182,13 +182,13 @@ func mapGitHubErrorToSlack(err error) string {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "404"):
-		return ":x: 找不到 PR"
+		return "找不到 PR"
 	case strings.Contains(msg, "403"):
-		return ":x: 沒權限存取 PR"
+		return "沒權限存取 PR"
 	case strings.Contains(msg, "dial"), strings.Contains(msg, "timeout"):
-		return ":x: GitHub 不可達，請稍後重試"
+		return "GitHub 不可達，請稍後重試"
 	default:
-		return ":x: GitHub API 錯誤: " + msg
+		return "GitHub API 錯誤: " + msg
 	}
 }
 
@@ -199,7 +199,7 @@ func mapGitHubErrorToSlack(err error) string {
 func (w *PRReviewWorkflow) Selection(ctx context.Context, p *Pending, value string) (NextStep, error) {
 	st, ok := p.State.(*prReviewState)
 	if !ok {
-		return NextStep{Kind: NextStepError, ErrorText: ":x: PRReviewWorkflow: unexpected state type"}, nil
+		return NextStep{Kind: NextStepError, ErrorText: "PRReviewWorkflow: unexpected state type"}, nil
 	}
 	_ = st
 
@@ -224,7 +224,7 @@ func (w *PRReviewWorkflow) Selection(ctx context.Context, p *Pending, value stri
 		return w.validateAndBuild(ctx, ev, p.RequestID, p.Reporter, p.ChannelName, value)
 	}
 
-	return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf(":x: PRReviewWorkflow: unknown phase %q", p.Phase)}, nil
+	return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf("PRReviewWorkflow: unknown phase %q", p.Phase)}, nil
 }
 
 // BuildJob assembles the queue.Job. Repo/Branch/CloneURL come from the PR's

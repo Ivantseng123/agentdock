@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
@@ -75,6 +76,18 @@ func TestPRReviewWorkflow_TriggerDisabled(t *testing.T) {
 	step, _ := w.Trigger(context.Background(), TriggerEvent{ChannelID: "C1"}, "https://github.com/foo/bar/pull/7")
 	if step.Kind != NextStepError {
 		t.Errorf("expected NextStepError when feature-flag disabled")
+	}
+}
+
+func TestPRReviewWorkflow_DisabledErrorTextNoPrefix(t *testing.T) {
+	w, _ := newTestPRReviewWorkflow(t)
+	w.cfg.PRReview.Enabled = false
+	step, _ := w.Trigger(context.Background(), TriggerEvent{ChannelID: "C1"}, "")
+	if strings.HasPrefix(step.ErrorText, ":warning:") || strings.HasPrefix(step.ErrorText, ":x:") {
+		t.Errorf("ErrorText should NOT start with emoji prefix (dispatcher adds :x:): got %q", step.ErrorText)
+	}
+	if !strings.Contains(step.ErrorText, "尚未啟用") {
+		t.Errorf("disabled message lost its intent: %q", step.ErrorText)
 	}
 }
 
