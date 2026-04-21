@@ -13,6 +13,7 @@ import (
 
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 )
 
@@ -58,7 +59,7 @@ func (m *mockRepo) PurgeStale() error {
 
 func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	agentOutput := "Analysis done.\n\n===TRIAGE_RESULT===\n" + `{
@@ -129,7 +130,7 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 
 func TestPool_WorkerIDIncludesHostname(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	agentOutput := "Analysis done.\n\n===TRIAGE_RESULT===\n" + `{
@@ -178,7 +179,7 @@ func TestPool_WorkerIDIncludesHostname(t *testing.T) {
 
 func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	pool := NewPool(Config{
@@ -269,7 +270,7 @@ func TestExecuteJob_DecryptsAndMergesSecrets(t *testing.T) {
 	}
 
 	deps := executionDeps{
-		attachments:   queue.NewInMemAttachmentStore(),
+		attachments:   queuetest.NewAttachmentStore(),
 		repoCache:     &mockRepo{path: dir},
 		runner:        runner,
 		store:         queue.NewMemJobStore(),
@@ -300,7 +301,7 @@ func TestExecuteJob_NoSecretKey_EncryptedSecrets_Fails(t *testing.T) {
 	}
 
 	deps := executionDeps{
-		attachments: queue.NewInMemAttachmentStore(),
+		attachments: queuetest.NewAttachmentStore(),
 		repoCache:   &mockRepo{path: dir},
 		runner:      &mockRunner{output: "ok"},
 		store:       queue.NewMemJobStore(),
@@ -315,7 +316,7 @@ func TestExecuteJob_NoSecretKey_EncryptedSecrets_Fails(t *testing.T) {
 
 func TestPool_ShortCircuitsCancelledJobAsCancelled(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	job := &queue.Job{ID: "jc", Repo: "o/r", SubmittedAt: time.Now()}
@@ -356,7 +357,7 @@ func TestPool_ShortCircuitsCancelledJobAsCancelled(t *testing.T) {
 
 func TestPool_ShortCircuitsFailedJobAsFailed(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	job := &queue.Job{ID: "jf", Repo: "o/r", SubmittedAt: time.Now()}
@@ -423,7 +424,7 @@ func (b *prepBlockingRunner) Run(ctx context.Context, workDir, prompt string, op
 // Scenario B — Kill arrives while runner is blocked during prep-like work (before OnStarted).
 func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	job := &queue.Job{
@@ -480,10 +481,10 @@ func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
 
 func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
-	statusBus := queue.NewInMemStatusBus(16)
+	statusBus := queuetest.NewStatusBus(16)
 
 	var (
 		mu          sync.Mutex
@@ -586,7 +587,7 @@ func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 
 func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	job := &queue.Job{
@@ -669,7 +670,7 @@ func (b *recordingStatusBus) snapshot() []queue.StatusReport {
 
 func TestPool_StatusReportsIncludeJobStatus(t *testing.T) {
 	store := queue.NewMemJobStore()
-	bundle := queue.NewInMemBundle(10, 3, store)
+	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	recorder := &recordingStatusBus{}
