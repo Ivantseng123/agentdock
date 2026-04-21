@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.2](https://github.com/Ivantseng123/agentdock/compare/v2.1.1...v2.1.2) (2026-04-21)
+
+
+### Bug Fixes
+
+* **worker:** add --pure to opencode CLI invocation ([7351deb](https://github.com/Ivantseng123/agentdock/commit/7351debcb9bba5854901779d39d4cb871dbdb9fb))
+* **worker:** add --pure to opencode CLI invocation ([64d12af](https://github.com/Ivantseng123/agentdock/commit/64d12af2d19924c02e36375500284d533205d052))
+
 ## [2.1.1](https://github.com/Ivantseng123/agentdock/compare/v2.1.0...v2.1.1) (2026-04-20)
 
 
