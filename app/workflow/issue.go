@@ -170,6 +170,7 @@ func (w *IssueWorkflow) Selection(ctx context.Context, p *Pending, value string)
 		case "跳過":
 			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
 		case "補充說明":
+			p.Phase = "description_modal"
 			return NextStep{
 				Kind:           NextStepOpenModal,
 				ModalTitle:     "補充說明",

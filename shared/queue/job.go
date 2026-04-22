@@ -62,6 +62,7 @@ type PromptContext struct {
 	ExtraDescription string          `json:"extra_description,omitempty"`
 	Channel          string          `json:"channel"`
 	Reporter         string          `json:"reporter"`
+	BotName          string          `json:"bot_name,omitempty"` // Slack handle the agent should refer to itself by
 	Branch           string          `json:"branch,omitempty"`
 	Language         string          `json:"language"`
 	Goal             string          `json:"goal"`

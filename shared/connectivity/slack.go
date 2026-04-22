@@ -11,8 +11,9 @@ import (
 
 // SlackIdentity holds the bot's identifiers returned by auth.test.
 type SlackIdentity struct {
-	UserID string
-	BotID  string
+	UserID   string
+	BotID    string
+	Username string // Slack handle, e.g. "ai_trigger_issue_bot"
 }
 
 // CheckSlackToken verifies the bot token via Slack auth.test API.
@@ -40,6 +41,7 @@ func CheckSlackToken(token string) (SlackIdentity, error) {
 		OK     bool   `json:"ok"`
 		UserID string `json:"user_id"`
 		BotID  string `json:"bot_id"`
+		User   string `json:"user"` // bot's handle, e.g. "ai_trigger_issue_bot"
 		Error  string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -48,5 +50,5 @@ func CheckSlackToken(token string) (SlackIdentity, error) {
 	if !body.OK {
 		return zero, fmt.Errorf("auth.test failed: %s", body.Error)
 	}
-	return SlackIdentity{UserID: body.UserID, BotID: body.BotID}, nil
+	return SlackIdentity{UserID: body.UserID, BotID: body.BotID, Username: body.User}, nil
 }

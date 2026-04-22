@@ -28,13 +28,13 @@ func (s *shimSlack) PostMessageWithButton(ch, text, ts, aid, bt, val string) (st
 }
 func (s *shimSlack) UpdateMessage(ch, mts, text string) error                  { return nil }
 func (s *shimSlack) UpdateMessageWithButton(ch, mts, text, aid, bt, val string) error { return nil }
-func (s *shimSlack) PostSelector(ch, prompt, prefix string, opts []string, ts string) (string, error) {
+func (s *shimSlack) PostSelector(ch, prompt, prefix string, labels, values []string, ts string) (string, error) {
 	return "sel-ts", nil
 }
-func (s *shimSlack) PostSelectorWithBack(ch, prompt, prefix string, opts []string, ts, back, bl string) (string, error) {
+func (s *shimSlack) PostSelectorWithBack(ch, prompt, prefix string, labels, values []string, ts, back, bl string) (string, error) {
 	return "sel-ts", nil
 }
-func (s *shimSlack) PostExternalSelector(ch, prompt, aid, ph, ts string) (string, error) {
+func (s *shimSlack) PostExternalSelector(ch, prompt, aid, ph, ts, cancelAID, cancelLabel string) (string, error) {
 	return "ext-ts", nil
 }
 func (s *shimSlack) OpenTextInputModal(tid, title, label, name, metadata string) error { return nil }
@@ -44,6 +44,9 @@ func (s *shimSlack) FetchThreadContext(c, ts, tts string, lim int) ([]slackclien
 	return nil, nil
 }
 func (s *shimSlack) DownloadAttachments(msgs []slackclient.ThreadRawMessage, dir string) []slackclient.AttachmentDownload {
+	return nil
+}
+func (s *shimSlack) UploadFile(channelID, threadTS, filename, title, content, initialComment string) error {
 	return nil
 }
 
@@ -190,7 +193,7 @@ func TestHandleSelection_DSelector_DispatchesWorkflow(t *testing.T) {
 	wf.pending[selectorTS] = p
 	wf.mu.Unlock()
 
-	wf.HandleSelection("C1", "d_selector", "issue", selectorTS)
+	wf.HandleSelection("C1", "d_selector", "issue", selectorTS, "")
 
 	if !submitted {
 		t.Error("expected onSubmit to be called after d_selector click → issue workflow")
@@ -202,6 +205,48 @@ func TestHandleSelection_DSelector_DispatchesWorkflow(t *testing.T) {
 	wf.mu.Unlock()
 	if stillPending {
 		t.Error("expected pending entry to be removed after HandleSelection")
+	}
+}
+
+// TestExecuteStep_OpenModal_FirstStepStoresPending verifies the modal-first
+// path (PR Review D-path with no URL in thread): ModalMetadata is empty and
+// no prior selector stored the pending, so executeStep must synthesise a key
+// from pending.RequestID and store pending itself — otherwise the subsequent
+// modal submit (HandleDescriptionSubmit) looks up "" and silently drops.
+func TestExecuteStep_OpenModal_FirstStepStoresPending(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default())
+
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1",
+		RequestID: "req-xyz",
+		TaskType:  "pr_review",
+	}
+	step := workflow.NextStep{
+		Kind:           workflow.NextStepOpenModal,
+		ModalTitle:     "PR Review",
+		ModalLabel:     "貼上 PR URL",
+		ModalInputName: "pr_url",
+		// ModalMetadata intentionally empty — modal-first path.
+		Pending: p,
+	}
+	wf.executeStep(context.Background(), p, step, "trigger-abc")
+
+	wf.mu.Lock()
+	stored, ok := wf.pending["modal-req-xyz"]
+	wf.mu.Unlock()
+	if !ok {
+		t.Fatal("expected pending stored under synthesised 'modal-<reqID>' key")
+	}
+	if stored != p {
+		t.Error("stored pending differs from supplied pending")
+	}
+	if p.SelectorTS != "modal-req-xyz" {
+		t.Errorf("pending.SelectorTS = %q, want modal-req-xyz", p.SelectorTS)
 	}
 }
 

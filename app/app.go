@@ -278,9 +278,12 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 			})
 		}
 
-		// Enrich job with thread context and attachments.
+		// Enrich job with thread context and attachments. BotName lets the
+		// agent self-refer using the actual Slack handle instead of inventing
+		// persona labels like "@bot ask 助理".
 		if job.PromptContext != nil {
 			job.PromptContext.ThreadMessages = threadMsgs
+			job.PromptContext.BotName = identity.Username
 		}
 		job.Attachments = attachMeta
 		job.Skills = loadSkills(ctx, skillLoader, appLogger)
@@ -414,9 +417,16 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 
 	appLogger.Info("啟動 Bot", "phase", "處理中", "version", Version, "commit", Commit, "date", Date)
 
+	// One goroutine per event: Slack BlockSuggestion responses have a ~3s
+	// server-side deadline, so a single slow event (PostMessage, thread
+	// fetch, selector update) in front of type-ahead events makes the
+	// external selector silently render "no results" until the queue
+	// drains. All shared state (handler, workflow pending map, retry
+	// handler) is mu-protected, so parallel dispatch is safe.
 	go func() {
 		for evt := range sm.Events {
-			handleSocketEvent(evt, sm, handler, wf, slackClient, jobStore, bundle, retryHandler, cfg, identity.UserID, appLogger)
+			evt := evt
+			go handleSocketEvent(evt, sm, handler, wf, slackClient, jobStore, bundle, retryHandler, cfg, identity.UserID, appLogger)
 		}
 	}()
 
@@ -491,7 +501,10 @@ func handleSocketEvent(
 		}
 		if cb.Type == slack.InteractionTypeBlockSuggestion {
 			appLogger.Info("收到搜尋建議", "phase", "接收", "action_id", cb.ActionID, "value", cb.Value)
-			if cb.ActionID == "repo_search" {
+			// Any external-selector action that expects repo suggestions goes
+			// through HandleRepoSuggestion. Issue uses "repo_search"; Ask uses
+			// "ask_repo" (fallback when the channel has no repos configured).
+			if cb.ActionID == "repo_search" || cb.ActionID == "ask_repo" {
 				options := wf.HandleRepoSuggestion(cb.Value)
 				appLogger.Info("Repo 搜尋結果", "phase", "處理中", "query", cb.Value, "count", len(options))
 				var opts []*slack.OptionBlockObject
@@ -529,14 +542,6 @@ func handleInteraction(
 		appLogger.Info("收到按鈕互動", "phase", "接收", "action_id", action.ActionID, "value", action.Value, "selector_ts", selectorTS)
 
 		switch {
-		case action.ActionID == "d_selector":
-			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
-		case action.ActionID == "repo_search" && action.SelectedOption.Value != "":
-			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.SelectedOption.Value, selectorTS)
-		case strings.HasPrefix(action.ActionID, "repo_select"):
-			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
-		case strings.HasPrefix(action.ActionID, "branch_select"):
-			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
 		case strings.HasPrefix(action.ActionID, "description_action"):
 			wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
 		case action.ActionID == "back_to_repo":
@@ -557,18 +562,43 @@ func handleInteraction(
 			} else {
 				slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":information_source: 此任務已結束")
 			}
+		default:
+			// Any other selector/button routes through the dispatcher via
+			// HandleSelection. External selectors (repo_search, ask_repo
+			// when rendered as a search menu) carry the pick in
+			// SelectedOption.Value; buttons carry it in action.Value.
+			// cb.TriggerID is forwarded so workflows can return
+			// NextStepOpenModal in response (e.g. pr_review_confirm "manual").
+			value := action.Value
+			if action.SelectedOption.Value != "" {
+				value = action.SelectedOption.Value
+			}
+			wf.HandleSelection(cb.Channel.ID, action.ActionID, value, selectorTS, cb.TriggerID)
 		}
 	case slack.InteractionTypeViewSubmission:
 		meta := cb.View.PrivateMetadata
-		desc := ""
-		if v, ok := cb.View.State.Values["description_block"]["description_input"]; ok {
-			desc = v.Value
-		}
-		wf.HandleDescriptionSubmit(meta, desc)
+		// Each workflow picks its own ModalInputName (Issue/Ask: "description",
+		// PR Review: "pr_url"), which becomes the action_id; the block_id is
+		// "<name>_block". Iterate instead of hardcoding so one modal handler
+		// serves every workflow.
+		wf.HandleDescriptionSubmit(meta, firstModalValue(cb.View.State.Values))
 	case slack.InteractionTypeViewClosed:
 		meta := cb.View.PrivateMetadata
 		wf.HandleDescriptionSubmit(meta, "")
 	}
+}
+
+// firstModalValue returns the single text input from a modal's State.Values.
+// Every modal opened by OpenTextInputModal has one input block with one
+// action, so iteration order doesn't matter — we take whatever is there.
+// Returns "" when the modal is empty or malformed.
+func firstModalValue(values map[string]map[string]slack.BlockAction) string {
+	for _, block := range values {
+		for _, v := range block {
+			return v.Value
+		}
+	}
+	return ""
 }
 
 // loadSkills loads the current skill set from the skill loader. Returns nil on

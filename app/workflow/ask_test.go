@@ -44,19 +44,29 @@ func newTestAskWorkflow(t *testing.T) (*AskWorkflow, *fakeSlackPort) {
 	return NewAskWorkflow(cfg, slack, nil, slog.Default()), slack
 }
 
-func TestAskWorkflow_Selection_SkipGoesToSubmit(t *testing.T) {
+func TestAskWorkflow_Selection_SkipRoutesToDescriptionPrompt(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
 	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
 	step, err := w.Selection(context.Background(), p, "skip")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepSubmit {
-		t.Errorf("expected NextStepSubmit, got %v", step.Kind)
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
 	}
 	st := p.State.(*askState)
 	if st.AttachRepo {
-		t.Error("AttachRepo should be false")
+		t.Error("AttachRepo should be false on skip")
+	}
+	// Action IDs reuse description_action so app.go's existing route
+	// handles the modal-trigger-id forwarding without a new special case.
+	for _, a := range step.SelectorActions {
+		if a.ActionID != "description_action" {
+			t.Errorf("ActionID = %q, want description_action", a.ActionID)
+		}
 	}
 }
 
@@ -73,10 +83,215 @@ func TestAskWorkflow_Selection_AttachShowsRepoSelector(t *testing.T) {
 	}
 }
 
-func TestAskWorkflow_Selection_RepoChoiceGoesToSubmit(t *testing.T) {
+func TestAskWorkflow_Selection_RepoChoiceRoutesToDescriptionPrompt(t *testing.T) {
+	// branch_select defaults to nil (disabled), so after repo pick we skip
+	// the branch step entirely and jump straight to description prompt.
 	w, _ := newTestAskWorkflow(t)
 	p := &Pending{Phase: "ask_repo_select", State: &askState{Question: "Q", AttachRepo: true}, ChannelID: "C1", ThreadTS: "1.0"}
 	step, err := w.Selection(context.Background(), p, "foo/bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.SelectedRepo != "foo/bar" {
+		t.Errorf("SelectedRepo = %q", st.SelectedRepo)
+	}
+}
+
+func TestAskWorkflow_Selection_RepoChoiceWithBranchesShowsBranchSelector(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	trueVal := true
+	w.cfg.ChannelDefaults.BranchSelect = &trueVal
+	w.cfg.ChannelDefaults.Branches = []string{"main", "dev"}
+	p := &Pending{Phase: "ask_repo_select", State: &askState{Question: "Q", AttachRepo: true}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "foo/bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected NextStepPostSelector (branch selector), got %v", step.Kind)
+	}
+	if p.Phase != "ask_branch_select" {
+		t.Errorf("Phase = %q, want ask_branch_select", p.Phase)
+	}
+	// 2 branches + 1 cancel button.
+	if len(step.SelectorActions) != 3 {
+		t.Errorf("expected 3 actions (2 branches + 取消), got %d", len(step.SelectorActions))
+	}
+	sawCancel := false
+	for _, a := range step.SelectorActions {
+		if a.ActionID != "ask_branch" {
+			t.Errorf("ActionID = %q, want ask_branch", a.ActionID)
+		}
+		if a.Value == "取消" {
+			sawCancel = true
+		}
+	}
+	if !sawCancel {
+		t.Error("cancel button missing from branch selector")
+	}
+}
+
+func TestAskWorkflow_Selection_RepoSelectCancelReturnsCancel(t *testing.T) {
+	// 取消 on repo picker must yield NextStepCancel so the dispatcher clears
+	// dedup and stops — no submit, no error.
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_repo_select", State: &askState{Question: "Q", AttachRepo: true}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "取消")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepCancel {
+		t.Errorf("expected NextStepCancel, got %v", step.Kind)
+	}
+	st := p.State.(*askState)
+	if st.SelectedRepo != "" {
+		t.Errorf("SelectedRepo leaked on cancel: %q", st.SelectedRepo)
+	}
+}
+
+func TestAskWorkflow_Selection_BranchSelectCancelReturnsCancel(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_branch_select", State: &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "取消")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepCancel {
+		t.Errorf("expected NextStepCancel, got %v", step.Kind)
+	}
+	st := p.State.(*askState)
+	if st.SelectedBranch != "" {
+		t.Errorf("SelectedBranch leaked on cancel: %q", st.SelectedBranch)
+	}
+}
+
+func TestAskWorkflow_Selection_AttachWithReposIncludesCancel(t *testing.T) {
+	// Button-based repo selector must include 取消 so the user isn't stuck on
+	// the picker if they change their mind.
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "attach")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2 repos + 1 cancel.
+	if len(step.SelectorActions) != 3 {
+		t.Errorf("expected 3 actions (2 repos + 取消), got %d", len(step.SelectorActions))
+	}
+	sawCancel := false
+	for _, a := range step.SelectorActions {
+		if a.Value == "取消" {
+			sawCancel = true
+		}
+	}
+	if !sawCancel {
+		t.Error("cancel button missing from repo selector")
+	}
+}
+
+func TestAskWorkflow_Selection_AttachExternalSearchIncludesCancel(t *testing.T) {
+	// External-search path (no configured repos) must also carry cancel info
+	// so the dispatcher renders the button alongside the search dropdown.
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "attach")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepPostExternalSelector {
+		t.Fatalf("expected NextStepPostExternalSelector, got %v", step.Kind)
+	}
+	if step.SelectorCancelActionID == "" || step.SelectorCancelLabel == "" {
+		t.Errorf("expected cancel info on external selector, got actionID=%q label=%q",
+			step.SelectorCancelActionID, step.SelectorCancelLabel)
+	}
+}
+
+func TestAskWorkflow_Selection_BranchPickGoesToDescriptionPrompt(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_branch_select", State: &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "feature/xyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.SelectedBranch != "feature/xyz" {
+		t.Errorf("SelectedBranch = %q, want feature/xyz", st.SelectedBranch)
+	}
+}
+
+func TestAskWorkflow_Selection_SingleBranchSkipsSelector(t *testing.T) {
+	// With only one branch we auto-select and skip the picker — saves a
+	// pointless click when repos have a single default branch.
+	w, _ := newTestAskWorkflow(t)
+	trueVal := true
+	w.cfg.ChannelDefaults.BranchSelect = &trueVal
+	w.cfg.ChannelDefaults.Branches = []string{"main"}
+	p := &Pending{Phase: "ask_repo_select", State: &askState{Question: "Q", AttachRepo: true}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "foo/bar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.SelectedBranch != "main" {
+		t.Errorf("SelectedBranch = %q, want main (auto-selected)", st.SelectedBranch)
+	}
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected description prompt selector, got %v", step.Kind)
+	}
+}
+
+func TestAskWorkflow_Selection_DescriptionSkipGoesToSubmit(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_description_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "跳過")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSubmit {
+		t.Errorf("expected NextStepSubmit, got %v", step.Kind)
+	}
+}
+
+func TestAskWorkflow_Selection_DescriptionOpensModal(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_description_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0", SelectorTS: "sel-1"}
+	step, err := w.Selection(context.Background(), p, "補充說明")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepOpenModal {
+		t.Errorf("expected NextStepOpenModal, got %v", step.Kind)
+	}
+	if p.Phase != "ask_description_modal" {
+		t.Errorf("Phase = %q, want ask_description_modal", p.Phase)
+	}
+	if step.ModalMetadata != "sel-1" {
+		t.Errorf("ModalMetadata = %q, want the current selectorTS so HandleDescriptionSubmit can find the pending again", step.ModalMetadata)
+	}
+}
+
+func TestAskWorkflow_Selection_DescriptionModalAppendsToQuestion(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_description_modal", State: &askState{Question: "原始問題"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "還請一併說明 X 如何運作")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +299,29 @@ func TestAskWorkflow_Selection_RepoChoiceGoesToSubmit(t *testing.T) {
 		t.Errorf("expected NextStepSubmit, got %v", step.Kind)
 	}
 	st := p.State.(*askState)
-	if st.SelectedRepo != "foo/bar" {
-		t.Errorf("SelectedRepo = %q", st.SelectedRepo)
+	wantSubstrings := []string{"原始問題", "還請一併說明 X 如何運作"}
+	for _, s := range wantSubstrings {
+		if !strings.Contains(st.Question, s) {
+			t.Errorf("Question missing %q: got %q", s, st.Question)
+		}
+	}
+}
+
+func TestAskWorkflow_Selection_DescriptionModalEmptyLeavesQuestion(t *testing.T) {
+	// Modal close (ViewClosed) sends empty text. Question must stay unchanged
+	// so the agent doesn't get an empty or double-newlined prompt.
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_description_modal", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
+	step, err := w.Selection(context.Background(), p, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSubmit {
+		t.Errorf("expected NextStepSubmit, got %v", step.Kind)
+	}
+	st := p.State.(*askState)
+	if st.Question != "Q" {
+		t.Errorf("Question mutated on empty modal: %q", st.Question)
 	}
 }
 
@@ -165,6 +401,30 @@ func TestAskWorkflow_BuildJob_WithRepo_PopulatesCloneURL(t *testing.T) {
 	}
 	if job.CloneURL != "https://github.com/foo/bar.git" {
 		t.Errorf("CloneURL = %q", job.CloneURL)
+	}
+}
+
+func TestAskWorkflow_BuildJob_WithBranch_PopulatesBranch(t *testing.T) {
+	// SelectedBranch must surface on Job.Branch AND PromptContext.Branch so
+	// the worker (a) clones the right ref and (b) mentions it in the prompt.
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		RequestID: "req-3",
+		State: &askState{
+			Question: "Q", AttachRepo: true,
+			SelectedRepo: "foo/bar", SelectedBranch: "feature/xyz",
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Branch != "feature/xyz" {
+		t.Errorf("Job.Branch = %q, want feature/xyz", job.Branch)
+	}
+	if job.PromptContext == nil || job.PromptContext.Branch != "feature/xyz" {
+		t.Errorf("PromptContext.Branch missing or wrong: %+v", job.PromptContext)
 	}
 }
 

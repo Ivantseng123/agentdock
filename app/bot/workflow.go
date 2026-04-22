@@ -134,15 +134,20 @@ var dSelectorLabel = map[string]string{
 	"pr_review": "🔍 Review PR",
 }
 
-// HandleSelection handles a button click on a selector message. It looks up
-// the pending state by selectorMsgTS, removes it from the map, and
-// calls dispatcher.HandleSelection.
-func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS string) {
+// HandleSelection handles a button click or external-selector pick on a
+// selector message. It looks up the pending state by selectorMsgTS and
+// calls dispatcher.HandleSelection. triggerID is forwarded to executeStep
+// so the dispatched workflow can open a modal in response (e.g.
+// pr_review_confirm → "改貼 URL"); pass "" when none.
+//
+// The pending map entry is removed only if the resulting step doesn't
+// keep it alive under the same key — NextStepOpenModal carries the key
+// forward via private_metadata so the modal submit can find the same
+// pending; NextStepPostSelector re-keys it under a new selectorTS inside
+// executeStep via storePending.
+func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, triggerID string) {
 	w.mu.Lock()
 	pending, ok := w.pending[selectorMsgTS]
-	if ok {
-		delete(w.pending, selectorMsgTS)
-	}
 	w.mu.Unlock()
 	if !ok {
 		return
@@ -162,9 +167,17 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS str
 	step, err := w.dispatcher.HandleSelection(ctx, pending, value)
 	if err != nil {
 		w.logger.Error("HandleSelection dispatch failed", "phase", "失敗", "error", err)
+		w.mu.Lock()
+		delete(w.pending, selectorMsgTS)
+		w.mu.Unlock()
 		return
 	}
-	w.executeStep(ctx, pending, step, "")
+	if step.Kind != workflow.NextStepOpenModal {
+		w.mu.Lock()
+		delete(w.pending, selectorMsgTS)
+		w.mu.Unlock()
+	}
+	w.executeStep(ctx, pending, step, triggerID)
 }
 
 // HandleDescriptionAction handles the "補充說明" / "跳過" button click on the
@@ -218,10 +231,8 @@ func (w *Workflow) HandleDescriptionSubmit(selectorMsgTS, extraText string) {
 			":memo: 補充說明: "+extraText)
 	}
 
-	// Set phase to description_modal so IssueWorkflow.Selection routes
-	// the value through the extra-desc branch.
-	pending.Phase = "description_modal"
-
+	// Phase is now owned by the workflow itself (issue → "description_modal",
+	// pr_review → "pr_review_modal"). We just forward the submitted text.
 	ctx := context.Background()
 	step, err := w.dispatcher.HandleSelection(ctx, pending, extraText)
 	if err != nil {
@@ -257,15 +268,26 @@ func (w *Workflow) HandleBackToRepo(channelID, selectorMsgTS string) {
 // executeStep applies a NextStep from a workflow: posts a selector, opens a
 // modal, triggers job submission, or renders an error. The triggerID is needed
 // for NextStepOpenModal; pass "" when not available.
+//
+// When step.Pending is set the workflow is signalling "use this pending for
+// the next round" — always prefer it over the caller's pending, otherwise a
+// fresh workflow created inside a d_selector click (e.g. AskWorkflow.Trigger)
+// has its new state thrown away and subsequent clicks route to the stale
+// d_selector pending.
 func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, step workflow.NextStep, triggerID string) {
+	if step.Pending != nil {
+		pending = step.Pending
+	}
 	if pending == nil {
 		return
 	}
 	switch step.Kind {
 	case workflow.NextStepPostSelector:
 		labels := make([]string, len(step.SelectorActions))
+		values := make([]string, len(step.SelectorActions))
 		for i, a := range step.SelectorActions {
 			labels[i] = a.Label
+			values[i] = a.Value
 		}
 		var selectorTS string
 		var err error
@@ -275,6 +297,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 				step.SelectorPrompt,
 				actionPrefix(step.SelectorActions),
 				labels,
+				values,
 				pending.ThreadTS,
 				step.SelectorBack,
 				"← 重新選 repo",
@@ -285,6 +308,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 				step.SelectorPrompt,
 				actionPrefix(step.SelectorActions),
 				labels,
+				values,
 				pending.ThreadTS,
 			)
 		}
@@ -305,6 +329,8 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 			step.SelectorActionID,
 			step.SelectorPlaceholder,
 			pending.ThreadTS,
+			step.SelectorCancelActionID,
+			step.SelectorCancelLabel,
 		)
 		if err != nil {
 			w.logger.Error("PostExternalSelector failed", "phase", "失敗", "error", err)
@@ -329,12 +355,21 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 			}
 			return
 		}
+		// Modal-first flows (PR Review D-path when thread has no URL) reach
+		// this case with no prior selector, so ModalMetadata is empty and
+		// pending was never stored. Synthesize a key from RequestID and store
+		// pending so HandleDescriptionSubmit can resolve it from PrivateMetadata.
+		meta := step.ModalMetadata
+		if meta == "" {
+			meta = "modal-" + pending.RequestID
+			w.storePending(meta, pending)
+		}
 		if err := w.slack.OpenTextInputModal(
 			tid,
 			step.ModalTitle,
 			step.ModalLabel,
 			step.ModalInputName,
-			step.ModalMetadata,
+			meta,
 		); err != nil {
 			w.logger.Error("OpenTextInputModal failed", "phase", "失敗", "error", err)
 			// Fall back: submit without extra description.
@@ -350,8 +385,9 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 				w.onSubmit(ctx, pending)
 			}
 		}
-		// Pending is already in the map under SelectorTS (set by HandleDescriptionAction's
-		// caller); the modal submit carries selectorMsgTS as private_metadata so we find it.
+		// Pending is now in the map under meta (either SelectorTS from a
+		// prior selector, or the synthesised "modal-<reqID>" key above); the
+		// modal submit carries meta as private_metadata so we find it.
 
 	case workflow.NextStepSubmit:
 		p := step.Pending
@@ -372,6 +408,14 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 
 	case workflow.NextStepNoop:
 		// Nothing to do.
+
+	case workflow.NextStepCancel:
+		// User aborted mid-flow. The selector ack (":white_check_mark: 取消")
+		// has already been posted by HandleSelection; just clear dedup so the
+		// same thread can accept a fresh @bot trigger.
+		if w.handler != nil {
+			w.handler.ClearThreadDedup(pending.ChannelID, pending.ThreadTS)
+		}
 
 	default:
 		w.logger.Warn("executeStep: unknown NextStepKind", "phase", "失敗", "kind", step.Kind)

@@ -36,6 +36,9 @@ var appCmd = &cobra.Command{
 		if v, ok := prompted["slack.bot_id"].(string); ok {
 			identity.BotID = v
 		}
+		if v, ok := prompted["slack.bot_username"].(string); ok {
+			identity.Username = v
+		}
 
 		handle, err := app.Run(appCfg, identity)
 		if err != nil {

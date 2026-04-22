@@ -216,6 +216,7 @@ func (w *PRReviewWorkflow) Selection(ctx context.Context, p *Pending, value stri
 				ModalTitle:     "PR Review",
 				ModalLabel:     "貼上 PR URL",
 				ModalInputName: "pr_url",
+				ModalMetadata:  p.SelectorTS,
 				Pending:        p,
 			}, nil
 		}

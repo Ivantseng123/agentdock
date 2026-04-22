@@ -41,10 +41,13 @@ func BuildPrompt(ctx queue.PromptContext, extraRules []string, attachments []Att
 		fmt.Fprintf(&b, "<extra_description>%s</extra_description>\n\n", xmlEscape(ctx.ExtraDescription))
 	}
 
-	// <issue_context> — channel, reporter, optional branch.
+	// <issue_context> — channel, reporter, optional bot identity, optional branch.
 	b.WriteString("<issue_context>\n")
 	fmt.Fprintf(&b, "  <channel>%s</channel>\n", xmlEscape(ctx.Channel))
 	fmt.Fprintf(&b, "  <reporter>%s</reporter>\n", xmlEscape(ctx.Reporter))
+	if ctx.BotName != "" {
+		fmt.Fprintf(&b, "  <bot>%s</bot>\n", xmlEscape(ctx.BotName))
+	}
 	if ctx.Branch != "" {
 		fmt.Fprintf(&b, "  <branch>%s</branch>\n", xmlEscape(ctx.Branch))
 	}

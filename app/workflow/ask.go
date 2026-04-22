@@ -13,9 +13,10 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
-// AskWorkflow handles @bot ask queries. Optional attached repo (short wizard),
-// no branch selection, no description modal. Result is an agent-produced
-// answer posted as a bot message in the thread.
+// AskWorkflow handles @bot ask queries. Optional attached repo with branch
+// selection (mirrors Issue when channel has branch_select enabled), plus an
+// optional description modal. Result is an agent-produced answer posted as a
+// bot message in the thread.
 type AskWorkflow struct {
 	cfg       *config.Config
 	slack     SlackPort
@@ -24,9 +25,10 @@ type AskWorkflow struct {
 }
 
 type askState struct {
-	Question     string // from args; empty = use thread only
-	AttachRepo   bool
-	SelectedRepo string
+	Question       string // from args; empty = use thread only
+	AttachRepo     bool
+	SelectedRepo   string
+	SelectedBranch string
 }
 
 // NewAskWorkflow constructs a workflow instance.
@@ -72,9 +74,18 @@ func (w *AskWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string)
 	}, nil
 }
 
-// Selection handles follow-up button clicks for the ask wizard. Two phases
-// are possible: ask_repo_prompt (attach/skip decision) and ask_repo_select
-// (user picked a specific repo, or supplied one via external search).
+// Selection handles follow-up button clicks for the ask wizard. Five
+// phases flow through here:
+//   - ask_repo_prompt: attach/skip decision.
+//   - ask_repo_select: user picked a specific repo, via button or external search.
+//   - ask_branch_select: user picked a branch (only when branch_select enabled and repo has >1 branch).
+//   - ask_description_prompt: optionally supplement the question via modal.
+//   - ask_description_modal: modal submit; value is the text the user typed.
+//
+// Both skip-attach and repo-pick converge into ask_description_prompt so
+// every ask gets the chance to clarify what the agent should actually do.
+// The D-selector path (empty args) especially needs this — otherwise the
+// agent only sees the raw thread, which is often ambiguous.
 func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (NextStep, error) {
 	st, ok := p.State.(*askState)
 	if !ok {
@@ -85,7 +96,8 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 	case "ask_repo_prompt":
 		if value == "skip" {
 			st.AttachRepo = false
-			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
+			p.Phase = "ask_description_prompt"
+			return w.descriptionPromptStep(p), nil
 		}
 		// "attach" → move to repo selection.
 		st.AttachRepo = true
@@ -96,19 +108,23 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 		repos := channelCfg.GetRepos()
 		p.Phase = "ask_repo_select"
 		if len(repos) == 0 {
-			// No repos configured — fall back to external search.
+			// No repos configured — fall back to external search. Cancel button
+			// rides along so the user isn't stuck if they change their mind.
 			return NextStep{
-				Kind:                NextStepPostExternalSelector,
-				SelectorPrompt:      ":point_right: Search and select a repo:",
-				SelectorActionID:    "ask_repo",
-				SelectorPlaceholder: "Type to search repos...",
-				Pending:             p,
+				Kind:                   NextStepPostExternalSelector,
+				SelectorPrompt:         ":point_right: Search and select a repo:",
+				SelectorActionID:       "ask_repo",
+				SelectorPlaceholder:    "Type to search repos...",
+				SelectorCancelActionID: "ask_cancel",
+				SelectorCancelLabel:    "取消",
+				Pending:                p,
 			}, nil
 		}
-		actions := make([]SelectorAction, len(repos))
-		for i, r := range repos {
-			actions[i] = SelectorAction{ActionID: "ask_repo", Label: r, Value: r}
+		actions := make([]SelectorAction, 0, len(repos)+1)
+		for _, r := range repos {
+			actions = append(actions, SelectorAction{ActionID: "ask_repo", Label: r, Value: r})
 		}
+		actions = append(actions, SelectorAction{ActionID: "ask_repo", Label: "取消", Value: "取消"})
 		return NextStep{
 			Kind:            NextStepPostSelector,
 			SelectorPrompt:  ":point_right: Which repo?",
@@ -117,11 +133,127 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 		}, nil
 
 	case "ask_repo_select":
+		if value == "取消" {
+			return NextStep{Kind: NextStepCancel}, nil
+		}
 		st.SelectedRepo = value
+		return w.afterRepoSelectedStep(p), nil
+
+	case "ask_branch_select":
+		if value == "取消" {
+			return NextStep{Kind: NextStepCancel}, nil
+		}
+		st.SelectedBranch = value
+		p.Phase = "ask_description_prompt"
+		return w.descriptionPromptStep(p), nil
+
+	case "ask_description_prompt":
+		switch value {
+		case "跳過":
+			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
+		case "補充說明":
+			// Phase must flip before OpenModal so the modal submit routes to
+			// ask_description_modal (HandleDescriptionSubmit no longer rewrites
+			// phase — it's workflow-owned now).
+			p.Phase = "ask_description_modal"
+			return NextStep{
+				Kind:           NextStepOpenModal,
+				ModalTitle:     "補充說明",
+				ModalLabel:     "補充你想讓 agent 做什麼",
+				ModalInputName: "description",
+				ModalMetadata:  p.SelectorTS,
+				Pending:        p,
+			}, nil
+		default:
+			return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf(":x: unexpected description value: %q", value)}, nil
+		}
+
+	case "ask_description_modal":
+		// value is the text the user submitted in the modal (empty on modal
+		// close). Append to the original args-based Question so users who
+		// typed `@bot ask <prefix>` can add more context without losing it.
+		if value != "" {
+			if st.Question != "" {
+				st.Question = st.Question + "\n\n" + value
+			} else {
+				st.Question = value
+			}
+		}
 		return NextStep{Kind: NextStepSubmit, Pending: p}, nil
 	}
 
 	return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf("unknown phase %q", p.Phase)}, nil
+}
+
+// afterRepoSelectedStep decides whether to show a branch selector or jump
+// straight to the description prompt. Mirrors IssueWorkflow.afterRepoSelected:
+// branch_select flag off, or ≤1 branch resolved, → skip branch step entirely.
+// When repoCache is nil or branch listing fails, fall through to description
+// prompt rather than erroring — branch is optional context for Ask.
+func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
+	st := p.State.(*askState)
+
+	channelCfg := w.cfg.ChannelDefaults
+	if cc, ok := w.cfg.Channels[p.ChannelID]; ok {
+		channelCfg = cc
+	}
+
+	if !channelCfg.IsBranchSelectEnabled() {
+		p.Phase = "ask_description_prompt"
+		return w.descriptionPromptStep(p)
+	}
+
+	var branches []string
+	if len(channelCfg.Branches) > 0 {
+		branches = channelCfg.Branches
+	} else if w.repoCache != nil {
+		ghToken := ""
+		if w.cfg.Secrets != nil {
+			ghToken = w.cfg.Secrets["GH_TOKEN"]
+		}
+		if repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, ghToken); err == nil {
+			if lb, listErr := w.repoCache.ListBranches(repoPath); listErr == nil {
+				branches = lb
+			}
+		}
+	}
+
+	if len(branches) <= 1 {
+		if len(branches) == 1 {
+			st.SelectedBranch = branches[0]
+		}
+		p.Phase = "ask_description_prompt"
+		return w.descriptionPromptStep(p)
+	}
+
+	p.Phase = "ask_branch_select"
+	actions := make([]SelectorAction, 0, len(branches)+1)
+	for _, b := range branches {
+		actions = append(actions, SelectorAction{ActionID: "ask_branch", Label: b, Value: b})
+	}
+	actions = append(actions, SelectorAction{ActionID: "ask_branch", Label: "取消", Value: "取消"})
+	return NextStep{
+		Kind:            NextStepPostSelector,
+		SelectorPrompt:  fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
+		SelectorActions: actions,
+		Pending:         p,
+	}
+}
+
+// descriptionPromptStep returns the 補充說明 / 跳過 selector. ActionID
+// mirrors IssueWorkflow's so app.go's description_action route (which owns
+// the modal-trigger-id forwarding) handles the click without Ask needing
+// its own special case.
+func (w *AskWorkflow) descriptionPromptStep(p *Pending) NextStep {
+	return NextStep{
+		Kind:           NextStepPostSelector,
+		SelectorPrompt: ":pencil2: 要補充說明想讓 agent 做什麼嗎？",
+		SelectorActions: []SelectorAction{
+			{ActionID: "description_action", Label: "補充說明", Value: "補充說明"},
+			{ActionID: "description_action", Label: "跳過", Value: "跳過"},
+		},
+		Pending: p,
+	}
 }
 
 // BuildJob assembles the queue.Job from the completed pending state.
@@ -150,6 +282,7 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 		ThreadTS:    p.ThreadTS,
 		UserID:      p.UserID,
 		Repo:        st.SelectedRepo,
+		Branch:      st.SelectedBranch,
 		CloneURL:    cloneURL,
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
@@ -157,19 +290,26 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 			OutputRules:      w.cfg.Prompt.Ask.OutputRules,
 			Language:         w.cfg.Prompt.Language,
 			ExtraDescription: st.Question,
+			Branch:           st.SelectedBranch,
 			Channel:          p.ChannelName,
 			Reporter:         p.Reporter,
 			AllowWorkerRules: w.cfg.Prompt.IsWorkerRulesAllowed(),
 			// ThreadMessages, Attachments filled by downstream submit-helper.
 		},
-		// Skills intentionally nil — Ask flow defensive until empty-dir skill
-		// spike (Phase 4) observed-safe for a release cycle.
-		Skills: nil,
+		// Skills is populated by submitJob via loadSkills(); leaving it unset
+		// here (instead of Skills: nil) avoids the misleading impression that
+		// Ask opts out — the override in app.go:286 applies to every workflow.
 	}
 	return job, ":thinking_face: 思考中...", nil
 }
 
 const askMaxChars = 38000
+
+// askInlineThreshold is the char length above which the answer goes into
+// an uploaded .md file instead of the Slack message body. 2000 keeps most
+// replies inline while packaging long-form answers so the channel isn't
+// swamped. Matches where Slack's own text readability starts to degrade.
+const askInlineThreshold = 2000
 
 // HandleResult renders the agent output into the Slack thread. Failure paths
 // are posted without a retry button (Ask is best-effort). Parse failures and
@@ -208,11 +348,25 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 	return w.post(job, answer)
 }
 
-// post writes to the job's status message if set, else posts a new message
-// in the thread.
+// post writes the answer into the thread. Short answers replace the
+// status message inline; answers over askInlineThreshold are uploaded as
+// an answer.md file with a short preview comment, because long bodies
+// render awkwardly in Slack's message column and agent output is
+// mrkdwn-styled (which collapses its own structure at length).
 func (w *AskWorkflow) post(job *queue.Job, text string) error {
-	if job.StatusMsgTS != "" {
-		return w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+	if len(text) <= askInlineThreshold {
+		if job.StatusMsgTS != "" {
+			return w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+		}
+		return w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
 	}
-	return w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
+
+	preview := fmt.Sprintf(":memo: 答案較長（約 %d 字），已附為檔案：", len(text))
+	if job.StatusMsgTS != "" {
+		// Flip the earlier "思考中..." status into the preview so the
+		// thread has one lifecycle marker + the file, not two notices.
+		_ = w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, preview)
+		return w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", text, "")
+	}
+	return w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", text, preview)
 }

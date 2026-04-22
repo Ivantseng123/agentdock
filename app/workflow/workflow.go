@@ -53,6 +53,7 @@ const (
 	NextStepError
 	NextStepNoop                // used when the workflow handled everything in-place (rare)
 	NextStepPostExternalSelector // external searchable selector (no configured repos)
+	NextStepCancel               // user aborted mid-flow; dispatcher clears dedup and stops
 )
 
 // NextStep is a discriminated union of what the dispatcher should do next.
@@ -66,8 +67,10 @@ type NextStep struct {
 	SelectorBack    string // optional "back" action ID; empty = no back button
 
 	// PostExternalSelector — Kind == NextStepPostExternalSelector
-	SelectorActionID    string // Slack action_id for the external select
-	SelectorPlaceholder string // placeholder text shown in the search box
+	SelectorActionID       string // Slack action_id for the external select
+	SelectorPlaceholder    string // placeholder text shown in the search box
+	SelectorCancelActionID string // optional cancel button action_id; empty = no cancel
+	SelectorCancelLabel    string // cancel button label (e.g. "取消")
 
 	// OpenModal — Kind == NextStepOpenModal
 	ModalTriggerID string

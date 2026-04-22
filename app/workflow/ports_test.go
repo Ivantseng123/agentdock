@@ -42,17 +42,17 @@ func (f *fakeSlackPort) UpdateMessageWithButton(ch, mts, text, aid, bt, val stri
 	return nil
 }
 
-func (f *fakeSlackPort) PostSelector(ch, prompt, prefix string, opts []string, ts string) (string, error) {
+func (f *fakeSlackPort) PostSelector(ch, prompt, prefix string, labels, values []string, ts string) (string, error) {
 	f.Selectors = append(f.Selectors, prompt)
 	return "sel-ts", nil
 }
 
-func (f *fakeSlackPort) PostSelectorWithBack(ch, prompt, prefix string, opts []string, ts, back, bl string) (string, error) {
+func (f *fakeSlackPort) PostSelectorWithBack(ch, prompt, prefix string, labels, values []string, ts, back, bl string) (string, error) {
 	f.Selectors = append(f.Selectors, prompt)
 	return "sel-ts", nil
 }
 
-func (f *fakeSlackPort) PostExternalSelector(ch, prompt, aid, ph, ts string) (string, error) {
+func (f *fakeSlackPort) PostExternalSelector(ch, prompt, aid, ph, ts, cancelAID, cancelLabel string) (string, error) {
 	f.Selectors = append(f.Selectors, prompt)
 	return "sel-ts", nil
 }
@@ -70,6 +70,16 @@ func (f *fakeSlackPort) FetchThreadContext(c, ts, tts string, lim int) ([]slackc
 }
 
 func (f *fakeSlackPort) DownloadAttachments(msgs []slackclient.ThreadRawMessage, dir string) []slackclient.AttachmentDownload {
+	return nil
+}
+
+func (f *fakeSlackPort) UploadFile(channelID, threadTS, filename, title, content, initialComment string) error {
+	// Record the file body in Posted so tests that verify "the answer reached
+	// Slack" don't care whether the answer went inline or into a file.
+	f.Posted = append(f.Posted, content)
+	if initialComment != "" {
+		f.Posted = append(f.Posted, initialComment)
+	}
 	return nil
 }
 

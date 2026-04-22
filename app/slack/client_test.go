@@ -74,6 +74,29 @@ func TestFilterThreadMessages_BotTextFromBlocks(t *testing.T) {
 	}
 }
 
+func TestFilterThreadMessages_DropsEmptyBotMentions(t *testing.T) {
+	// @bot triggers that got deduped still sit in the thread as pure
+	// "<@UBOT>" messages. They carry no signal and bloat the agent prompt,
+	// so they should be dropped. Real mention-plus-text must survive.
+	messages := []slack.Message{
+		{Msg: slack.Msg{User: "U001", Text: "<@UBOT>", Timestamp: "1000.0"}},
+		{Msg: slack.Msg{User: "U001", Text: "  <@UBOT> ", Timestamp: "1001.0"}},
+		{Msg: slack.Msg{User: "U001", Text: "<@UBOT> <@UBOT>", Timestamp: "1002.0"}},
+		{Msg: slack.Msg{User: "U001", Text: "<@UBOT> fix this", Timestamp: "1003.0"}},
+		{Msg: slack.Msg{User: "U001", Text: "<@SOMEONE_ELSE>", Timestamp: "1004.0"}},
+	}
+	result := filterThreadMessages(messages, "9999.0", "UBOT", "")
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages (mention+text and other-user mention), got %d: %+v", len(result), result)
+	}
+	if result[0].Text != "<@UBOT> fix this" {
+		t.Errorf("msg[0].Text = %q, want '<@UBOT> fix this'", result[0].Text)
+	}
+	if result[1].Text != "<@SOMEONE_ELSE>" {
+		t.Errorf("msg[1].Text = %q, want '<@SOMEONE_ELSE>'", result[1].Text)
+	}
+}
+
 func TestFilterThreadMessages_EmptyIdentityKeepsAll(t *testing.T) {
 	messages := []slack.Message{
 		{Msg: slack.Msg{User: "U001", Text: "human", Timestamp: "1000.0"}},

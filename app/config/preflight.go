@@ -65,6 +65,7 @@ func preflightSlackBot(cfg *Config, interactive bool, prompted map[string]any) e
 		prompt.OK("Slack bot token valid (user_id: %s)", identity.UserID)
 		prompted["slack.bot_user_id"] = identity.UserID
 		prompted["slack.bot_id"] = identity.BotID
+		prompted["slack.bot_username"] = identity.Username
 		return nil
 	}
 	if !interactive {
@@ -93,6 +94,7 @@ func preflightSlackBot(cfg *Config, interactive bool, prompted map[string]any) e
 		prompted["slack.bot_token"] = token
 		prompted["slack.bot_user_id"] = identity.UserID
 		prompted["slack.bot_id"] = identity.BotID
+		prompted["slack.bot_username"] = identity.Username
 		prompt.OK("Slack bot token valid (user_id: %s)", identity.UserID)
 		return nil
 	}

@@ -37,16 +37,16 @@ func (a *slackAdapterPort) UpdateMessageWithButton(channelID, messageTS, text, a
 	return a.client.UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value)
 }
 
-func (a *slackAdapterPort) PostSelector(channelID, prompt, actionPrefix string, options []string, threadTS string) (string, error) {
-	return a.client.PostSelector(channelID, prompt, actionPrefix, options, threadTS)
+func (a *slackAdapterPort) PostSelector(channelID, prompt, actionPrefix string, labels, values []string, threadTS string) (string, error) {
+	return a.client.PostSelector(channelID, prompt, actionPrefix, labels, values, threadTS)
 }
 
-func (a *slackAdapterPort) PostSelectorWithBack(channelID, prompt, actionPrefix string, options []string, threadTS, backActionID, backLabel string) (string, error) {
-	return a.client.PostSelectorWithBack(channelID, prompt, actionPrefix, options, threadTS, backActionID, backLabel)
+func (a *slackAdapterPort) PostSelectorWithBack(channelID, prompt, actionPrefix string, labels, values []string, threadTS, backActionID, backLabel string) (string, error) {
+	return a.client.PostSelectorWithBack(channelID, prompt, actionPrefix, labels, values, threadTS, backActionID, backLabel)
 }
 
-func (a *slackAdapterPort) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error) {
-	return a.client.PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS)
+func (a *slackAdapterPort) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS, cancelActionID, cancelLabel string) (string, error) {
+	return a.client.PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS, cancelActionID, cancelLabel)
 }
 
 func (a *slackAdapterPort) OpenTextInputModal(triggerID, title, label, inputName, metadata string) error {
@@ -67,4 +67,8 @@ func (a *slackAdapterPort) FetchThreadContext(channelID, threadTS, triggerTS str
 
 func (a *slackAdapterPort) DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload {
 	return a.client.DownloadAttachments(messages, tempDir)
+}
+
+func (a *slackAdapterPort) UploadFile(channelID, threadTS, filename, title, content, initialComment string) error {
+	return a.client.UploadFile(channelID, threadTS, filename, title, content, initialComment)
 }
