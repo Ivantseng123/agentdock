@@ -6,10 +6,11 @@ AgentDock 的 Slack 端。`agentdock app` 的程式碼 module，獨立成 Go mod
 
 ## 責任範圍
 
-- 接收 Slack 事件（`@bot` 在 thread 中觸發 triage）
-- Repo / branch 選擇 + 補充說明互動
+- 接收 Slack 事件（`@bot <verb>` 在 thread 中觸發）
+- Workflow dispatcher：`issue` / `ask` / `review` 三個 verb + 空 `@bot` 時的三按鈕 selector
+- Workflow-specific UX：repo / branch picker、PR URL modal、補充說明 modal、取消按鈕
 - 讀 thread context、組 prompt、submit 到 job queue
-- 接 job 結果 → 建 GitHub issue → 回 post 到 Slack thread
+- 依 workflow 收尾：建 GitHub issue（issue）/ 在 thread 回答（ask）/ 回報 PR review 狀態（review）
 - Secret 管理（AES-256 加密傳給 worker）
 - HTTP endpoints：`/healthz`, `/jobs`, `/metrics`
 - Watchdog（偵測卡死的 job）

@@ -4,7 +4,15 @@
 
 > **Upgrading from v1?** See [docs/MIGRATION-v2.en.md](docs/MIGRATION-v2.en.md) (`config.yaml` splits into `app.yaml` + `worker.yaml`, flat worker schema). v0 → v1 is [docs/MIGRATION-v1.en.md](docs/MIGRATION-v1.en.md).
 
-AI agent dispatch platform — receives requests from any source, dispatches to CLI agents (claude/codex/opencode) for execution, returns structured results. Currently supports Slack → codebase triage → GitHub Issue workflow.
+AI agent dispatch platform — receives requests from Slack, dispatches to CLI agents (claude/codex/opencode) for execution, returns structured results. Three workflows today, all routed by `@bot <verb>`:
+
+| Verb | Example | Outcome |
+|------|---------|---------|
+| `issue` | `@bot issue` · `@bot owner/repo` (legacy bare-repo routes to issue) | Agent triages codebase → app creates GitHub issue → URL posted to thread |
+| `ask` | `@bot ask where is the retry logic?` | Agent reads thread (repo optional) → answers inline in thread, no issue created |
+| `review` | `@bot review <PR URL>` | Agent clones PR head → posts line-level comments + summary to the PR, reports status back to thread |
+
+No verb (`@bot`) → three-button selector lets you pick issue / ask / review. `review` is off by default; enable with `pr_review.enabled: true`.
 
 Single Go binary (`agentdock` with `app` / `worker` subcommands). Redis is the only transport today; `queue.transport` stays as the extension point for future backends. Repo contains three independent Go modules:
 
@@ -33,10 +41,10 @@ brew tap Ivantseng123/tap
 brew install agentdock
 agentdock init app -i       # create ~/.config/agentdock/app.yaml
 agentdock init worker -i    # create ~/.config/agentdock/worker.yaml
-agentdock app               # reads ~/.config/agentdock/app.yaml by default
+agentdock app               # in a second terminal, run `agentdock worker`
 ```
 
-Inmem mode (single-host) starts a local worker pool automatically, reading the sibling `worker.yaml`.
+App and worker always run as separate processes (`queue.transport: redis`; both sides must share the same Redis address and `secret_key`).
 
 **From source:**
 
@@ -54,14 +62,21 @@ Haven't created the Slack App yet? See [docs/slack-setup.en.md](docs/slack-setup
 ## Flow
 
 ```
-@bot (in thread)
-  → app: dedup + rate limit → read thread messages
-  → repo/branch selection (buttons) → optional description
-  → build prompt → Submit to Queue (immediate reply with queue status + cancel button)
-  → worker pulls job from Queue
-    → clone repo → mount skills → spawn agent CLI
-    → agent explores codebase + judges confidence → returns JSON result
-  → app receives result → create GitHub issue → post URL to Slack thread
+@bot <verb> (in thread)
+  → app: dedup + rate limit → workflow dispatcher
+    · Unknown verb or bare @bot → three-button selector
+    · Every selector / modal has a "Cancel" button that also clears dedup
+  → per-workflow UX:
+    · issue   → repo / branch selection → optional description
+    · ask     → optional repo attach (branch if multiple exist)
+    · review  → scan thread for PR URL; if missing → modal prompts for URL
+  → build prompt (with <bot> handle, thread, skill) → submit to Queue
+  → worker pulls job:
+    → prepare workdir (clone repo if provided, else empty dir)
+    → mount the workflow's skill (triage-issue / ask-assistant / github-pr-review)
+    → spawn CLI agent, returns the workflow-specific JSON
+      (===TRIAGE_RESULT=== / ===ASK_RESULT=== / ===REVIEW_RESULT===)
+  → app handles result per workflow: create issue / post answer / report PR review status
 ```
 
 ## Architecture

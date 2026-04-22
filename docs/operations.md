@@ -126,13 +126,17 @@ REDIS_ADDR=<host>:<port> GITHUB_TOKEN=<token> PROVIDERS=claude ./bot worker
 
 ## Agent 行為
 
-Agent 收到 prompt 後：
-1. 載入 triage-issue skill
-2. 探索 codebase（用自己的內建工具）
-3. 評估 confidence（low → 拒絕）
-4. 輸出結構化 JSON 結果（不直接建 issue）：
+每個 workflow 各自有 skill、各自的 JSON fence marker、app 端也各自收尾。
 
-```json
+### Issue（`@bot issue` / legacy bare-repo）
+
+1. 載入 `triage-issue` skill
+2. 探索 clone 下來的 repo（agent 內建工具）
+3. 評估 confidence（low → 拒絕建 issue）
+4. 輸出 `===TRIAGE_RESULT===` 後接 JSON：
+
+```
+===TRIAGE_RESULT===
 {
   "status": "CREATED",
   "title": "Login page broken after 3 failed attempts",
@@ -144,10 +148,42 @@ Agent 收到 prompt 後：
 }
 ```
 
-App 收到結果後：
+App 端：
 - `confidence=low` → 不建 issue，通知使用者
-- `files=0` 或 `questions>=5` → 建 issue 但不含 triage section
-- 正常 → 建完整 issue + 回 Slack thread
+- `files_found=0` 或 `open_questions>=5` → 建 issue 但不含 triage section
+- 正常 → 建完整 issue + URL 回 thread
+
+### Ask（`@bot ask <問題>`）
+
+1. 載入 `ask-assistant` skill
+2. 讀 `<issue_context>`（含 thread、`<bot>` handle、如果有附 repo 就多 repo 內容）
+3. 按 skill 分類意圖（codebase 問 / 一般問 / 超出範疇）
+4. 輸出 `===ASK_RESULT===` 後接 JSON：
+
+```
+===ASK_RESULT===
+{"answer": "<markdown answer, Slack mrkdwn 格式, ≤30000 chars>"}
+```
+
+App 端：
+- 直接把 `answer` 貼回 thread；不建 issue
+- 超過 30000 chars 會截尾並附警語
+
+### PR Review（`@bot review <PR URL>`，需 `pr_review.enabled: true`）
+
+1. 載入 `github-pr-review` skill
+2. 讀 PR diff（skill 會指 agent 用 `agentdock pr-review-helper` subcommand 去 fetch + post）
+3. Agent 本人在 PR 上留 line-level comments + summary review
+4. 輸出 `===REVIEW_RESULT===` 後接 JSON，三種 status：
+
+```
+===REVIEW_RESULT===
+{"status": "POSTED", "summary": "...", "severity_summary": "major|minor|nit"}
+{"status": "SKIPPED", "reason": "lockfile_only", "summary": "..."}
+{"status": "ERROR", "summary": "..."}
+```
+
+App 端：不碰 PR（agent 自己發 review），只把 status/summary 報回 thread。
 
 ## Debug：Redis Queue 診斷
 

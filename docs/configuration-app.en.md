@@ -49,9 +49,31 @@ channel_priority:
 
 prompt:
   language: English
-  goal: "Use the /triage-issue skill to investigate and produce a triage result."
-  output_rules: []                    # app-side rules (empty by default)
   allow_worker_rules: true            # whether worker.prompt.extra_rules is rendered
+
+  # One goal + output_rules block per workflow. Unset fields fall back to hardcoded defaults.
+  issue:
+    goal: "Use the /triage-issue skill to investigate and produce a triage result."
+    output_rules: []                  # issue workflow hardcodes its rules in app/workflow/issue.go spec
+  ask:
+    goal: "Answer the user's question ... Output ===ASK_RESULT=== followed by JSON ..."
+    output_rules:
+      - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
+      - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
+      - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
+  pr_review:
+    goal: "Review the PR. Use the github-pr-review skill ... Output ===REVIEW_RESULT=== ..."
+    output_rules:
+      - "Focus on correctness, security, style"
+      - "Summary ≤ 2000 chars"
+
+  # Legacy flat fields (pre-v2.1). Only copied into prompt.issue.* if prompt.issue.* is
+  # unset. New configs should write prompt.issue.* directly.
+  # goal: "..."
+  # output_rules: []
+
+pr_review:
+  enabled: false                      # PR Review workflow feature flag; off by default
 
 skills_config: /etc/agentdock/skills.yaml   # optional dynamic skill loader config
 
@@ -91,6 +113,24 @@ secrets:
   GH_TOKEN: ghp_xxx                   # key = env var name, value = plaintext; encrypted before sending to worker
   K8S_TOKEN: your-k8s-token
 ```
+
+## Workflow-specific prompts
+
+`prompt.issue` / `prompt.ask` / `prompt.pr_review` each carry their own `goal` + `output_rules`:
+- `goal` describes the agent's task. It usually names the skill to invoke (`triage-issue` / `ask-assistant` / `github-pr-review`) and the fence marker to emit (`===TRIAGE_RESULT===` / `===ASK_RESULT===` / `===REVIEW_RESULT===`).
+- `output_rules` are **hard constraints** rendered at the end of the prompt. Ask's defaults rely on this to force agents to self-identify via the `<bot>` handle — when a skill body's soft guidance isn't enough, promote the rule to `output_rules`.
+- Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`). `issue.output_rules` defaults to empty — issue workflow's hard rules live inline in `app/workflow/issue.go`'s spec.
+
+**Legacy alias**: the flat `prompt.goal` / `prompt.output_rules` fields are copied into `prompt.issue.*` at load time, but only if `prompt.issue.*` is empty. This keeps pre-v2.1 yaml valid; new configs should write `prompt.issue.*` directly.
+
+## Enabling PR Review
+
+`pr_review.enabled` defaults to `false`. Before turning it on, make sure:
+1. Workers have the `github-pr-review` skill mounted (their `skills_config` points to `agents/skills/github-pr-review`).
+2. `agentdock pr-review-helper` is available on the worker host (built-in subcommand — keep the binary in sync).
+3. `secrets.GH_TOKEN` has enough permission to post review comments on the target PR.
+
+Once enabled, `@bot review <PR URL>` routes to PRReviewWorkflow; with no URL, the workflow scans the thread and falls back to a modal.
 
 ## Log levels
 

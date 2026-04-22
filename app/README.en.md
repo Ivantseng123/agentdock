@@ -6,10 +6,11 @@ The Slack side of AgentDock. Holds the code for `agentdock app`, published as it
 
 ## Responsibilities
 
-- Accept Slack events (`@bot` mentions inside a thread)
-- Repo / branch picker + description prompt UX
+- Accept Slack events (`@bot <verb>` in a thread)
+- Workflow dispatcher: `issue` / `ask` / `review` verbs plus a three-button selector for bare `@bot`
+- Workflow-specific UX: repo / branch pickers, PR URL modal, description modal, cancel buttons
 - Read thread context, build the prompt, submit to the job queue
-- Receive job result → create GitHub issue → post URL back to the Slack thread
+- Per-workflow follow-up: create GitHub issue (issue), post answer in thread (ask), report PR review status (review)
 - Secret management (AES-256 encrypt before handing off to worker)
 - HTTP endpoints: `/healthz`, `/jobs`, `/metrics`
 - Watchdog for stuck jobs

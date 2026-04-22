@@ -17,9 +17,22 @@ Interactivity:
 - Enabled (for repo/branch selection buttons + cancel button + description modal)
 
 Slash Command:
-- `/triage`
+- `/triage` (fallback only — Slack doesn't expose thread context to slash commands, so the real trigger is `@bot <verb>`, see below)
 
 Socket Mode enabled, App-Level Token scope `connections:write`.
+
+## How to trigger
+
+Mention the bot inside a thread and pick a verb:
+
+| Command | Action |
+|---------|--------|
+| `@bot` | Posts a three-button selector (issue / ask / review) |
+| `@bot issue` · `@bot owner/repo` | IssueWorkflow (creates GitHub issue) |
+| `@bot ask <question>` | AskWorkflow (answers inline in the thread) |
+| `@bot review <PR URL>` | PRReviewWorkflow (posts review comments on the PR) |
+
+If `/triage` is invoked the bot replies with a hint telling the user to switch to `@bot`.
 
 ## Create App from Manifest
 
@@ -28,7 +41,7 @@ https://api.slack.com/apps → **Create New App** → **From a manifest**, paste
 ```yaml
 display_information:
   name: AgentDock
-  description: Turn Slack threads into GitHub issues
+  description: Turn Slack threads into GitHub issues, thread-grounded answers, or PR reviews
   background_color: "#1f2937"
 
 features:
@@ -37,8 +50,9 @@ features:
     always_online: true
   slash_commands:
     - command: /triage
-      description: Triage current thread into a GitHub issue
-      usage_hint: "(run inside a thread)"
+      # Kept for backward compat only — bot responds to /triage with a hint to use @bot.
+      description: (legacy) see `@bot`
+      usage_hint: "use @bot in a thread instead"
       should_escape: false
 
 oauth_config:

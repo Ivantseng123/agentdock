@@ -91,13 +91,17 @@ After timeout, bot notifies the Slack user and clears dedup so users can re-trig
 
 ## Agent Behavior
 
-After receiving the prompt, the agent:
-1. Loads triage-issue skill
-2. Explores codebase (using its own built-in tools)
-3. Evaluates confidence (low → reject)
-4. Outputs structured JSON result (does not create issue directly):
+Each workflow has its own skill, its own JSON fence marker, and its own app-side follow-up.
 
-```json
+### Issue (`@bot issue` / legacy bare-repo)
+
+1. Loads the `triage-issue` skill
+2. Explores the cloned repo with the agent's built-in tools
+3. Evaluates confidence (low → reject)
+4. Emits `===TRIAGE_RESULT===` followed by JSON:
+
+```
+===TRIAGE_RESULT===
 {
   "status": "CREATED",
   "title": "Login page broken after 3 failed attempts",
@@ -109,7 +113,37 @@ After receiving the prompt, the agent:
 }
 ```
 
-App receives result:
-- `confidence=low` → don't create issue, notify user
-- `files=0` or `questions>=5` → create issue without triage section
-- Normal → create full issue + post to Slack thread
+App side:
+- `confidence=low` → don't create the issue; notify the user
+- `files_found=0` or `open_questions>=5` → create issue but omit the triage section
+- Otherwise → create the full issue and post the URL back to the thread
+
+### Ask (`@bot ask <question>`)
+
+1. Loads the `ask-assistant` skill
+2. Reads `<issue_context>` (thread, `<bot>` handle, optional attached repo)
+3. Classifies intent per the skill (codebase question / general question / out of scope)
+4. Emits `===ASK_RESULT===` followed by JSON:
+
+```
+===ASK_RESULT===
+{"answer": "<markdown answer in Slack mrkdwn, ≤30000 chars>"}
+```
+
+App side: posts `answer` directly into the thread; no issue is created. Over-length answers are truncated with a warning suffix.
+
+### PR Review (`@bot review <PR URL>`, requires `pr_review.enabled: true`)
+
+1. Loads the `github-pr-review` skill
+2. Reads the PR diff (the skill instructs the agent to use the `agentdock pr-review-helper` subcommand for fetching + posting)
+3. The agent itself posts line-level comments and a summary review on the PR
+4. Emits `===REVIEW_RESULT===` followed by JSON — three possible statuses:
+
+```
+===REVIEW_RESULT===
+{"status": "POSTED", "summary": "...", "severity_summary": "major|minor|nit"}
+{"status": "SKIPPED", "reason": "lockfile_only", "summary": "..."}
+{"status": "ERROR", "summary": "..."}
+```
+
+App side: does not touch the PR (the agent posts its own review); only the status/summary is reported back to the thread.

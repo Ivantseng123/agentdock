@@ -4,7 +4,15 @@
 
 > **從 v1 升級到 v2？** 請見 [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md)（`config.yaml` 拆成 `app.yaml` + `worker.yaml`，worker schema 扁平化）。早期 v0 → v1 請見 [docs/MIGRATION-v1.md](docs/MIGRATION-v1.md)。
 
-AI agent 調度平台 — 從任何來源接收請求，分派給 CLI agent（claude/codex/opencode）執行，回傳結構化結果。目前支援 Slack → codebase triage → GitHub Issue 流程。
+AI agent 調度平台 — 從 Slack 接收請求，分派給 CLI agent（claude/codex/opencode）執行，回傳結構化結果。目前支援三個工作流，全部由 `@bot <verb>` 觸發：
+
+| Verb | 範例 | 產出 |
+|------|------|------|
+| `issue` | `@bot issue` · `@bot owner/repo`（legacy bare-repo 走 issue） | Agent triage codebase → app 建立 GitHub issue → URL 回貼 thread |
+| `ask` | `@bot ask 這段 retry 邏輯在哪？` | Agent 讀 thread（可選附 repo）→ 直接在 thread 內回答，不開 issue |
+| `review` | `@bot review <PR URL>` | Agent clone PR head → 直接在 PR 上留 line-level comments + summary，回 thread 報狀態 |
+
+不帶動詞（`@bot`）→ 跳出三顆按鈕讓你選 issue / ask / review。`review` 預設停用，需要 `pr_review.enabled: true`。
 
 Go 單一 binary（`agentdock` with `app` / `worker` 兩個子命令）。Transport 以 Redis 為主，`queue.transport` 是保留的擴充點供未來新增 backend。Repo 內有 3 個獨立 Go module：
 
@@ -33,10 +41,10 @@ brew tap Ivantseng123/tap
 brew install agentdock
 agentdock init app -i      # 建立 ~/.config/agentdock/app.yaml
 agentdock init worker -i   # 建立 ~/.config/agentdock/worker.yaml
-agentdock app              # 預設讀 ~/.config/agentdock/app.yaml
+agentdock app              # 另起一個 terminal 跑 `agentdock worker`
 ```
 
-Inmem 模式（單機）會自動啟動本地 worker pool，同時讀 sibling `worker.yaml`。
+App 和 worker 必須分別跑（`queue.transport: redis`，兩側的 Redis 位址和 `secret_key` 要一致）。
 
 **從源碼：**
 
@@ -54,14 +62,20 @@ Slack App 還沒建立？見 [docs/slack-setup.md](docs/slack-setup.md)。
 ## 流程
 
 ```
-@bot（thread 中）
-  → app: dedup + rate limit → 讀 thread 訊息
-  → repo/branch 選擇（thread 內按鈕）→ 可選補充說明
-  → 組 prompt → Submit 到 Queue（立即回覆排隊狀態 + 取消按鈕）
+@bot <verb>（thread 中）
+  → app: dedup + rate limit → workflow dispatcher
+    · 不認得的動詞或沒帶動詞 → 跳出 issue / ask / review 三選一
+    · 每個 selector / modal 都有「取消」按鈕可清掉 dedup
+  → 走對應 workflow 的 UX：
+    · issue   → repo / branch 選擇 → 可選補充說明
+    · ask     → 可選附 repo（同時決定要不要 branch）
+    · review  → thread 內找 PR URL；找不到 → 開 modal 輸問 URL
+  → 組 prompt（含 <bot> handle、thread、skill）→ submit 到 Queue
   → worker 從 Queue 取 job
-    → clone repo → mount skills → spawn CLI agent
-    → agent 探索 codebase + 判斷 confidence → 回傳 JSON 結果
-  → app 收到結果 → 建 GitHub issue → post URL 到 Slack thread
+    → 準備 workdir（有 repo 就 clone，沒 repo 就空目錄）
+    → mount 對應 skill（triage-issue / ask-assistant / github-pr-review）
+    → spawn CLI agent，回傳該 workflow 定義的 JSON（===TRIAGE_RESULT=== / ===ASK_RESULT=== / ===REVIEW_RESULT===）
+  → app 依 workflow 收尾：建 issue / 回答 thread / 報 PR review 狀態
 ```
 
 ## 架構

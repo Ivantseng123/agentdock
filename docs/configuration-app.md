@@ -49,9 +49,31 @@ channel_priority:
 
 prompt:
   language: 繁體中文
-  goal: "使用 /triage-issue skill 調查 codebase 並產出結構化分類結果"
-  output_rules: []                    # app 層規則（預設空）
   allow_worker_rules: true            # 是否讓 worker 的 extra_rules 生效
+
+  # 每個 workflow 各自一組 goal + output_rules。留空就用內建預設。
+  issue:
+    goal: "Use the /triage-issue skill to investigate and produce a triage result."
+    output_rules: []                  # issue workflow 的硬規則寫在 app/workflow/issue.go 的 spec 裡，這裡通常留空
+  ask:
+    goal: "Answer the user's question ... Output ===ASK_RESULT=== followed by JSON ..."
+    output_rules:
+      - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
+      - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
+      - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
+  pr_review:
+    goal: "Review the PR. Use the github-pr-review skill ... Output ===REVIEW_RESULT=== ..."
+    output_rules:
+      - "Focus on correctness, security, style"
+      - "Summary ≤ 2000 chars"
+
+  # Legacy flat 欄位（v2.1 之前的寫法）。只有在 prompt.issue.* 留空時，才會被拷到
+  # prompt.issue.*。新配置建議直接寫 prompt.issue.*，不要混用。
+  # goal: "..."
+  # output_rules: []
+
+pr_review:
+  enabled: false                      # PR Review workflow 的 feature flag；預設停用
 
 skills_config: /etc/agentdock/skills.yaml   # 動態 skill 載入設定（可選）
 
@@ -91,6 +113,24 @@ secrets:
   GH_TOKEN: ghp_xxx                   # key = 環境變數名，value = 明文；會加密傳給 worker
   K8S_TOKEN: your-k8s-token
 ```
+
+## Workflow-specific prompts
+
+`prompt.issue` / `prompt.ask` / `prompt.pr_review` 各自一組 `goal` + `output_rules`：
+- `goal` 是給 agent 的任務描述，通常要指名該呼叫哪個 skill（`triage-issue` / `ask-assistant` / `github-pr-review`）以及最終要印哪個 fence marker（`===TRIAGE_RESULT===` / `===ASK_RESULT===` / `===REVIEW_RESULT===`）。
+- `output_rules` 是**硬約束**層級，會直接 render 到 prompt 尾端。Ask 的預設就靠這條強制 agent 用 `<bot>` handle 自稱——skill body 裡的軟指引不夠時，直接升格到這裡。
+- 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。`issue.output_rules` 預設為空——issue workflow 的硬規則寫在 `app/workflow/issue.go` 的 spec 裡。
+
+**Legacy alias**：`prompt.goal` / `prompt.output_rules`（扁平）在載入時會被拷到 `prompt.issue.*`（前提是 `prompt.issue.*` 還沒設）。這只是為了讓 v2.1 之前的 yaml 還能跑；新配置直接寫 `prompt.issue.*`。
+
+## PR Review 啟用
+
+`pr_review.enabled` 預設 `false`。開之前確認：
+1. Worker 側已經裝了 `github-pr-review` skill（worker 的 `skills_config` 有指到 `agents/skills/github-pr-review`）。
+2. Worker 那台機器的 `agentdock pr-review-helper` 可以執行（內建 subcommand，binary 要是同一版）。
+3. `secrets.GH_TOKEN` 的權限足以在目標 PR 上留 review comments。
+
+開啟後，`@bot review <PR URL>` 會走 PRReviewWorkflow；沒帶 URL 時會掃 thread、掃不到就開 modal。
 
 ## Log 層級
 
