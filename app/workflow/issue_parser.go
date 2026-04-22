@@ -52,16 +52,19 @@ type TriageResult struct {
 	Questions  int    `json:"open_questions,omitempty"`
 }
 
-// ParseAgentOutput extracts the triage result from agent stdout.
-// Looks for ===TRIAGE_RESULT=== followed by CREATED:/REJECTED:/ERROR:
+// ParseAgentOutput extracts the triage result from agent stdout. Looks for
+// ===TRIAGE_RESULT=== followed by a JSON object or a CREATED:/REJECTED:/ERROR:
+// prefix. When the marker appears multiple times (e.g. opencode wraps the
+// JSON between an opening and a closing marker as a fence), the parser walks
+// them from last to first and returns the first segment that parses.
 func ParseAgentOutput(output string) (TriageResult, error) {
 	output = strings.TrimSpace(output)
 	if len(output) < minOutputLength {
 		return TriageResult{}, fmt.Errorf("agent output too short (%d chars)", len(output))
 	}
 
-	idx := strings.LastIndex(output, resultSeparator)
-	if idx == -1 {
+	positions := markerPositions(output, resultSeparator)
+	if len(positions) == 0 {
 		// No result marker — try to find a GitHub issue URL anywhere in the output
 		if url := extractIssueURL(output); url != "" {
 			return TriageResult{Status: "CREATED", IssueURL: url}, nil
@@ -69,44 +72,99 @@ func ParseAgentOutput(output string) (TriageResult, error) {
 		return TriageResult{}, fmt.Errorf("no triage result found in agent output")
 	}
 
-	result := strings.TrimSpace(output[idx+len(resultSeparator):])
-
-	// Try JSON format first.
-	if strings.HasPrefix(result, "{") {
-		jsonStr := extractJSON(result)
-		var tr TriageResult
-		if err := json.Unmarshal([]byte(jsonStr), &tr); err == nil && tr.Status != "" {
-			// CREATED payloads are fed directly into CreateIssue — an empty
-			// title causes GitHub to 422 mid-flight with "title can't be
-			// blank", burning retries and confusing the user. Catch it here
-			// so the failure surfaces as a clear parse error instead.
-			if tr.Status == "CREATED" && strings.TrimSpace(tr.Title) == "" {
-				return TriageResult{}, fmt.Errorf("CREATED result missing required title")
-			}
+	// Walk markers from last to first. Preferring the final marker keeps the
+	// "agent echoed the marker in a preamble example, then wrote the real
+	// answer later" case working. Falling back to earlier markers handles the
+	// fence case (opening + closing) where the last marker's segment is empty.
+	for i := len(positions) - 1; i >= 0; i-- {
+		start := positions[i] + len(resultSeparator)
+		end := len(output)
+		if i+1 < len(positions) {
+			end = positions[i+1]
+		}
+		segment := strings.TrimSpace(output[start:end])
+		if segment == "" {
+			continue
+		}
+		tr, titleErr, matched := parseResultSegment(segment, output)
+		if titleErr != nil {
+			// CREATED with missing title — definitive error, don't silently
+			// fall back to an earlier marker and risk a bogus match.
+			return TriageResult{}, titleErr
+		}
+		if matched {
 			return tr, nil
 		}
 	}
 
-	// Legacy format.
-	if strings.HasPrefix(result, "CREATED:") {
-		url := strings.TrimSpace(strings.TrimPrefix(result, "CREATED:"))
-		if url == "" {
-			url = extractIssueURL(output)
+	// Final error message uses the last non-empty segment for context.
+	lastSegment := ""
+	for i := len(positions) - 1; i >= 0; i-- {
+		start := positions[i] + len(resultSeparator)
+		end := len(output)
+		if i+1 < len(positions) {
+			end = positions[i+1]
 		}
-		return TriageResult{Status: "CREATED", IssueURL: url}, nil
+		if s := strings.TrimSpace(output[start:end]); s != "" {
+			lastSegment = s
+			break
+		}
+	}
+	return TriageResult{}, fmt.Errorf("unknown triage result: %s", lastSegment)
+}
+
+// markerPositions returns the byte offsets of every occurrence of marker in s.
+func markerPositions(s, marker string) []int {
+	var out []int
+	offset := 0
+	for {
+		idx := strings.Index(s[offset:], marker)
+		if idx == -1 {
+			return out
+		}
+		out = append(out, offset+idx)
+		offset += idx + len(marker)
+	}
+}
+
+// parseResultSegment tries JSON first, then the legacy CREATED:/REJECTED:/ERROR:
+// prefixes. Returns (result, titleErr, matched):
+//   - matched=true, titleErr=nil → caller returns (result, nil).
+//   - titleErr!=nil → CREATED JSON without a title; caller returns (zero, err)
+//     immediately (do not fall back to earlier markers).
+//   - matched=false, titleErr=nil → segment did not match; caller keeps
+//     searching earlier markers.
+func parseResultSegment(segment, fullOutput string) (TriageResult, error, bool) {
+	if strings.HasPrefix(segment, "{") {
+		jsonStr := extractJSON(segment)
+		var tr TriageResult
+		if err := json.Unmarshal([]byte(jsonStr), &tr); err == nil && tr.Status != "" {
+			if tr.Status == "CREATED" && strings.TrimSpace(tr.Title) == "" {
+				return TriageResult{}, fmt.Errorf("CREATED result missing required title"), false
+			}
+			return tr, nil, true
+		}
 	}
 
-	if strings.HasPrefix(result, "REJECTED:") {
-		msg := strings.TrimSpace(strings.TrimPrefix(result, "REJECTED:"))
-		return TriageResult{Status: "REJECTED", Message: msg}, nil
+	if strings.HasPrefix(segment, "CREATED:") {
+		url := strings.TrimSpace(strings.TrimPrefix(segment, "CREATED:"))
+		if url == "" {
+			url = extractIssueURL(fullOutput)
+		}
+		return TriageResult{Status: "CREATED", IssueURL: url}, nil, true
 	}
 
-	if strings.HasPrefix(result, "ERROR:") {
-		msg := strings.TrimSpace(strings.TrimPrefix(result, "ERROR:"))
-		return TriageResult{Status: "ERROR", Message: msg}, nil
+	if strings.HasPrefix(segment, "REJECTED:") {
+		msg := strings.TrimSpace(strings.TrimPrefix(segment, "REJECTED:"))
+		return TriageResult{Status: "REJECTED", Message: msg}, nil, true
 	}
 
-	return TriageResult{}, fmt.Errorf("unknown triage result: %s", result)
+	if strings.HasPrefix(segment, "ERROR:") {
+		msg := strings.TrimSpace(strings.TrimPrefix(segment, "ERROR:"))
+		return TriageResult{Status: "ERROR", Message: msg}, nil, true
+	}
+
+	return TriageResult{}, nil, false
 }
 
 // extractJSON finds the first top-level JSON object in text by matching braces.

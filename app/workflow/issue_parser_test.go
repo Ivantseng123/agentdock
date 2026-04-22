@@ -222,6 +222,61 @@ func TestParseAgentOutput_NoResult(t *testing.T) {
 	}
 }
 
+func TestParseAgentOutput_DoubleMarkerFence(t *testing.T) {
+	// Opencode (observed with minimax-m2.5-free) wraps the JSON between an
+	// opening AND a closing ===TRIAGE_RESULT=== marker, treating it as a
+	// fenced block. LastIndex would land on the closing marker with empty
+	// content — parser must fall back to an earlier marker and pull the
+	// JSON from between.
+	output := "Based on my investigation of Mantis #36321...\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "CREATED",
+  "title": "[已解決] 報價單列印顯示正本副本文字",
+  "body": "## Problem\n報價單列印時錯誤顯示正副本文字",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 12,
+  "open_questions": 0
+}
+===TRIAGE_RESULT===`
+
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if result.Status != "CREATED" {
+		t.Errorf("status = %q, want CREATED", result.Status)
+	}
+	if result.Title != "[已解決] 報價單列印顯示正本副本文字" {
+		t.Errorf("title lost: %q", result.Title)
+	}
+	if result.Confidence != "high" {
+		t.Errorf("confidence = %q, want high", result.Confidence)
+	}
+	if result.FilesFound != 12 {
+		t.Errorf("files_found = %d, want 12", result.FilesFound)
+	}
+}
+
+func TestParseAgentOutput_PreambleEchoThenRealResult(t *testing.T) {
+	// Guard the existing LastIndex-preferred behavior: if an agent echoes
+	// the marker in a preamble example and THEN writes the real answer after
+	// a second marker, the final answer wins. Regression test for anyone
+	// trying to naively swap LastIndex → FirstIndex.
+	output := "Example: ===TRIAGE_RESULT===\nCREATED: https://example.com\n\n" +
+		"Now doing the real work.\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "REJECTED",
+  "message": "Problem unrelated to this repo"
+}`
+
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if result.Status != "REJECTED" {
+		t.Errorf("status = %q, want REJECTED (from the LAST marker, not the echoed one)", result.Status)
+	}
+}
+
 func TestParseAgentOutput_JSONWithTrailingContent(t *testing.T) {
 	output := "Investigation complete.\n\n===TRIAGE_RESULT===\n" + `{
   "status": "CREATED",
