@@ -3,6 +3,7 @@ package slack
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -661,17 +662,29 @@ func classifyAttachment(filetype, mimetype string) string {
 // extractMessageText returns m.Text if non-empty, otherwise reconstructs
 // text from blocks (modern integrations) or attachments (legacy). Returns
 // "" only when no renderable text is present.
+//
+// Slack pre-encodes <, >, & as HTML entities (&lt;, &gt;, &amp;) so they
+// don't collide with mention/link syntax. We decode here at the adapter
+// boundary so downstream consumers (workflow, prompt builder) work with
+// plain text — otherwise the worker's xmlEscape runs a second round and
+// dependency chains like "exceljs -> archiver" reach the LLM as
+// "exceljs -&amp;gt; archiver".
 func extractMessageText(m slack.Message) string {
-	if strings.TrimSpace(m.Text) != "" {
-		return m.Text
+	var text string
+	switch {
+	case strings.TrimSpace(m.Text) != "":
+		text = m.Text
+	default:
+		if s := extractFromBlocks(m.Blocks.BlockSet); s != "" {
+			text = s
+		} else if s := extractFromAttachments(m.Attachments); s != "" {
+			text = s
+		}
 	}
-	if s := extractFromBlocks(m.Blocks.BlockSet); s != "" {
-		return s
+	if text == "" {
+		return ""
 	}
-	if s := extractFromAttachments(m.Attachments); s != "" {
-		return s
-	}
-	return ""
+	return html.UnescapeString(text)
 }
 
 // extractFromBlocks walks block kit content pulling text from

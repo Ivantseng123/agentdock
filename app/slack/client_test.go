@@ -247,6 +247,35 @@ func TestExtractMessageText_AllEmpty(t *testing.T) {
 	}
 }
 
+// Slack pre-encodes <, >, & in m.Text so they don't collide with mention/link
+// syntax. If we forward the encoded form downstream, the worker's xmlEscape
+// runs a second round (&gt; → &amp;gt;), so dependency chains and code
+// snippets reach the LLM as encoded noise. Decode at the adapter boundary.
+func TestExtractMessageText_DecodesHTMLEntitiesFromText(t *testing.T) {
+	msg := slack.Message{Msg: slack.Msg{
+		Text: "exceljs -&gt; archiver &amp; glob &lt;user&gt; &quot;quoted&quot;",
+	}}
+	got := extractMessageText(msg)
+	want := `exceljs -> archiver & glob <user> "quoted"`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExtractMessageText_DecodesHTMLEntitiesFromBlocks(t *testing.T) {
+	blocks := slack.Blocks{BlockSet: []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "A &amp; B &gt; C", false, false),
+			nil, nil,
+		),
+	}}
+	msg := slack.Message{Msg: slack.Msg{Text: "", Blocks: blocks}}
+	got := extractMessageText(msg)
+	if !strings.Contains(got, "A & B > C") {
+		t.Errorf("blocks not decoded; got %q", got)
+	}
+}
+
 func TestExtractMessageText_RichTextQuoteAndPreformatted(t *testing.T) {
 	msg := slack.Message{Msg: slack.Msg{Blocks: slack.Blocks{BlockSet: []slack.Block{
 		&slack.RichTextBlock{
