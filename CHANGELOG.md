@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/Ivantseng123/agentdock/compare/v2.1.3...v2.2.0) (2026-04-22)
+
+
+### Features
+
+* add github-pr-review skill + pr-review-helper subcommand ([#117](https://github.com/Ivantseng123/agentdock/issues/117)) ([94f32ac](https://github.com/Ivantseng123/agentdock/commit/94f32ace21ffefef10984c881e28da653dcc8827))
+
+
+### Bug Fixes
+
+* **bot/parser:** handle doubled ===TRIAGE_RESULT=== fence markers ([#121](https://github.com/Ivantseng123/agentdock/issues/121)) ([2649b81](https://github.com/Ivantseng123/agentdock/commit/2649b813b9dd1d89f6e008402bddd810aa74eca6))
+
 ## [2.1.3](https://github.com/Ivantseng123/agentdock/compare/v2.1.2...v2.1.3) (2026-04-21)
 
 
