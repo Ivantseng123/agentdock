@@ -224,6 +224,7 @@ func (c *Client) UploadFile(channelID, threadTS, filename, title, content, initi
 		Filename:        filename,
 		Title:           title,
 		Content:         content,
+		FileSize:        len(content),
 		InitialComment:  initialComment,
 	})
 	metrics.ExternalDuration.WithLabelValues("slack", "upload_file").Observe(time.Since(start).Seconds())

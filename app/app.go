@@ -356,14 +356,21 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}
 
 		// Update the status message to show queue position.
+		//
+		// BusyHint is only set when CheckHard saw all worker slots occupied, so
+		// saying "正在處理" in that case contradicts the wait-estimate tail. When
+		// busy, the head is queued regardless of its position in the pending
+		// list (the occupant worker holds a non-pending job).
 		pos, _ := coordinator.QueuePosition(job.ID)
 		var queueMsg string
-		if pos <= 1 {
-			queueMsg = ":hourglass_flowing_sand: 正在處理你的請求..."
-		} else {
+		switch {
+		case pos > 1:
 			queueMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
+		case p.BusyHint != "":
+			queueMsg = ":hourglass_flowing_sand: 已加入排隊，將盡快處理"
+		default:
+			queueMsg = ":hourglass_flowing_sand: 正在處理你的請求..."
 		}
-		// Re-apply the busy hint so the post-submit update doesn't clobber it.
 		if p.BusyHint != "" {
 			queueMsg += " " + p.BusyHint
 		}
