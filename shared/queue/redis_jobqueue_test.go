@@ -101,13 +101,102 @@ func TestRedisJobQueue_AckAndDepth(t *testing.T) {
 		t.Fatal("timed out waiting for job")
 	}
 
-	// QueuePosition always returns 0 in Redis mode.
+	// job-depth-001 is the first delivery (Streams preserve submit order); after
+	// Ack moved it to JobPreparing, QueuePosition reports 0 — it is no longer
+	// queued. job-depth-002 is now alone at the head, position 1.
 	pos, err := q.QueuePosition("job-depth-001")
 	if err != nil {
-		t.Fatalf("QueuePosition failed: %v", err)
+		t.Fatalf("QueuePosition(acked) failed: %v", err)
 	}
 	if pos != 0 {
-		t.Errorf("QueuePosition = %d, want 0", pos)
+		t.Errorf("QueuePosition(acked) = %d, want 0", pos)
+	}
+	pos, err = q.QueuePosition("job-depth-002")
+	if err != nil {
+		t.Fatalf("QueuePosition(pending) failed: %v", err)
+	}
+	if pos != 1 {
+		t.Errorf("QueuePosition(pending) = %d, want 1", pos)
+	}
+}
+
+func TestRedisJobQueue_QueuePositionTracksSubmissionOrder(t *testing.T) {
+	client := testRedisClient(t)
+	store := NewMemJobStore()
+	q := NewRedisJobQueue(client, store, "triage")
+	defer q.Close()
+
+	ctx := context.Background()
+
+	jobs := []*Job{
+		{ID: "qp-001", TaskType: "triage", SubmittedAt: time.Now()},
+		{ID: "qp-002", TaskType: "triage", SubmittedAt: time.Now()},
+		{ID: "qp-003", TaskType: "triage", SubmittedAt: time.Now()},
+	}
+	for _, j := range jobs {
+		if err := q.Submit(ctx, j); err != nil {
+			t.Fatalf("Submit %s: %v", j.ID, err)
+		}
+	}
+
+	cases := []struct {
+		id   string
+		want int
+	}{
+		{"qp-001", 1},
+		{"qp-002", 2},
+		{"qp-003", 3},
+	}
+	for _, c := range cases {
+		pos, err := q.QueuePosition(c.id)
+		if err != nil {
+			t.Fatalf("QueuePosition(%s): %v", c.id, err)
+		}
+		if pos != c.want {
+			t.Errorf("QueuePosition(%s) = %d, want %d", c.id, pos, c.want)
+		}
+	}
+}
+
+func TestRedisJobQueue_QueuePositionRecedesAfterAck(t *testing.T) {
+	client := testRedisClient(t)
+	store := NewMemJobStore()
+	q := NewRedisJobQueue(client, store, "triage")
+	defer q.Close()
+
+	ctx := context.Background()
+
+	jobs := []*Job{
+		{ID: "qp-recede-001", TaskType: "triage", SubmittedAt: time.Now()},
+		{ID: "qp-recede-002", TaskType: "triage", SubmittedAt: time.Now()},
+		{ID: "qp-recede-003", TaskType: "triage", SubmittedAt: time.Now()},
+	}
+	for _, j := range jobs {
+		if err := q.Submit(ctx, j); err != nil {
+			t.Fatalf("Submit %s: %v", j.ID, err)
+		}
+	}
+
+	if err := q.Ack(ctx, jobs[0].ID); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	cases := []struct {
+		id   string
+		want int
+	}{
+		{jobs[0].ID, 0}, // acked → no longer pending
+		{jobs[1].ID, 1}, // promoted to head
+		{jobs[2].ID, 2},
+	}
+	for _, c := range cases {
+		pos, err := q.QueuePosition(c.id)
+		if err != nil {
+			t.Fatalf("QueuePosition(%s): %v", c.id, err)
+		}
+		if pos != c.want {
+			t.Errorf("QueuePosition(%s) = %d, want %d", c.id, pos, c.want)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -19,6 +20,7 @@ type RedisJobQueue struct {
 	group      string
 	consumerID string
 	stopCh     chan struct{}
+	seqCounter atomic.Uint64
 }
 
 // NewRedisJobQueue creates a new Redis-backed job queue for the given task type.
@@ -35,7 +37,15 @@ func NewRedisJobQueue(rdb *redis.Client, store JobStore, taskType string) *Redis
 }
 
 // Submit adds a job to the Redis stream and stores it in the job store.
+//
+// The Seq field is assigned from a process-local monotonic counter so that
+// QueuePosition can compute submission order without an extra Redis round-trip.
+// Only this app instance's QueuePosition consults the value — across-instance
+// ordering is irrelevant because each app's MemJobStore only sees its own
+// submissions.
 func (q *RedisJobQueue) Submit(ctx context.Context, job *Job) error {
+	job.Seq = q.seqCounter.Add(1)
+
 	data, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("marshal job: %w", err)
@@ -51,10 +61,33 @@ func (q *RedisJobQueue) Submit(ctx context.Context, job *Job) error {
 	}).Err()
 }
 
-// QueuePosition returns 0 in Redis mode (position tracking is not meaningful
-// with consumer groups since jobs are distributed across consumers).
-func (q *RedisJobQueue) QueuePosition(_ string) (int, error) {
-	return 0, nil
+// QueuePosition returns the 1-based position of a still-pending job in this
+// app instance's submission queue. Returns 0 once the job has been picked up
+// by a worker (status != JobPending) — it is no longer "queued".
+//
+// Counting is local to this app instance's JobStore; in a multi-app deployment
+// each instance reports its own backlog. That is the same fidelity the
+// in-memory queue gives, and matches how callers use the value (UX hint, not
+// distributed consensus).
+func (q *RedisJobQueue) QueuePosition(jobID string) (int, error) {
+	state, err := q.store.Get(jobID)
+	if err != nil {
+		return 0, err
+	}
+	if state.Status != JobPending {
+		return 0, nil
+	}
+	pending, err := q.store.ListPending()
+	if err != nil {
+		return 0, err
+	}
+	pos := 0
+	for _, p := range pending {
+		if p.Job.Seq <= state.Job.Seq {
+			pos++
+		}
+	}
+	return pos, nil
 }
 
 // QueueDepth returns the number of jobs still awaiting dispatch to any worker
