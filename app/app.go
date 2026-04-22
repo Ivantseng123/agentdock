@@ -167,7 +167,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	reg.Register(prReviewWorkflow)
 	dispatcher := workflow.NewDispatcher(reg, slackPort, appLogger)
 
-	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger)
+	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger, nil)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		DedupTTL:        5 * time.Minute,

@@ -10,6 +10,7 @@ import (
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/app/workflow"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 const pendingTimeout = 1 * time.Minute
@@ -23,6 +24,7 @@ type Workflow struct {
 	handler       *slackclient.Handler
 	repoDiscovery *ghclient.RepoDiscovery
 	logger        *slog.Logger
+	availability  queue.WorkerAvailability
 
 	mu        sync.Mutex
 	pending   map[string]*workflow.Pending
@@ -41,6 +43,7 @@ func NewWorkflow(
 	slack workflow.SlackPort,
 	repoDiscovery *ghclient.RepoDiscovery,
 	logger *slog.Logger,
+	availability queue.WorkerAvailability,
 ) *Workflow {
 	return &Workflow{
 		cfg:           cfg,
@@ -48,6 +51,7 @@ func NewWorkflow(
 		slack:         slack,
 		repoDiscovery: repoDiscovery,
 		logger:        logger,
+		availability:  availability,
 		pending:       make(map[string]*workflow.Pending),
 		autoBound:     make(map[string]bool),
 	}

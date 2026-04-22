@@ -39,6 +39,7 @@ type Pending struct {
 	Phase       string // workflow-defined phase label
 	TaskType    string // workflow identity, equal to Workflow.Type()
 	State       any    // per-workflow state struct
+	BusyHint    string // populated by bot.Workflow.submit() when verdict is BusyEnqueueOK; app.submitJob appends to statusText
 }
 
 // NextStepKind enumerates the actions a workflow's Trigger/Selection can
@@ -51,7 +52,7 @@ const (
 	NextStepOpenModal
 	NextStepSubmit
 	NextStepError
-	NextStepNoop                // used when the workflow handled everything in-place (rare)
+	NextStepNoop                 // used when the workflow handled everything in-place (rare)
 	NextStepPostExternalSelector // external searchable selector (no configured repos)
 	NextStepCancel               // user aborted mid-flow; dispatcher clears dedup and stops
 )

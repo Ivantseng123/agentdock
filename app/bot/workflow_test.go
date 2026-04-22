@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
-	"github.com/Ivantseng123/agentdock/app/workflow"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
+	"github.com/Ivantseng123/agentdock/app/workflow"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
@@ -26,7 +26,7 @@ func (s *shimSlack) PostMessageWithTS(ch, text, ts string) (string, error) { ret
 func (s *shimSlack) PostMessageWithButton(ch, text, ts, aid, bt, val string) (string, error) {
 	return "ts", nil
 }
-func (s *shimSlack) UpdateMessage(ch, mts, text string) error                  { return nil }
+func (s *shimSlack) UpdateMessage(ch, mts, text string) error                         { return nil }
 func (s *shimSlack) UpdateMessageWithButton(ch, mts, text, aid, bt, val string) error { return nil }
 func (s *shimSlack) PostSelector(ch, prompt, prefix string, labels, values []string, ts string) (string, error) {
 	return "sel-ts", nil
@@ -64,7 +64,7 @@ func TestHandleTrigger_NoThread_PostsWarning(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
 
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	wf.HandleTrigger(slackclient.TriggerEvent{
 		ChannelID: "C1",
@@ -99,7 +99,7 @@ func TestHandleTrigger_UnboundChannel_Silent(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
 
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	wf.HandleTrigger(slackclient.TriggerEvent{
 		ChannelID: "C_UNBOUND",
@@ -120,7 +120,7 @@ func TestExecuteStep_Submit_CallsHook(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	called := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -143,7 +143,7 @@ func TestExecuteStep_Error_PostsMessage(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1"}
 	step := workflow.NextStep{Kind: workflow.NextStepError, ErrorText: "boom"}
@@ -173,7 +173,7 @@ func TestHandleSelection_DSelector_DispatchesWorkflow(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -219,7 +219,7 @@ func TestExecuteStep_OpenModal_FirstStepStoresPending(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default())
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
 
 	p := &workflow.Pending{
 		ChannelID: "C1", ThreadTS: "T1",
@@ -260,7 +260,7 @@ func TestHandleDescriptionAction_ModalFail_ConsumesPending(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
 	logger := slog.Default()
-	wf := NewWorkflow(cfg, disp, sl, nil, logger)
+	wf := NewWorkflow(cfg, disp, sl, nil, logger, nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
