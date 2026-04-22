@@ -3,15 +3,18 @@ package app
 import (
 	"log/slog"
 
+	"github.com/Ivantseng123/agentdock/app/bot"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 )
 
 // slackAdapterPort wraps *slackclient.Client to satisfy workflow.SlackPort.
-// All methods delegate directly; OpenTextInputModal maps to the existing
-// OpenDescriptionModal until Phase 6 makes modals generic.
+// All methods delegate directly. The adapter holds the bot identity so
+// FetchThreadContext can filter our own posts without every caller having
+// to thread those IDs through.
 type slackAdapterPort struct {
-	client *slackclient.Client
-	logger *slog.Logger
+	client   *slackclient.Client
+	logger   *slog.Logger
+	identity bot.Identity
 }
 
 func (a *slackAdapterPort) PostMessage(channelID, text, threadTS string) error {
@@ -58,8 +61,8 @@ func (a *slackAdapterPort) GetChannelName(channelID string) string {
 	return a.client.GetChannelName(channelID)
 }
 
-func (a *slackAdapterPort) FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]slackclient.ThreadRawMessage, error) {
-	return a.client.FetchThreadContext(channelID, threadTS, triggerTS, botUserID, limit)
+func (a *slackAdapterPort) FetchThreadContext(channelID, threadTS, triggerTS string, limit int) ([]slackclient.ThreadRawMessage, error) {
+	return a.client.FetchThreadContext(channelID, threadTS, triggerTS, a.identity.UserID, a.identity.BotID, limit)
 }
 
 func (a *slackAdapterPort) DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload {

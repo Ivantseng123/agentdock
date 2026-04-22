@@ -22,7 +22,7 @@ type SlackPort interface {
 	OpenTextInputModal(triggerID, title, label, inputName, metadata string) error
 	ResolveUser(userID string) string
 	GetChannelName(channelID string) string
-	FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]slackclient.ThreadRawMessage, error)
+	FetchThreadContext(channelID, threadTS, triggerTS string, limit int) ([]slackclient.ThreadRawMessage, error)
 	DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload
 }
 

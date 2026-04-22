@@ -65,7 +65,7 @@ func (f *fakeSlackPort) OpenTextInputModal(tid, title, label, name, metadata str
 func (f *fakeSlackPort) ResolveUser(uid string) string       { return "user-" + uid }
 func (f *fakeSlackPort) GetChannelName(cid string) string    { return "ch-" + cid }
 
-func (f *fakeSlackPort) FetchThreadContext(c, ts, tts, bot string, lim int) ([]slackclient.ThreadRawMessage, error) {
+func (f *fakeSlackPort) FetchThreadContext(c, ts, tts string, lim int) ([]slackclient.ThreadRawMessage, error) {
 	return nil, nil
 }
 

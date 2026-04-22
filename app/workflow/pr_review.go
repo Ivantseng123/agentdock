@@ -78,7 +78,7 @@ func (w *PRReviewWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args st
 	}
 
 	// D-path: scan thread.
-	msgs, err := w.slack.FetchThreadContext(ev.ChannelID, ev.ThreadTS, ev.TriggerTS, "", 50)
+	msgs, err := w.slack.FetchThreadContext(ev.ChannelID, ev.ThreadTS, ev.TriggerTS, 50)
 	if err == nil {
 		texts := make([]string, len(msgs))
 		for i, m := range msgs {
