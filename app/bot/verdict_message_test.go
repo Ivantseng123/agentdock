@@ -38,6 +38,9 @@ func TestRenderSoftWarn_BusyWithETA_NoQueue(t *testing.T) {
 	if strings.Contains(got, "前面還有") {
 		t.Errorf("no-queue branch should not mention '前面還有'; got %q", got)
 	}
+	if !strings.Contains(got, "下一個") {
+		t.Errorf("no-queue branch should reassure '下一個'; got %q", got)
+	}
 }
 
 func TestRenderSoftWarn_BusyWithETA_WithQueue(t *testing.T) {
