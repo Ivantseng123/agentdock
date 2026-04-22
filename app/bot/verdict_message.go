@@ -25,6 +25,14 @@ func RenderSoftWarn(v queue.Verdict) string {
 			return ""
 		}
 		mins := int(v.EstimatedWait.Round(time.Minute).Minutes())
+		// ActiveJobs is capacity-occupying count at check time; subtracting
+		// TotalSlots yields jobs queued beyond capacity (i.e. ahead of a
+		// hypothetical submit). When == 0, no one is queued yet — the caller
+		// will be first into the wait line.
+		ahead := v.ActiveJobs - v.TotalSlots
+		if ahead > 0 {
+			return fmt.Sprintf(":hourglass_flowing_sand: 目前所有 worker 都在忙，前面還有 %d 個請求在等，送出後預估等候 ~%dm。你仍可繼續選擇。", ahead, mins)
+		}
 		return fmt.Sprintf(":hourglass_flowing_sand: 目前所有 worker 都在忙，送出後預估等候 ~%dm。你仍可繼續選擇。", mins)
 	default:
 		return ""

@@ -18,10 +18,12 @@ func TestRenderSoftWarn_NoWorkers(t *testing.T) {
 	}
 }
 
-func TestRenderSoftWarn_BusyWithETA(t *testing.T) {
+func TestRenderSoftWarn_BusyWithETA_NoQueue(t *testing.T) {
 	v := queue.Verdict{
 		Kind:          queue.VerdictBusyEnqueueOK,
 		EstimatedWait: 6 * time.Minute,
+		ActiveJobs:    1,
+		TotalSlots:    1,
 	}
 	got := RenderSoftWarn(v)
 	if got == "" {
@@ -32,6 +34,25 @@ func TestRenderSoftWarn_BusyWithETA(t *testing.T) {
 	}
 	if !strings.Contains(got, "6m") {
 		t.Errorf("missing ETA '6m'; got %q", got)
+	}
+	if strings.Contains(got, "前面還有") {
+		t.Errorf("no-queue branch should not mention '前面還有'; got %q", got)
+	}
+}
+
+func TestRenderSoftWarn_BusyWithETA_WithQueue(t *testing.T) {
+	v := queue.Verdict{
+		Kind:          queue.VerdictBusyEnqueueOK,
+		EstimatedWait: 9 * time.Minute,
+		ActiveJobs:    3,
+		TotalSlots:    1,
+	}
+	got := RenderSoftWarn(v)
+	if !strings.Contains(got, "前面還有 2 個請求") {
+		t.Errorf("missing '前面還有 2 個請求'; got %q", got)
+	}
+	if !strings.Contains(got, "9m") {
+		t.Errorf("missing ETA '9m'; got %q", got)
 	}
 }
 
