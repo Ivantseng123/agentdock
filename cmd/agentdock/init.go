@@ -198,13 +198,13 @@ func promptAppInit(cfg *appconfig.Config) error {
 			prompt.Fail("Slack bot token is required")
 			continue
 		}
-		userID, err := connectivity.CheckSlackToken(tok)
+		identity, err := connectivity.CheckSlackToken(tok)
 		if err != nil {
 			prompt.Fail("%v (attempt %d/3)", err, attempt)
 			continue
 		}
 		cfg.Slack.BotToken = tok
-		prompt.OK("Slack bot token valid (user_id: %s)", userID)
+		prompt.OK("Slack bot token valid (user_id: %s)", identity.UserID)
 		break
 	}
 
@@ -266,6 +266,57 @@ func promptAppInit(cfg *appconfig.Config) error {
 		}
 		cfg.SecretKey = hex.EncodeToString(key)
 		prompt.OK("Secret key generated — copy this into worker.yaml:\n  %s", cfg.SecretKey)
+	}
+
+	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  Mantis enrichment (optional) — lets the agent fetch Mantis issue details.")
+	if prompt.YesNoDefault("  Enable Mantis?", false) {
+		if err := promptMantis(cfg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// promptMantis collects Mantis base_url + api_token, validates via
+// connectivity.CheckMantis. 3 retries then offers to skip.
+func promptMantis(cfg *appconfig.Config) error {
+	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  Mantis base URL (e.g. https://mantis.example.com):")
+	var baseURL string
+	for attempt := 1; attempt <= 3; attempt++ {
+		baseURL = strings.TrimRight(prompt.Line("URL: "), "/")
+		if baseURL == "" {
+			prompt.Fail("URL is required (attempt %d/3)", attempt)
+			continue
+		}
+		break
+	}
+	if baseURL == "" {
+		return nil
+	}
+
+	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  Mantis API token:")
+	for attempt := 1; attempt <= 3; attempt++ {
+		token := prompt.Hidden("Token: ")
+		if token == "" {
+			prompt.Fail("token is required (attempt %d/3)", attempt)
+			continue
+		}
+		n, err := connectivity.CheckMantis(baseURL, token)
+		if err != nil {
+			prompt.Fail("%v (attempt %d/3)", err, attempt)
+			if attempt == 3 {
+				_ = prompt.YesNoDefault("  Skip Mantis setup?", true)
+				return nil
+			}
+			continue
+		}
+		cfg.Mantis.BaseURL = baseURL
+		cfg.Mantis.APIToken = token
+		prompt.OK("Mantis connected (%d projects accessible)", n)
+		return nil
 	}
 	return nil
 }

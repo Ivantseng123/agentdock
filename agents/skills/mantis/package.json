@@ -1,0 +1,11 @@
+{
+  "name": "mantis-skill-cli",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node tests/helpers/run-node-tests.js"
+  }
+}

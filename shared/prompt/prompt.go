@@ -68,11 +68,24 @@ func Hidden(prompt string) string {
 	return strings.TrimSpace(string(b))
 }
 
+// YesNoDefault prints a yes/no prompt with an explicit default. Pressing
+// Enter returns defaultYes. The [Y/n] / [y/N] suffix reflects the default.
+func YesNoDefault(prompt string, defaultYes bool) bool {
+	suffix := "[y/N]"
+	if defaultYes {
+		suffix = "[Y/n]"
+	}
+	answer := Line(fmt.Sprintf("%s %s: ", prompt, suffix))
+	if answer == "" {
+		return defaultYes
+	}
+	lower := strings.ToLower(answer)
+	return lower == "y" || lower == "yes"
+}
+
 // YesNo prints a yes/no prompt with a "yes" default.
 func YesNo(prompt string) bool {
-	answer := Line(fmt.Sprintf("%s [Y/n]: ", prompt))
-	lower := strings.ToLower(answer)
-	return answer == "" || lower == "y" || lower == "yes"
+	return YesNoDefault(prompt, true)
 }
 
 // CheckAgentCLI runs `<command> --version` and returns the first line of

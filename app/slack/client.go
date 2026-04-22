@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,6 +38,15 @@ const (
 	maxImageSize  = 20 * 1024 * 1024 // 20 MB
 	maxImageCount = 5
 )
+
+var slackUserIDPattern = regexp.MustCompile(`^[UW][A-Z0-9]+$`)
+
+// isSlackUserID reports whether s matches the shape of a Slack user ID
+// (uppercase U or W followed by alphanumeric uppercase). Used to short-
+// circuit API calls for strings we know aren't resolvable.
+func isSlackUserID(s string) bool {
+	return slackUserIDPattern.MatchString(s)
+}
 
 func NewClient(botToken string, logger *slog.Logger) *Client {
 	return &Client{
@@ -179,6 +189,11 @@ func isVisionImage(filetype string) bool {
 }
 
 func (c *Client) ResolveUser(userID string) string {
+	if !isSlackUserID(userID) {
+		// Not a Slack-shaped ID (bot display name, already-resolved name,
+		// etc.). Skip the API call and return as-is.
+		return userID
+	}
 	user, err := c.api.GetUserInfo(userID)
 	if err != nil {
 		c.logger.Warn("使用者名稱解析失敗", "phase", "失敗", "user_id", userID, "error", err)
@@ -435,8 +450,11 @@ type ThreadRawMessage struct {
 	Files     []slack.File
 }
 
-// FetchThreadContext reads all messages in a thread up to the trigger point.
-func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]ThreadRawMessage, error) {
+// FetchThreadContext reads all messages in a thread up to the trigger
+// point, filtering out our own bot's posts. botUserID and botID are
+// both checked because edge cases (custom username, thread broadcast,
+// new block API) can leave one field mismatched.
+func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID, botID string, limit int) ([]ThreadRawMessage, error) {
 	start := time.Now()
 	if limit <= 0 {
 		limit = 50
@@ -466,24 +484,44 @@ func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID st
 		cursor = nextCursor
 	}
 
-	result := filterThreadMessages(allMessages, triggerTS, botUserID)
+	result := filterThreadMessages(allMessages, triggerTS, botUserID, botID)
 	c.logger.Debug("訊息串內容已讀取", "phase", "處理中", "channel_id", channelID, "message_count", len(result), "duration_ms", time.Since(start).Milliseconds())
 	return result, nil
 }
 
-// filterThreadMessages filters out bot messages and messages at/after the trigger.
-func filterThreadMessages(messages []slack.Message, triggerTS, botUserID string) []ThreadRawMessage {
+// filterThreadMessages keeps messages from other participants (human or
+// external bots) and drops our own bot's posts (identified by botUserID
+// or botID). Bot messages get their text reconstructed from blocks or
+// attachments when m.Text is empty; messages whose reconstructed text is
+// also empty are dropped entirely. Bot display names are prefixed with
+// "bot:" in the User field so downstream prompts can tell them apart
+// from humans.
+func filterThreadMessages(messages []slack.Message, triggerTS, botUserID, botID string) []ThreadRawMessage {
 	var result []ThreadRawMessage
 	for _, m := range messages {
 		if m.Timestamp >= triggerTS {
 			continue
 		}
-		if m.BotID != "" || m.User == botUserID {
+		if botUserID != "" && m.User == botUserID {
 			continue
 		}
+		if botID != "" && m.BotID == botID {
+			continue
+		}
+		text := extractMessageText(m)
+		if m.BotID != "" && text == "" {
+			// Pure interactive / reaction-only bot message — no signal for triage.
+			continue
+		}
+		user := m.User
+		if m.BotID != "" {
+			if name := resolveBotDisplayName(m); name != "" {
+				user = "bot:" + name
+			}
+		}
 		result = append(result, ThreadRawMessage{
-			User:      m.User,
-			Text:      m.Text,
+			User:      user,
+			Text:      text,
 			Timestamp: m.Timestamp,
 			Files:     m.Files,
 		})
@@ -547,6 +585,115 @@ func classifyAttachment(filetype, mimetype string) string {
 		return "text"
 	}
 	return "document"
+}
+
+// extractMessageText returns m.Text if non-empty, otherwise reconstructs
+// text from blocks (modern integrations) or attachments (legacy). Returns
+// "" only when no renderable text is present.
+func extractMessageText(m slack.Message) string {
+	if strings.TrimSpace(m.Text) != "" {
+		return m.Text
+	}
+	if s := extractFromBlocks(m.Blocks.BlockSet); s != "" {
+		return s
+	}
+	if s := extractFromAttachments(m.Attachments); s != "" {
+		return s
+	}
+	return ""
+}
+
+// extractFromBlocks walks block kit content pulling text from
+// text-bearing block types. Interactive / image blocks are ignored.
+func extractFromBlocks(blocks []slack.Block) string {
+	var parts []string
+	for _, b := range blocks {
+		switch bb := b.(type) {
+		case *slack.SectionBlock:
+			if bb.Text != nil && bb.Text.Text != "" {
+				parts = append(parts, bb.Text.Text)
+			}
+			for _, f := range bb.Fields {
+				if f != nil && f.Text != "" {
+					parts = append(parts, f.Text)
+				}
+			}
+		case *slack.HeaderBlock:
+			if bb.Text != nil && bb.Text.Text != "" {
+				parts = append(parts, bb.Text.Text)
+			}
+		case *slack.ContextBlock:
+			for _, e := range bb.ContextElements.Elements {
+				if tb, ok := e.(*slack.TextBlockObject); ok && tb.Text != "" {
+					parts = append(parts, tb.Text)
+				}
+			}
+		case *slack.RichTextBlock:
+			for _, el := range bb.Elements {
+				var sectionElems []slack.RichTextSectionElement
+				switch v := el.(type) {
+				case *slack.RichTextSection:
+					sectionElems = v.Elements
+				case *slack.RichTextQuote:
+					sectionElems = v.Elements
+				case *slack.RichTextPreformatted:
+					sectionElems = v.Elements
+				}
+				for _, inner := range sectionElems {
+					if te, ok := inner.(*slack.RichTextSectionTextElement); ok && te.Text != "" {
+						parts = append(parts, te.Text)
+					}
+				}
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// extractFromAttachments renders legacy-API attachment content as plain
+// text. Each attachment contributes its Pretext / Title / Text / Fallback
+// plus any Fields; multiple attachments are joined with a blank line.
+func extractFromAttachments(atts []slack.Attachment) string {
+	var segments []string
+	for _, a := range atts {
+		var parts []string
+		if a.Pretext != "" {
+			parts = append(parts, a.Pretext)
+		}
+		if a.Title != "" {
+			parts = append(parts, a.Title)
+		}
+		if a.Text != "" {
+			parts = append(parts, a.Text)
+		} else if a.Fallback != "" {
+			parts = append(parts, a.Fallback)
+		}
+		for _, f := range a.Fields {
+			if f.Title != "" || f.Value != "" {
+				parts = append(parts, fmt.Sprintf("*%s*: %s", f.Title, f.Value))
+			}
+		}
+		if len(parts) > 0 {
+			segments = append(segments, strings.Join(parts, "\n"))
+		}
+	}
+	return strings.Join(segments, "\n\n")
+}
+
+// resolveBotDisplayName picks the best human-friendly name for a bot
+// message, preferring BotProfile.Name (what Slack's UI shows) over
+// Username (integration-set) and falling back to BotID.
+func resolveBotDisplayName(m slack.Message) string {
+	if m.BotProfile != nil && m.BotProfile.Name != "" {
+		return m.BotProfile.Name
+	}
+	if m.Username != "" {
+		return m.Username
+	}
+	if m.BotID != "" {
+		return m.BotID
+	}
+	return ""
 }
 
 func ExtractKeywords(message string) []string {

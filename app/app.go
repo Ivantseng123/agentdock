@@ -13,7 +13,6 @@ import (
 
 	"github.com/Ivantseng123/agentdock/app/bot"
 	"github.com/Ivantseng123/agentdock/app/config"
-	"github.com/Ivantseng123/agentdock/app/mantis"
 	"github.com/Ivantseng123/agentdock/app/skill"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
@@ -51,7 +50,7 @@ func (h *Handle) Wait() error {
 // Run initializes the app runtime (logging, Slack, Redis buses, listeners,
 // HTTP endpoints, socket-mode loop) and returns a Handle immediately. The
 // caller must call Wait to block until shutdown.
-func Run(cfg *config.Config) (*Handle, error) {
+func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
@@ -101,16 +100,6 @@ func Run(cfg *config.Config) (*Handle, error) {
 		}
 	}
 
-	mantisClient := mantis.NewClient(
-		cfg.Mantis.BaseURL,
-		cfg.Mantis.APIToken,
-		cfg.Mantis.Username,
-		cfg.Mantis.Password,
-	)
-	if mantisClient.IsConfigured() {
-		appLogger.Info("Mantis 整合已啟用", "phase", "處理中", "url", cfg.Mantis.BaseURL)
-	}
-
 	jobStore := queue.NewMemJobStore()
 	jobStore.StartCleanup(1 * time.Hour)
 
@@ -150,7 +139,7 @@ func Run(cfg *config.Config) (*Handle, error) {
 	)
 	coordinator.RegisterQueue("triage", bundle.Queue)
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, mantisClient, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader)
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader, identity)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		DedupTTL:        5 * time.Minute,
@@ -212,19 +201,14 @@ func Run(cfg *config.Config) (*Handle, error) {
 	api := slack.New(cfg.Slack.BotToken, slack.OptionAppLevelToken(cfg.Slack.AppToken))
 	sm := socketmode.New(api)
 
-	botUserID := ""
-	if authResp, err := api.AuthTest(); err == nil {
-		botUserID = authResp.UserID
-		appLogger.Info("Bot 身份已解析", "phase", "處理中", "user_id", botUserID)
-	} else {
-		appLogger.Warn("Bot 身份解析失敗", "phase", "失敗", "error", err)
-	}
+	appLogger.Info("Bot 身份已解析", "phase", "處理中",
+		"user_id", identity.UserID, "bot_id", identity.BotID)
 
 	appLogger.Info("啟動 Bot", "phase", "處理中", "version", Version, "commit", Commit, "date", Date)
 
 	go func() {
 		for evt := range sm.Events {
-			handleSocketEvent(evt, sm, handler, wf, slackClient, jobStore, bundle, retryHandler, cfg, botUserID, appLogger)
+			handleSocketEvent(evt, sm, handler, wf, slackClient, jobStore, bundle, retryHandler, cfg, identity.UserID, appLogger)
 		}
 	}()
 

@@ -14,7 +14,6 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
-	"github.com/Ivantseng123/agentdock/app/mantis"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 )
@@ -35,7 +34,7 @@ type slackAPI interface {
 	OpenDescriptionModal(triggerID, selectorMsgTS string) error
 	ResolveUser(userID string) string
 	GetChannelName(channelID string) string
-	FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]slackclient.ThreadRawMessage, error)
+	FetchThreadContext(channelID, threadTS, triggerTS, botUserID, botID string, limit int) ([]slackclient.ThreadRawMessage, error)
 	DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload
 }
 
@@ -64,13 +63,13 @@ type Workflow struct {
 	handler       *slackclient.Handler
 	repoCache     *ghclient.RepoCache
 	repoDiscovery *ghclient.RepoDiscovery
-	mantisClient  *mantis.Client
 	queue         queue.JobQueue
 	store         queue.JobStore
 	attachments   queue.AttachmentStore
 	results       queue.ResultBus
 	skillProvider SkillProvider
 	secretKey     []byte // decoded AES key, nil if not configured
+	identity      Identity
 
 	mu        sync.Mutex
 	pending   map[string]*pendingTriage
@@ -82,12 +81,12 @@ func NewWorkflow(
 	slack slackAPI, // was *slackclient.Client
 	repoCache *ghclient.RepoCache,
 	repoDiscovery *ghclient.RepoDiscovery,
-	mantisClient *mantis.Client,
 	jobQueue queue.JobQueue,
 	jobStore queue.JobStore,
 	attachStore queue.AttachmentStore,
 	resultBus queue.ResultBus,
 	skillProvider SkillProvider,
+	identity Identity,
 ) *Workflow {
 	// Decode secret key once at startup (nil if not configured).
 	var sk []byte
@@ -103,13 +102,13 @@ func NewWorkflow(
 		slack:         slack,
 		repoCache:     repoCache,
 		repoDiscovery: repoDiscovery,
-		mantisClient:  mantisClient,
 		queue:         jobQueue,
 		store:         jobStore,
 		attachments:   attachStore,
 		results:       resultBus,
 		skillProvider: skillProvider,
 		secretKey:     sk,
+		identity:      identity,
 		pending:       make(map[string]*pendingTriage),
 		autoBound:     make(map[string]bool),
 	}
@@ -397,8 +396,11 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	}
 
 	// 1. Read thread context.
-	botUserID := ""
-	rawMsgs, err := w.slack.FetchThreadContext(pt.ChannelID, pt.ThreadTS, pt.TriggerTS, botUserID, w.cfg.MaxThreadMessages)
+	rawMsgs, err := w.slack.FetchThreadContext(
+		pt.ChannelID, pt.ThreadTS, pt.TriggerTS,
+		w.identity.UserID, w.identity.BotID,
+		w.cfg.MaxThreadMessages,
+	)
 	if err != nil {
 		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to read thread: %v", err)
 		w.clearDedup(pt)
@@ -406,17 +408,14 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	}
 	pt.Logger.Info("訊息串已讀取", "phase", "處理中", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
 
-	// 2. Enrich messages.
+	// 2. Shape messages for the queue. (Mantis enrichment is now the
+	// agent's job via the mantis skill + env vars.)
 	var threadMsgs []queue.ThreadMessage
 	for _, m := range rawMsgs {
-		text := m.Text
-		if w.mantisClient != nil {
-			text = enrichMessage(text, w.mantisClient)
-		}
 		threadMsgs = append(threadMsgs, queue.ThreadMessage{
 			User:      w.slack.ResolveUser(m.User),
 			Timestamp: m.Timestamp,
-			Text:      text,
+			Text:      m.Text,
 		})
 	}
 

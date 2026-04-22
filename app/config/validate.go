@@ -52,6 +52,9 @@ func Validate(cfg *Config) error {
 	if cfg.RepoCache.MaxAge <= 0 {
 		errs = append(errs, "repo_cache.max_age must be > 0")
 	}
+	if (cfg.Mantis.BaseURL != "") != (cfg.Mantis.APIToken != "") {
+		errs = append(errs, "mantis.base_url and mantis.api_token must both be set or both be empty")
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("config validation failed:\n  %s", strings.Join(errs, "\n  "))

@@ -20,8 +20,6 @@ var flagToKey = map[string]string{
 	"github-token":             "github.token",
 	"mantis-base-url":          "mantis.base_url",
 	"mantis-api-token":         "mantis.api_token",
-	"mantis-username":          "mantis.username",
-	"mantis-password":          "mantis.password",
 	"queue-capacity":           "queue.capacity",
 	"queue-transport":          "queue.transport",
 	"queue-job-timeout":        "queue.job_timeout",
@@ -69,8 +67,6 @@ func RegisterFlags(cmd *cobra.Command) {
 
 	f.String("mantis-base-url", "", "Mantis base URL")
 	f.String("mantis-api-token", "", "Mantis API token")
-	f.String("mantis-username", "", "Mantis username (basic auth fallback)")
-	f.String("mantis-password", "", "Mantis password (basic auth fallback)")
 
 	f.Int("queue-capacity", 0, "queue buffer capacity")
 	{

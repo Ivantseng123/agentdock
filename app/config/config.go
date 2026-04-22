@@ -94,8 +94,6 @@ type RateLimitConfig struct {
 type MantisConfig struct {
 	BaseURL  string `yaml:"base_url"`
 	APIToken string `yaml:"api_token"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
 }
 
 type RepoCacheConfig struct {

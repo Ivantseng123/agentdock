@@ -21,6 +21,32 @@ You will receive a prompt containing:
 
 Read the thread context carefully. Do NOT ask follow-up questions. Start investigating immediately based on the conversation.
 
+### 1a. Fetch Mantis issue context (if applicable)
+
+If the thread context contains Mantis issue URLs — patterns like
+`view.php?id=<N>` or `/issues/<N>` — invoke the `mantis` skill to
+fetch full issue details before proceeding with code investigation:
+
+```bash
+# 1. Verify connectivity (one-shot; skip the skill on failure)
+node <skill-path>/mantis/scripts/mantis.js status
+
+# 2. Fetch the full issue
+node <skill-path>/mantis/scripts/mantis.js get-issue <N> --full
+
+# 3. Optionally grab screenshots / attachments for visual bugs
+node <skill-path>/mantis/scripts/mantis.js list-attachments <N>
+node <skill-path>/mantis/scripts/mantis.js download-attachment <N> <file_id> --output /tmp/<name>
+```
+
+Incorporate the issue's description, severity, handler, and any
+relevant attachment content (use Read on downloaded images) into
+your root-cause analysis.
+
+If `status` reports `reason=""` or `reason="auth_failed"`, Mantis
+enrichment is unavailable — keep the URL in your output as-is and
+proceed with the rest of triage from thread context alone.
+
 ### 2. Explore and diagnose
 
 Deeply investigate the codebase. Your goal is to find:

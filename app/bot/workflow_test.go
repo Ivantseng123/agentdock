@@ -112,7 +112,7 @@ func (s *stubSlack) UpdateMessage(channelID, messageTS, text string) error {
 func (s *stubSlack) OpenDescriptionModal(triggerID, selectorMsgTS string) error { return nil }
 func (s *stubSlack) ResolveUser(userID string) string                           { return userID }
 func (s *stubSlack) GetChannelName(channelID string) string                     { return channelID }
-func (s *stubSlack) FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]slackclient.ThreadRawMessage, error) {
+func (s *stubSlack) FetchThreadContext(channelID, threadTS, triggerTS, botUserID, botID string, limit int) ([]slackclient.ThreadRawMessage, error) {
 	return nil, nil
 }
 func (s *stubSlack) DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload {
