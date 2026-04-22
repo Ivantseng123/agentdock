@@ -354,9 +354,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 		if tid == "" {
 			// No trigger ID available — fall through to submit without description.
 			w.logger.Warn("OpenModal requested but no triggerID", "phase", "失敗")
-			if w.onSubmit != nil {
-				w.onSubmit(ctx, pending)
-			}
+			w.submit(ctx, pending)
 			return
 		}
 		// Modal-first flows (PR Review D-path when thread has no URL) reach
@@ -385,9 +383,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 				delete(w.pending, selectorTS)
 				w.mu.Unlock()
 			}
-			if w.onSubmit != nil {
-				w.onSubmit(ctx, pending)
-			}
+			w.submit(ctx, pending)
 		}
 		// Pending is now in the map under meta (either SelectorTS from a
 		// prior selector, or the synthesised "modal-<reqID>" key above); the
@@ -398,11 +394,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 		if p == nil {
 			p = pending
 		}
-		if w.onSubmit != nil {
-			w.onSubmit(ctx, p)
-		} else {
-			w.logger.Warn("NextStepSubmit but no onSubmit hook set", "phase", "失敗")
-		}
+		w.submit(ctx, p)
 
 	case workflow.NextStepError:
 		_ = w.slack.PostMessage(pending.ChannelID, ":x: "+step.ErrorText, pending.ThreadTS)
@@ -423,6 +415,34 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 
 	default:
 		w.logger.Warn("executeStep: unknown NextStepKind", "phase", "失敗", "kind", step.Kind)
+	}
+}
+
+// submit is the single chokepoint for sending a Pending to the queue-submission
+// closure. Consolidates the three former `if w.onSubmit != nil { w.onSubmit(...) }`
+// call sites in executeStep so pre-submit checks (like the worker-availability
+// hard check below) only need to land in one place.
+func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
+	if w.availability != nil {
+		verdict := w.availability.CheckHard(ctx)
+		switch verdict.Kind {
+		case queue.VerdictNoWorkers:
+			_ = w.slack.PostMessage(p.ChannelID,
+				RenderHardReject(verdict), p.ThreadTS)
+			if w.handler != nil {
+				w.handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		case queue.VerdictBusyEnqueueOK:
+			// Task 11 adds p.BusyHint = RenderBusyHint(verdict) here.
+		case queue.VerdictOK:
+			// continue
+		}
+	}
+	if w.onSubmit != nil {
+		w.onSubmit(ctx, p)
+	} else {
+		w.logger.Warn("submit but no onSubmit hook set", "phase", "失敗")
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
@@ -327,4 +329,62 @@ func (f *fakeIssueWorkflow) BuildJob(ctx context.Context, p *workflow.Pending) (
 }
 func (f *fakeIssueWorkflow) HandleResult(ctx context.Context, state *queue.JobState, result *queue.JobResult) error {
 	return nil
+}
+
+// stubAvailability lets tests pre-program verdicts.
+type stubAvailability struct {
+	mu          sync.Mutex
+	SoftVerdict queue.Verdict
+	HardVerdict queue.Verdict
+	SoftCalls   int
+	HardCalls   int
+}
+
+func (s *stubAvailability) CheckSoft(ctx context.Context) queue.Verdict {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SoftCalls++
+	return s.SoftVerdict
+}
+func (s *stubAvailability) CheckHard(ctx context.Context) queue.Verdict {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.HardCalls++
+	return s.HardVerdict
+}
+
+func TestSubmit_NoWorkers_HardRejects(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{HardVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers}}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	onSubmitCalled := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		onSubmitCalled = true
+	})
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
+
+	if avail.HardCalls != 1 {
+		t.Errorf("HardCalls = %d, want 1", avail.HardCalls)
+	}
+	if onSubmitCalled {
+		t.Error("onSubmit must NOT be called when verdict is NoWorkers")
+	}
+
+	foundReject := false
+	for _, m := range sl.posted {
+		if strings.Contains(m, ":x:") && strings.Contains(m, "沒有 worker") {
+			foundReject = true
+		}
+	}
+	if !foundReject {
+		t.Errorf("expected :x: hard reject message; got posts: %+v", sl.posted)
+	}
 }
