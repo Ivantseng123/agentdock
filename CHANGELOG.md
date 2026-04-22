@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/Ivantseng123/agentdock/compare/v2.3.0...v2.3.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* **slack:** decode HTML entities in thread message text (closes [#89](https://github.com/Ivantseng123/agentdock/issues/89)) ([#128](https://github.com/Ivantseng123/agentdock/issues/128)) ([9d37291](https://github.com/Ivantseng123/agentdock/commit/9d37291241c990be3384d4226390b6d1741102fa))
+
 ## [2.3.0](https://github.com/Ivantseng123/agentdock/compare/v2.2.0...v2.3.0) (2026-04-22)
 
 
