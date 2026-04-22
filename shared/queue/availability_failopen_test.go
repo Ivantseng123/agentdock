@@ -98,3 +98,13 @@ type workerListingQueue struct {
 func (w *workerListingQueue) ListWorkers(context.Context) ([]queue.WorkerInfo, error) {
 	return w.workers, nil
 }
+
+// fakeDepthQueue is workerListingQueue with a fixed QueueDepth — used by
+// availability tests that need a deterministic depth value without the
+// race-prone async drain in queuetest.JobQueue.
+type fakeDepthQueue struct {
+	workerListingQueue
+	depth int
+}
+
+func (f *fakeDepthQueue) QueueDepth() int { return f.depth }

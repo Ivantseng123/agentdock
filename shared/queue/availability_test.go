@@ -76,19 +76,26 @@ func TestAvailability_BusyEnqueueOK_FullySaturated(t *testing.T) {
 }
 
 func TestAvailability_BusyEnqueueOK_WithQueueDepth(t *testing.T) {
-	q, store, a := newAvail(t)
-	ctx := context.Background()
+	// queuetest.JobQueue.Submit pushes onto a heap that a background dispatch
+	// goroutine drains into a channel; QueueDepth races against that drain
+	// and is unreliable for "I just submitted N, expect depth=N" assertions.
+	// Use a deterministic stub instead so the math under test isn't flaky.
+	store := queue.NewMemJobStore()
+	q := &fakeDepthQueue{
+		workerListingQueue: workerListingQueue{
+			workers: []queue.WorkerInfo{{WorkerID: "w1", Slots: 1}},
+		},
+		depth: 4,
+	}
+	a := queue.NewWorkerAvailability(q, store, queue.AvailabilityConfig{
+		AvgJobDuration: 3 * time.Minute,
+	})
 
-	q.Register(ctx, queue.WorkerInfo{WorkerID: "w1", Slots: 1})
-
-	// 1 running + 4 queued = 5 active, slots = 1, overflow = 5
+	// 1 running in store + 4 from queue depth = 5 active, slots = 1, overflow = 5
 	store.Put(&queue.Job{ID: "j1"})
 	store.UpdateStatus("j1", queue.JobRunning)
-	for i := 0; i < 4; i++ {
-		q.Submit(ctx, &queue.Job{ID: "p" + string(rune('a'+i))})
-	}
 
-	v := a.CheckHard(ctx)
+	v := a.CheckHard(context.Background())
 	if v.Kind != queue.VerdictBusyEnqueueOK {
 		t.Errorf("Kind = %q, want %q", v.Kind, queue.VerdictBusyEnqueueOK)
 	}
