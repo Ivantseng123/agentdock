@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
@@ -386,5 +387,39 @@ func TestSubmit_NoWorkers_HardRejects(t *testing.T) {
 	}
 	if !foundReject {
 		t.Errorf("expected :x: hard reject message; got posts: %+v", sl.posted)
+	}
+}
+
+func TestSubmit_BusyEnqueueOK_SetsBusyHint(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{
+		HardVerdict: queue.Verdict{
+			Kind:          queue.VerdictBusyEnqueueOK,
+			EstimatedWait: 6 * time.Minute,
+		},
+	}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	var gotPending *workflow.Pending
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		gotPending = p
+	})
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
+
+	if gotPending == nil {
+		t.Fatal("onSubmit was not called; expected BusyEnqueueOK to pass through")
+	}
+	if gotPending.BusyHint == "" {
+		t.Errorf("BusyHint should be set; got empty")
+	}
+	if !strings.Contains(gotPending.BusyHint, "預估等候") {
+		t.Errorf("BusyHint should contain 預估等候; got %q", gotPending.BusyHint)
 	}
 }

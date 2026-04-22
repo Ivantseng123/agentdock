@@ -434,7 +434,7 @@ func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
 			}
 			return
 		case queue.VerdictBusyEnqueueOK:
-			// Task 11 adds p.BusyHint = RenderBusyHint(verdict) here.
+			p.BusyHint = RenderBusyHint(verdict)
 		case queue.VerdictOK:
 			// continue
 		}
