@@ -94,6 +94,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	provider := selectProvider(job, deps.repoCache, ghToken)
 	repoPath, err := provider.Prepare(job)
 	if err != nil {
+		logger.Error("Repo 準備失敗", "phase", "失敗", "branch", job.Branch, "error", err.Error())
 		return classifyResult(job, startedAt, fmt.Errorf("workdir prepare failed: %w", err), "", ctx, deps.store)
 	}
 	prepareSeconds := time.Since(prepareStart).Seconds()
