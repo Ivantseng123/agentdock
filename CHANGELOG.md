@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.3](https://github.com/Ivantseng123/agentdock/compare/v2.4.2...v2.4.3) (2026-04-23)
+
+
+### Bug Fixes
+
+* **workflow:** guard BuildJob against empty repo reference ([#142](https://github.com/Ivantseng123/agentdock/issues/142)) ([aecd528](https://github.com/Ivantseng123/agentdock/commit/aecd528c09b00d9be200e909603f8ce1031e94f0)), closes [#140](https://github.com/Ivantseng123/agentdock/issues/140) [#137](https://github.com/Ivantseng123/agentdock/issues/137)
+* **workflow:** invalidate pending on back-to-repo + dedup in-flight selector clicks ([#143](https://github.com/Ivantseng123/agentdock/issues/143)) ([bd24c15](https://github.com/Ivantseng123/agentdock/commit/bd24c153a19dc5448e8fba907d6bb62e90b93e92))
+
 ## [2.4.2](https://github.com/Ivantseng123/agentdock/compare/v2.4.1...v2.4.2) (2026-04-23)
 
 
