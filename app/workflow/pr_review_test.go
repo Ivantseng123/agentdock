@@ -200,6 +200,66 @@ func TestPRReviewWorkflow_HandleResult_ErrorStatus(t *testing.T) {
 	}
 }
 
+func TestPRReviewWorkflow_BuildJob_UsesHeadSHAAsJobBranch(t *testing.T) {
+	w, _ := newTestPRReviewWorkflow(t)
+	pending := &Pending{
+		ChannelID:   "C1",
+		ThreadTS:    "1.0",
+		Reporter:    "reporter",
+		ChannelName: "general",
+		RequestID:   "req-1",
+		TaskType:    "pr_review",
+		State: &prReviewState{
+			URL:      "https://github.com/foo/bar/pull/7",
+			Owner:    "foo",
+			Repo:     "bar",
+			Number:   7,
+			HeadRepo: "forker/bar",
+			HeadRef:  "feat/x",
+			HeadSHA:  "abc1234567890def1234567890abc1234567890d",
+			BaseRef:  "main",
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), pending)
+	if err != nil {
+		t.Fatalf("BuildJob failed: %v", err)
+	}
+	if job.Branch != "abc1234567890def1234567890abc1234567890d" {
+		t.Errorf("Job.Branch = %q, want head SHA", job.Branch)
+	}
+	if job.PromptContext == nil || job.PromptContext.Branch != "feat/x" {
+		t.Errorf("PromptContext.Branch = %q, want HeadRef \"feat/x\"",
+			job.PromptContext.Branch)
+	}
+}
+
+func TestPRReviewWorkflow_ValidateAndBuild_PopulatesHeadSHA(t *testing.T) {
+	pr := &ghclient.PullRequest{Number: 7, State: "open", Title: "T"}
+	pr.Head.Ref = "feat/x"
+	pr.Head.SHA = "deadbeef0000000000000000000000000000beef"
+	pr.Head.Repo.FullName = "forker/bar"
+	pr.Head.Repo.CloneURL = "https://github.com/forker/bar.git"
+	pr.Base.Ref = "main"
+
+	w, _ := newTestPRReviewWorkflow(t)
+	w.github = &fakeGitHubPR{pr: pr}
+
+	step, err := w.Trigger(context.Background(), TriggerEvent{ChannelID: "C1", ThreadTS: "1.0"}, "https://github.com/foo/bar/pull/7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSubmit {
+		t.Fatalf("expected NextStepSubmit, got %v", step.Kind)
+	}
+	st, ok := step.Pending.State.(*prReviewState)
+	if !ok {
+		t.Fatalf("State is not *prReviewState: %T", step.Pending.State)
+	}
+	if st.HeadSHA != "deadbeef0000000000000000000000000000beef" {
+		t.Errorf("HeadSHA = %q, want \"deadbeef0000000000000000000000000000beef\"", st.HeadSHA)
+	}
+}
+
 func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	t.Helper()
 	cfg := &config.Config{}

@@ -39,6 +39,7 @@ type prReviewState struct {
 	Number   int
 	HeadRepo string // head.repo.full_name; may differ from Owner/Repo for forks
 	HeadRef  string
+	HeadSHA  string // head.sha — immutable across branch deletion; used as Job.Branch git ref
 	BaseRef  string
 }
 
@@ -159,6 +160,7 @@ func (w *PRReviewWorkflow) validateAndBuild(ctx context.Context, ev TriggerEvent
 		Number:   parts.Number,
 		HeadRepo: pr.Head.Repo.FullName,
 		HeadRef:  pr.Head.Ref,
+		HeadSHA:  pr.Head.SHA,
 		BaseRef:  pr.Base.Ref,
 	}
 	pending := &Pending{
@@ -257,11 +259,11 @@ func (w *PRReviewWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job
 		ThreadTS:    p.ThreadTS,
 		UserID:      p.UserID,
 		Repo:        st.HeadRepo,
-		Branch:      st.HeadRef,
+		Branch:      st.HeadSHA, // SHA — immutable git ref consumed by `git worktree add`
 		CloneURL:    cloneURL,
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
-			Branch:           st.HeadRef,
+			Branch:           st.HeadRef, // human-readable branch name for prompt
 			Goal:             w.cfg.Prompt.PRReview.Goal,
 			ResponseSchema:   w.cfg.Prompt.PRReview.ResponseSchema,
 			OutputRules:      w.cfg.Prompt.PRReview.OutputRules,
