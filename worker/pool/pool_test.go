@@ -257,6 +257,7 @@ func TestExecuteJob_DecryptsAndMergesSecrets(t *testing.T) {
 
 	job := &queue.Job{
 		ID:               "test-job",
+		Repo:             "owner/repo",
 		CloneURL:         "https://github.com/owner/repo.git",
 		EncryptedSecrets: encrypted,
 		PromptContext: &queue.PromptContext{
@@ -294,6 +295,7 @@ func TestExecuteJob_NoSecretKey_EncryptedSecrets_Fails(t *testing.T) {
 
 	job := &queue.Job{
 		ID:               "test-job",
+		Repo:             "owner/repo",
 		CloneURL:         "https://github.com/owner/repo.git",
 		EncryptedSecrets: []byte("some-encrypted-data"),
 	}

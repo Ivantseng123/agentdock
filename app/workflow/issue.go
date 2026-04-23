@@ -202,6 +202,16 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 		return nil, "", fmt.Errorf("IssueWorkflow.BuildJob: unexpected state type")
 	}
 
+	// Guard against empty repo — the state-machine race (selector click on a
+	// late-arriving orphan branch selector after back-to-repo) can leave
+	// SelectedRepo blank while SelectedBranch is set. Refusing here means
+	// app.submitJob's BuildJob-err branch posts ":x: internal state error" and
+	// clears dedup, instead of shipping `CloneURL=https://github.com/.git` to
+	// the worker. Matching language used in worker guard: "empty repo reference".
+	if strings.TrimSpace(st.SelectedRepo) == "" {
+		return nil, "", fmt.Errorf("empty repo reference: 內部狀態錯誤，請重試 /triage")
+	}
+
 	reqID := p.RequestID
 	if reqID == "" {
 		reqID = logging.NewRequestID()

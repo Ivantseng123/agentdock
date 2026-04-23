@@ -40,6 +40,29 @@ type Pending struct {
 	TaskType    string // workflow identity, equal to Workflow.Type()
 	State       any    // per-workflow state struct
 	BusyHint    string // populated by bot.Workflow.submit() when verdict is BusyEnqueueOK; app.submitJob appends to statusText
+
+	// Invalidated marks this pending as no longer usable. Set by the shim
+	// when the user presses back-to-repo; any in-flight selector / store /
+	// advance path that observes Invalidated == true must early-return instead
+	// of posting new UI or advancing state. This closes the race where a late
+	// repo-prep goroutine posts an orphan branch selector under a pending the
+	// user has already abandoned.
+	Invalidated bool
+}
+
+// Invalidate marks the pending unusable. Safe to call multiple times.
+// Callers should hold the shim's pending-map lock when setting this so
+// concurrent lookups observe a consistent flag.
+func (p *Pending) Invalidate() {
+	if p == nil {
+		return
+	}
+	p.Invalidated = true
+}
+
+// IsInvalidated reports whether this pending has been invalidated.
+func (p *Pending) IsInvalidated() bool {
+	return p != nil && p.Invalidated
 }
 
 // NextStepKind enumerates the actions a workflow's Trigger/Selection can

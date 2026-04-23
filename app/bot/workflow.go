@@ -159,10 +159,25 @@ var dSelectorLabel = map[string]string{
 // pending; NextStepPostSelector re-keys it under a new selectorTS inside
 // executeStep via storePending.
 func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, triggerID string) {
+	// Atomically claim the pending — look up and remove in one critical
+	// section so two rapid clicks on the same selector can't both get the
+	// same pointer. The second click observes an empty map entry and
+	// silently drops. NextStepOpenModal re-stores the pending under a fresh
+	// key inside executeStep (via storePending).
 	w.mu.Lock()
 	pending, ok := w.pending[selectorMsgTS]
+	if ok {
+		delete(w.pending, selectorMsgTS)
+	}
 	w.mu.Unlock()
 	if !ok {
+		return
+	}
+
+	// Invalidated pendings (e.g. back-to-repo fired first) must not advance
+	// state. Ack the user so they know the button is dead.
+	if pending.IsInvalidated() {
+		_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":information_source: 此選單已失效，請使用新的選單")
 		return
 	}
 
@@ -180,15 +195,7 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, tr
 	step, err := w.dispatcher.HandleSelection(ctx, pending, value)
 	if err != nil {
 		w.logger.Error("HandleSelection dispatch failed", "phase", "失敗", "error", err)
-		w.mu.Lock()
-		delete(w.pending, selectorMsgTS)
-		w.mu.Unlock()
 		return
-	}
-	if step.Kind != workflow.NextStepOpenModal {
-		w.mu.Lock()
-		delete(w.pending, selectorMsgTS)
-		w.mu.Unlock()
 	}
 	w.executeStep(ctx, pending, step, triggerID)
 }
@@ -261,21 +268,55 @@ func (w *Workflow) HandleBackToRepo(channelID, selectorMsgTS string) {
 	pending, ok := w.pending[selectorMsgTS]
 	if ok {
 		delete(w.pending, selectorMsgTS)
+		// Invalidate the current pending generation so any in-flight repo
+		// preparation (slow clone + branch enumerate) that's still racing
+		// towards a PostSelector/storePending will observe this flag and
+		// early-return instead of posting an orphan branch selector the
+		// user has already navigated away from.
+		pending.Invalidate()
 	}
 	w.mu.Unlock()
 	if !ok {
 		return
 	}
 
+	// HandleBackToRepo starts a fresh generation. Use a brand-new Pending
+	// so the dispatcher's re-dispatch (repo picker / external search) can't
+	// collide with the invalidated one.
+	fresh := &workflow.Pending{
+		ChannelID:   pending.ChannelID,
+		ThreadTS:    pending.ThreadTS,
+		TriggerTS:   pending.TriggerTS,
+		UserID:      pending.UserID,
+		Reporter:    pending.Reporter,
+		ChannelName: pending.ChannelName,
+		RequestID:   pending.RequestID,
+		TaskType:    pending.TaskType,
+	}
+	// Re-seed State by delegating to the owning workflow via back_to_repo
+	// value. We still pass the (invalidated) old pending to HandleSelection
+	// because IssueWorkflow.handleBackToRepo operates on its State to clear
+	// SelectedRepo/Branch/ExtraDesc. But what storePending below sees must be
+	// the fresh pending — which the dispatcher's NextStep carries via
+	// step.Pending only when the workflow decides to. Fall back to fresh
+	// when the step's Pending is the same (invalidated) pointer.
 	ctx := context.Background()
 	step, err := w.dispatcher.HandleSelection(ctx, pending, "back_to_repo")
 	if err != nil {
 		w.logger.Error("HandleBackToRepo dispatch failed", "phase", "失敗", "error", err)
 		return
 	}
+	// If the workflow returned the same invalidated pending, substitute the
+	// fresh one so subsequent store paths don't hit the invalidation guard.
+	if step.Pending == pending {
+		// Copy over State (workflow mutated it) onto fresh.
+		fresh.State = pending.State
+		fresh.Phase = pending.Phase
+		step.Pending = fresh
+	}
 	// Update old selector to show we navigated back.
 	_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":leftwards_arrow_with_hook: 已返回 repo 選擇")
-	w.executeStep(ctx, pending, step, "")
+	w.executeStep(ctx, fresh, step, "")
 }
 
 // executeStep applies a NextStep from a workflow: posts a selector, opens a
@@ -293,6 +334,18 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 	}
 	if pending == nil {
 		return
+	}
+	// Invalidated pending — any post/store/advance path must early-return.
+	// Error/Noop/Cancel still render their Slack surface area, but selectors
+	// and modals must not re-attach stale state to new message TSes.
+	if pending.IsInvalidated() {
+		switch step.Kind {
+		case workflow.NextStepPostSelector,
+			workflow.NextStepPostExternalSelector,
+			workflow.NextStepOpenModal,
+			workflow.NextStepSubmit:
+			return
+		}
 	}
 	switch step.Kind {
 	case workflow.NextStepPostSelector:
@@ -459,7 +512,14 @@ func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
 
 // storePending registers a pending workflow state under selectorTS and starts
 // a goroutine that evicts the entry after pendingTimeout.
+//
+// Invalidated pendings are refused — a late in-flight repo-prep goroutine
+// that finishes after back-to-repo would otherwise post an orphan selector
+// and re-attach the user's old (stale) state to a fresh TS.
 func (w *Workflow) storePending(selectorTS string, p *workflow.Pending) {
+	if p.IsInvalidated() {
+		return
+	}
 	p.SelectorTS = selectorTS
 	w.mu.Lock()
 	w.pending[selectorTS] = p

@@ -494,3 +494,182 @@ func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
 		}
 	}
 }
+
+// ── RED/GREEN #1: in-flight dedup for rapid repeated clicks ─────────────────
+//
+// Two rapid clicks on the same selector TS must yield only one dispatched
+// Selection — the second click finds no pending in the map and no-ops. Without
+// the fix, both clicks share the same *Pending pointer and race on its State.
+func TestHandleSelection_RapidDoubleClick_DispatchesOnce(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{"C1": {}}}
+	reg := workflow.NewRegistry()
+	counter := &countingWorkflow{}
+	reg.Register(counter)
+	disp := workflow.NewDispatcher(reg, sl, slog.Default())
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	const selectorTS = "sel-dup"
+	p := &workflow.Pending{
+		ChannelID:  "C1",
+		ThreadTS:   "T1",
+		TaskType:   "count",
+		Phase:      "repo",
+		SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	// Fire two clicks back-to-back. Since the test drives them serially,
+	// the first click atomically removes the pending; the second must miss.
+	wf.HandleSelection("C1", "repo_select", "owner/A", selectorTS, "")
+	wf.HandleSelection("C1", "repo_select", "owner/B", selectorTS, "")
+
+	if got := counter.selectionCalls(); got != 1 {
+		t.Errorf("Selection called %d times, want 1 (second click must find no pending)", got)
+	}
+}
+
+// ── RED/GREEN #2: back-to-repo invalidates the pending so late selectors no-op.
+//
+// After HandleBackToRepo, any still-in-flight executeStep that tries to
+// PostSelector + storePending for the OLD pending must early-return — no
+// Slack post, no new map entry. We drive this by invalidating the pending
+// and feeding a PostSelector NextStep through executeStep.
+func TestExecuteStep_InvalidatedPending_DoesNotPostSelector(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	p.Invalidate()
+
+	step := workflow.NextStep{
+		Kind:           workflow.NextStepPostSelector,
+		SelectorPrompt: "Which branch?",
+		SelectorActions: []workflow.SelectorAction{
+			{ActionID: "branch_select", Label: "main", Value: "main"},
+		},
+		Pending: p,
+	}
+	wf.executeStep(context.Background(), p, step, "")
+
+	// No pending should have been stored.
+	wf.mu.Lock()
+	n := len(wf.pending)
+	wf.mu.Unlock()
+	if n != 0 {
+		t.Errorf("pending map size = %d, want 0 (invalidated pending must not be stored)", n)
+	}
+}
+
+// ── RED/GREEN #3: invalidated pending must not submit jobs either. ──────────
+func TestExecuteStep_InvalidatedPending_DoesNotSubmit(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	called := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) { called = true })
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	p.Invalidate()
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
+
+	if called {
+		t.Error("onSubmit must not fire for invalidated pending")
+	}
+}
+
+// HandleBackToRepo: must invalidate the old pending and NOT carry the
+// invalidated pointer into the re-dispatched step. Any subsequent Selection
+// click on the OLD selectorTS is a no-op (entry removed + pending invalidated).
+func TestHandleBackToRepo_InvalidatesOldPending(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{
+		Channels:        map[string]config.ChannelConfig{"C1": {Repos: []string{"owner/A", "owner/B"}}},
+		ChannelDefaults: config.ChannelConfig{},
+	}
+	reg := workflow.NewRegistry()
+	// Use the real IssueWorkflow — it implements handleBackToRepo correctly.
+	issueWf := workflow.NewIssueWorkflow(cfg, sl, nil, nil, nil, slog.Default())
+	reg.Register(issueWf)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	// Seed a pending on a branch selector.
+	const selectorTS = "sel-old"
+	oldPending := &workflow.Pending{
+		ChannelID:   "C1",
+		ThreadTS:    "T1",
+		TaskType:    "issue",
+		Phase:       "branch",
+		SelectorTS:  selectorTS,
+		RequestID:   "req-1",
+		ChannelName: "C1",
+		Reporter:    "U1",
+	}
+	// The issue workflow expects its own state struct; build one with a
+	// picked repo so back-to-repo is a valid transition.
+	// The concrete state struct is unexported; we drive back-to-repo via a
+	// minimal surrogate by calling the shim handler and asserting map/flag
+	// effects only.
+	wf.mu.Lock()
+	wf.pending[selectorTS] = oldPending
+	wf.mu.Unlock()
+
+	wf.HandleBackToRepo("C1", selectorTS)
+
+	// The old pending must be marked invalidated.
+	if !oldPending.IsInvalidated() {
+		t.Error("expected old pending to be invalidated after HandleBackToRepo")
+	}
+
+	// The old selectorTS entry must be gone.
+	wf.mu.Lock()
+	_, stillThere := wf.pending[selectorTS]
+	wf.mu.Unlock()
+	if stillThere {
+		t.Errorf("old selectorTS %q still in pending map", selectorTS)
+	}
+
+	// A click on the invalidated selectorTS after back is a no-op.
+	wf.HandleSelection("C1", "branch_select", "main", selectorTS, "")
+	// (No panic, no submit — nothing to assert besides non-crash.)
+}
+
+// countingWorkflow records Selection invocations so we can assert dedup.
+type countingWorkflow struct {
+	mu        sync.Mutex
+	selection int
+}
+
+func (f *countingWorkflow) Type() string { return "count" }
+func (f *countingWorkflow) Trigger(ctx context.Context, ev workflow.TriggerEvent, args string) (workflow.NextStep, error) {
+	return workflow.NextStep{Kind: workflow.NextStepNoop}, nil
+}
+func (f *countingWorkflow) Selection(ctx context.Context, p *workflow.Pending, value string) (workflow.NextStep, error) {
+	f.mu.Lock()
+	f.selection++
+	f.mu.Unlock()
+	return workflow.NextStep{Kind: workflow.NextStepNoop, Pending: p}, nil
+}
+func (f *countingWorkflow) BuildJob(ctx context.Context, p *workflow.Pending) (*queue.Job, string, error) {
+	return &queue.Job{TaskType: "count"}, "status", nil
+}
+func (f *countingWorkflow) HandleResult(ctx context.Context, s *queue.JobState, r *queue.JobResult) error {
+	return nil
+}
+func (f *countingWorkflow) selectionCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.selection
+}

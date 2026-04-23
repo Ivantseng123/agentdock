@@ -380,6 +380,54 @@ func TestIssueWorkflow_HandleResult_FallsBackToStateWorkerID(t *testing.T) {
 	}
 }
 
+// ── RED/GREEN #4: BuildJob guards against empty repo ───────────────────────
+//
+// When the state-machine race leaves SelectedRepo blank (e.g. back-to-repo
+// after orphan branch click), BuildJob must refuse instead of letting a job
+// with CloneURL=https://github.com/.git reach the worker.
+func TestIssueWorkflow_BuildJob_RejectsEmptyRepo(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1",
+		ThreadTS:  "T1",
+		TaskType:  "issue",
+		State: &issueState{
+			SelectedRepo:   "",     // empty — the race outcome
+			SelectedBranch: "main", // non-empty branch makes the failure mode realistic
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err == nil {
+		t.Fatal("BuildJob: expected error for empty SelectedRepo, got nil")
+	}
+	if job != nil {
+		t.Errorf("BuildJob: job should be nil on error, got %+v", job)
+	}
+	if !strings.Contains(err.Error(), "empty repo") {
+		t.Errorf("error should mention empty repo, got %q", err.Error())
+	}
+}
+
+func TestIssueWorkflow_BuildJob_AcceptsNonEmptyRepo(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1",
+		ThreadTS:  "T1",
+		TaskType:  "issue",
+		State: &issueState{
+			SelectedRepo:   "owner/repo",
+			SelectedBranch: "main",
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatalf("BuildJob: unexpected error: %v", err)
+	}
+	if job == nil || job.Repo != "owner/repo" {
+		t.Errorf("BuildJob: want Repo=owner/repo, got %+v", job)
+	}
+}
+
 // ── test helpers ─────────────────────────────────────────────────────────────
 
 type issueOpt func(*config.Config)

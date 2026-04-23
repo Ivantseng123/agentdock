@@ -91,6 +91,16 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	if err := ctx.Err(); err != nil {
 		return classifyResult(job, startedAt, err, "", ctx, deps.store)
 	}
+	// Guard against empty repo reference: if the job needs a clone (CloneURL
+	// is set) but carries no real repo identity, refuse up-front instead of
+	// asking git to clone "https://github.com/.git". cleanCloneURL on the
+	// app side normalises empty owner/repo strings into that URL, so the
+	// worker must catch both shapes — the raw empty string AND the
+	// github-prefixed placeholder — to produce a clear error message.
+	if isEmptyRepoReference(job) {
+		logger.Error("Repo 準備失敗", "phase", "失敗", "error", "empty repo reference")
+		return failedResult(job, startedAt, fmt.Errorf("empty repo reference: job has no usable repo/clone_url"), "")
+	}
 	provider := selectProvider(job, deps.repoCache, ghToken)
 	repoPath, err := provider.Prepare(job)
 	if err != nil {
@@ -191,6 +201,32 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]prompt
 		})
 	}
 	return infos, nil
+}
+
+// isEmptyRepoReference returns true when the job wants a repo clone but no
+// real repo is addressable. Two shapes matter:
+//  1. CloneURL is blank string — selectProvider picks EmptyDirProvider so this
+//     path is fine (Ask-style no-repo). We must not flag it.
+//  2. CloneURL is set but Repo is empty or whitespace — the app-side state
+//     machine fell through to cleanCloneURL("") which yields the placeholder
+//     "https://github.com/.git". Either the placeholder exactly, or a
+//     non-empty CloneURL paired with an empty Repo, is a sign of the race.
+func isEmptyRepoReference(job *queue.Job) bool {
+	if job == nil {
+		return false
+	}
+	cloneURL := strings.TrimSpace(job.CloneURL)
+	if cloneURL == "" {
+		// No clone needed — EmptyDirProvider path.
+		return false
+	}
+	if cloneURL == "https://github.com/.git" {
+		return true
+	}
+	if strings.TrimSpace(job.Repo) == "" {
+		return true
+	}
+	return false
 }
 
 func classifyResult(job *queue.Job, startedAt time.Time, err error, repoPath string, ctx context.Context, store queue.JobStore) *queue.JobResult {

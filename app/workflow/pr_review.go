@@ -244,6 +244,13 @@ func (w *PRReviewWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job
 		return nil, "", fmt.Errorf("PRReviewWorkflow.BuildJob: unexpected state type")
 	}
 
+	// Guard against empty head repo — if state is missing the PR head repo
+	// (malformed flow or race), refuse rather than build a job with
+	// CloneURL=https://github.com/.git.
+	if strings.TrimSpace(st.HeadRepo) == "" {
+		return nil, "", fmt.Errorf("empty repo reference: 內部狀態錯誤，請重試 /triage")
+	}
+
 	reqID := p.RequestID
 	if reqID == "" {
 		reqID = logging.NewRequestID()

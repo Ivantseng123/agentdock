@@ -260,6 +260,34 @@ func TestPRReviewWorkflow_ValidateAndBuild_PopulatesHeadSHA(t *testing.T) {
 	}
 }
 
+// ── RED/GREEN #4: PR Review BuildJob rejects empty head repo. ──────────────
+func TestPRReviewWorkflow_BuildJob_RejectsEmptyHeadRepo(t *testing.T) {
+	w, _ := newTestPRReviewWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1",
+		ThreadTS:  "T1",
+		TaskType:  "pr_review",
+		State: &prReviewState{
+			URL:      "https://github.com/foo/bar/pull/7",
+			Owner:    "foo",
+			Repo:     "bar",
+			Number:   7,
+			HeadRepo: "", // empty — refuse
+			HeadSHA:  "abc",
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err == nil {
+		t.Fatal("BuildJob: expected error for empty HeadRepo, got nil")
+	}
+	if job != nil {
+		t.Errorf("BuildJob: expected nil job on error, got %+v", job)
+	}
+	if !strings.Contains(err.Error(), "empty repo") {
+		t.Errorf("error should mention empty repo, got %q", err.Error())
+	}
+}
+
 func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	t.Helper()
 	cfg := &config.Config{}

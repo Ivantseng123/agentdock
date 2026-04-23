@@ -132,6 +132,109 @@ func TestExecuteJob_NilPromptContextFailsMalformed(t *testing.T) {
 	}
 }
 
+// ── RED/GREEN #5: empty repo reference → fail before git clone. ────────────
+//
+// When the app-side state-machine race leaves Job.Repo="" and CloneURL as the
+// placeholder "https://github.com/.git" (cleanCloneURL("") output), the
+// worker must refuse before invoking Prepare rather than asking git to clone
+// a nonsense URL.
+func TestExecuteJob_EmptyRepoPlaceholderCloneURL_FailsBeforeClone(t *testing.T) {
+	store := queue.NewMemJobStore()
+	job := &queue.Job{
+		ID:            "jempty1",
+		Repo:          "",
+		CloneURL:      "https://github.com/.git",
+		Branch:        "master",
+		PromptContext: &queue.PromptContext{},
+	}
+	store.Put(job)
+
+	prepareCalled := false
+	deps := executionDeps{
+		attachments: queuetest.NewAttachmentStore(),
+		repoCache: &mockRepo{
+			path:        "/tmp/r",
+			prepareHook: func() { prepareCalled = true },
+		},
+		runner: &mockRunner{},
+		store:  store,
+	}
+
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
+
+	if prepareCalled {
+		t.Error("Prepare must not run for empty-repo placeholder CloneURL")
+	}
+	if result.Status != "failed" {
+		t.Errorf("status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Error, "empty repo reference") {
+		t.Errorf("error should mention empty repo reference, got %q", result.Error)
+	}
+}
+
+func TestExecuteJob_EmptyRepoStringWithNonEmptyCloneURL_FailsBeforeClone(t *testing.T) {
+	// Edge case: CloneURL is some URL but Repo is blank — still a race
+	// symptom, still refuse.
+	store := queue.NewMemJobStore()
+	job := &queue.Job{
+		ID:            "jempty2",
+		Repo:          "",
+		CloneURL:      "https://github.com/something.git",
+		Branch:        "master",
+		PromptContext: &queue.PromptContext{},
+	}
+	store.Put(job)
+
+	prepareCalled := false
+	deps := executionDeps{
+		attachments: queuetest.NewAttachmentStore(),
+		repoCache: &mockRepo{
+			path:        "/tmp/r",
+			prepareHook: func() { prepareCalled = true },
+		},
+		runner: &mockRunner{},
+		store:  store,
+	}
+
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
+
+	if prepareCalled {
+		t.Error("Prepare must not run when Repo is empty but CloneURL is set")
+	}
+	if result.Status != "failed" {
+		t.Errorf("status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Error, "empty repo reference") {
+		t.Errorf("error should mention empty repo reference, got %q", result.Error)
+	}
+}
+
+func TestExecuteJob_EmptyCloneURLIsAskPath_NotFlaggedEmpty(t *testing.T) {
+	// Ask-with-no-repo: CloneURL is "" and EmptyDirProvider handles it. The
+	// empty-repo guard must NOT fire here — otherwise every Ask job breaks.
+	store := queue.NewMemJobStore()
+	job := &queue.Job{
+		ID:            "jask",
+		Repo:          "",
+		CloneURL:      "",
+		PromptContext: &queue.PromptContext{},
+	}
+	store.Put(job)
+
+	deps := executionDeps{
+		attachments: queuetest.NewAttachmentStore(),
+		repoCache:   &mockRepo{path: "/tmp/r"},
+		runner:      &mockRunner{output: "ok"},
+		store:       store,
+	}
+
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
+	if result.Status == "failed" && strings.Contains(result.Error, "empty repo reference") {
+		t.Error("Ask-style empty CloneURL must not be flagged as empty repo reference")
+	}
+}
+
 // Scenario B-race — Pre-Prepare ctx guard: store set to JobCancelled before Prepare runs
 // → Prepare is not invoked and the result is cancelled.
 func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
