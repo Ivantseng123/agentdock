@@ -166,11 +166,21 @@ type RedisConfig struct {
 type QueueConfig struct {
 	Capacity         int           `yaml:"capacity"`
 	Transport        string        `yaml:"transport"`
+	// Store selects the JobStore backend: "mem" (default — in-process map,
+	// lost on restart) or "redis" (persisted; survives redeploys so the
+	// ResultListener can still serve JobResult for jobs submitted by a
+	// previous app instance). See docs/configuration-app.md for the
+	// trade-offs and issue #123 for the motivating incident.
+	Store            string        `yaml:"store"`
 	JobTimeout       time.Duration `yaml:"job_timeout"`
 	AgentIdleTimeout time.Duration `yaml:"agent_idle_timeout"`
 	PrepareTimeout   time.Duration `yaml:"prepare_timeout"`
 	CancelTimeout    time.Duration `yaml:"cancel_timeout"`
 	StatusInterval   time.Duration `yaml:"status_interval"`
+	// StoreTTL is the per-entry TTL for RedisJobStore. Refreshed on every
+	// write, so a job that keeps moving never expires. Default: 1h, set
+	// only when Store == "redis".
+	StoreTTL         time.Duration `yaml:"store_ttl"`
 }
 
 type AvailabilityConfig struct {

@@ -106,6 +106,8 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis                    # extension point; only redis is supported today
+  store: mem                          # JobStore backend: mem (default; lost on restart) or redis (persisted; in-flight jobs survive app restart)
+  store_ttl: 1h                       # TTL for each RedisJobStore key when store=redis; refreshed on every write
   job_timeout: 20m                    # watchdog: max job lifecycle
   agent_idle_timeout: 5m              # stream-json: no-event timeout
   prepare_timeout: 3m
@@ -140,6 +142,30 @@ secrets:
 - Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`). `issue.output_rules` defaults to empty — formatting rules live in the triage-issue skill's SKILL.md body template, not here.
 
 **Legacy alias**: the flat `prompt.goal` / `prompt.output_rules` fields are copied into `prompt.issue.*` at load time, but only if `prompt.issue.*` is empty. This keeps pre-v2.1 yaml valid; new configs should write `prompt.issue.*` directly.
+
+## Job store (`queue.store`)
+
+The JobStore holds `JobState` for every in-flight job (status, worker assignment, latest agent status report, thread ↔ jobID mapping). Whether this state survives an app restart depends on the backend:
+
+| Value | Storage | Restart behaviour |
+|---|---|---|
+| `mem` (default) | app process memory | All in-flight state is lost. When the worker publishes its final JobResult, the ResultListener can't find the JobState, logs `找不到工作結果對應的工作`, and drops it — the Slack hourglass never updates |
+| `redis` | Redis keys `jobstore:<jobID>` + secondary index `jobstore:thread:<channel>:<ts>` | State is persisted across processes; a new app instance sees the old JobState and the ResultListener delivers the final Slack message and clears dedup as usual |
+
+**Pick `redis` when:**
+- Running in production (redeploys / OOM kills must not abandon in-flight review or triage jobs)
+- Multiple app pods share the same Slack workspace
+- Long-running tasks (e.g. PR review taking 5–10 minutes)
+
+**`mem` is still fine for:**
+- Local development / testing
+- Single-pod deployments where restarts are rare and stranded hourglass messages are tolerable
+
+**How to switch**: set `queue.store: redis` and optionally tune `queue.store_ttl` (default 1h; refreshed on every write so long-running tasks don't expire mid-flight). `redis.addr` must be set (required by `queue.transport: redis` anyway).
+
+When `queue.store` is `redis`, the app logs the number of rehydrated in-flight jobs on startup — useful for confirming the new instance actually picked up state from the previous one.
+
+Background & design notes: issue [#123](https://github.com/Ivantseng123/agentdock/issues/123).
 
 ## PR Review
 

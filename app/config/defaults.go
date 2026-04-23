@@ -41,6 +41,15 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Queue.Transport == "" {
 		cfg.Queue.Transport = "redis"
 	}
+	if cfg.Queue.Store == "" {
+		// Default to the in-process store so existing deployments keep the
+		// pre-#123 behaviour. Operators running multiple app pods or who
+		// rely on restart-safety should set queue.store: redis.
+		cfg.Queue.Store = "mem"
+	}
+	if cfg.Queue.StoreTTL <= 0 {
+		cfg.Queue.StoreTTL = 1 * time.Hour
+	}
 	if cfg.ChannelPriority == nil {
 		cfg.ChannelPriority = map[string]int{"default": 50}
 	}

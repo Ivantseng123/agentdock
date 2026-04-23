@@ -106,6 +106,8 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis                    # 擴充點；目前僅支援 redis
+  store: mem                          # JobStore 後端：mem（預設；重啟即失）/ redis（持久化，重啟仍保留 in-flight job 狀態）
+  store_ttl: 1h                       # store=redis 時每個 key 的 TTL；每次寫入會刷新
   job_timeout: 20m                    # watchdog：job 生命週期上限
   agent_idle_timeout: 5m              # stream-json 無事件多久視為卡住
   prepare_timeout: 3m
@@ -140,6 +142,30 @@ secrets:
 - 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。`issue.output_rules` 預設為空——格式規則走 `triage-issue` skill 的 SKILL.md body template，config 這層不重複。
 
 **Legacy alias**：`prompt.goal` / `prompt.output_rules`（扁平）在載入時會被拷到 `prompt.issue.*`（前提是 `prompt.issue.*` 還沒設）。這只是為了讓 v2.1 之前的 yaml 還能跑；新配置直接寫 `prompt.issue.*`。
+
+## Job store (`queue.store`)
+
+JobStore 儲存 in-flight job 的 `JobState`（status、worker 指派、agent 最近一次 status report、thread ↔ jobID 對應）。**app 重啟時這個 state 會不會被 worker 正在跑的 job 撞到**，取決於後端：
+
+| 值 | 存放 | 重啟後果 |
+|---|---|---|
+| `mem`（預設） | app process 記憶體 | 所有 in-flight job 的 state 全失；worker 跑完 publish 的 JobResult 找不到 JobState，log 「找不到工作結果對應的工作」然後 drop，Slack thread 的 hourglass 永遠不會更新 |
+| `redis` | Redis keys `jobstore:<jobID>` + 二級索引 `jobstore:thread:<channel>:<ts>` | state 跨 process 持久化；新 app instance 拿得到舊的 JobState，ResultListener 可以正常送最終 Slack 訊息、清 dedup |
+
+**什麼時候選 `redis`：**
+- 生產環境（避免 redeploy / OOM kill 把 in-flight 的 review 或 triage job 丟掉）
+- 多個 app pod 同時跑（所有 pod 看同一份 state）
+- 長時間任務（e.g. PR review 要 5–10 分鐘）
+
+**什麼時候 `mem` 仍可接受：**
+- 開發 / 本地測試
+- 單 pod、重啟頻率極低、且能容忍 hourglass 孤兒訊息
+
+**切換方式**：`queue.store: redis` + 設定 `queue.store_ttl`（預設 1h；每次寫入會刷 TTL，長時間任務不會中途過期）。選 `redis` 也必須有 `redis.addr` 設好（`queue.transport: redis` 的前提也一樣）。
+
+App 啟動時若 store 為 `redis` 會掃一次所有 key 並在 log 印出 rehydrated 的 job 數量——方便確認這次啟動確實看到前一代 instance 留下的 in-flight state。
+
+背景 / 設計細節：issue [#123](https://github.com/Ivantseng123/agentdock/issues/123)。
 
 ## PR Review
 
