@@ -79,6 +79,10 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Attachments.TTL = 30 * time.Minute
 	}
 	applyPromptDefaults(&cfg.Prompt)
+	if cfg.PRReview.Enabled == nil {
+		t := true
+		cfg.PRReview.Enabled = &t
+	}
 	resolveSecrets(cfg)
 }
 

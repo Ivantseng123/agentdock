@@ -132,7 +132,7 @@ App side:
 
 App side: posts `answer` directly into the thread; no issue is created. Over-length answers are truncated with a warning suffix.
 
-### PR Review (`@bot review <PR URL>`, requires `pr_review.enabled: true`)
+### PR Review (`@bot review <PR URL>`; on by default, set `pr_review.enabled: false` to disable)
 
 1. Loads the `github-pr-review` skill
 2. Reads the PR diff (the skill instructs the agent to use the `agentdock pr-review-helper` subcommand for fetching + posting)

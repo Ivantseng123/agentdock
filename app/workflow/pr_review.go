@@ -62,7 +62,7 @@ func (w *PRReviewWorkflow) Type() string { return "pr_review" }
 // All three paths produce a Pending with identity fields (Reporter / ChannelName
 // / RequestID / TaskType) populated so BuildJob can reuse them later.
 func (w *PRReviewWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string) (NextStep, error) {
-	if !w.cfg.PRReview.Enabled {
+	if !w.cfg.PRReview.IsEnabled() {
 		return NextStep{Kind: NextStepError, ErrorText: "PR Review 尚未啟用，請聯絡管理員"}, nil
 	}
 

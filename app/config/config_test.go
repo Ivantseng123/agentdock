@@ -204,11 +204,23 @@ prompt:
 	}
 }
 
-func TestPRReviewConfig_DefaultDisabled(t *testing.T) {
+func TestPRReviewConfig_DefaultEnabled(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
-	if cfg.PRReview.Enabled {
-		t.Error("PRReview.Enabled default should be false (opt-in)")
+	if !cfg.PRReview.IsEnabled() {
+		t.Error("PRReview default should be enabled (opt-out, not opt-in)")
+	}
+}
+
+func TestPRReviewConfig_ExplicitFalseWins(t *testing.T) {
+	// ApplyDefaults must not clobber an explicit `enabled: false` — operator
+	// override beats the new default-on behavior.
+	cfg := loadFromString(t, `
+pr_review:
+  enabled: false
+`)
+	if cfg.PRReview.IsEnabled() {
+		t.Error("explicit pr_review.enabled: false should turn the feature off")
 	}
 }
 

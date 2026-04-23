@@ -129,7 +129,7 @@ v2.0 還支援 `queue.transport: inmem`（app 和 worker 跑在同一個 process
 
 ### v2.1 → v2.2：無 breaking
 
-新增 `github-pr-review` skill 和 `agentdock pr-review-helper` subcommand，但 PR Review workflow 要另外用 `pr_review.enabled: true` 才會啟用（見下一段）。
+新增 `github-pr-review` skill 和 `agentdock pr-review-helper` subcommand。v2.2 發佈當下 PR Review workflow 要用 `pr_review.enabled: true` 才會啟用（v2.3.x 之後預設改為開啟，要關改寫 `enabled: false`）。
 
 ### v2.2 + workflow-types（PR #124）：prompt schema 重組 + PR Review feature flag
 

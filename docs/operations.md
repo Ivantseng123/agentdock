@@ -169,7 +169,7 @@ App 端：
 - 直接把 `answer` 貼回 thread；不建 issue
 - 超過 30000 chars 會截尾並附警語
 
-### PR Review（`@bot review <PR URL>`，需 `pr_review.enabled: true`）
+### PR Review（`@bot review <PR URL>`；預設開啟，`pr_review.enabled: false` 才關）
 
 1. 載入 `github-pr-review` skill
 2. 讀 PR diff（skill 會指 agent 用 `agentdock pr-review-helper` subcommand 去 fetch + post）

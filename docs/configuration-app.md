@@ -86,7 +86,7 @@ prompt:
   # output_rules: []
 
 pr_review:
-  enabled: false                      # PR Review workflow 的 feature flag；預設停用
+  enabled: true                       # PR Review workflow feature flag；預設開啟，`enabled: false` 才關
 
 skills_config: /etc/agentdock/skills.yaml   # 動態 skill 載入設定（可選）
 
@@ -137,14 +137,14 @@ secrets:
 
 **Legacy alias**：`prompt.goal` / `prompt.output_rules`（扁平）在載入時會被拷到 `prompt.issue.*`（前提是 `prompt.issue.*` 還沒設）。這只是為了讓 v2.1 之前的 yaml 還能跑；新配置直接寫 `prompt.issue.*`。
 
-## PR Review 啟用
+## PR Review
 
-`pr_review.enabled` 預設 `false`。開之前確認：
-1. Worker 側已經裝了 `github-pr-review` skill（worker 的 `skills_config` 有指到 `agents/skills/github-pr-review`）。
-2. Worker 那台機器的 `agentdock pr-review-helper` 可以執行（內建 subcommand，binary 要是同一版）。
-3. `secrets.GH_TOKEN` 的權限足以在目標 PR 上留 review comments。
+`pr_review.enabled` **預設 `true`**（`github-pr-review` skill 和 `agentdock pr-review-helper` subcommand 都已經包進 release image，預設 opt-out 即可）。若要關掉，顯式寫 `pr_review.enabled: false`。
 
-開啟後，`@bot review <PR URL>` 會走 PRReviewWorkflow；沒帶 URL 時會掃 thread、掃不到就開 modal。
+`@bot review <PR URL>` 走 PRReviewWorkflow；沒帶 URL 時會掃 thread、掃不到就開 modal。執行前確認：
+1. Worker 側已經載到 `github-pr-review` skill（`skills_config` 有指到 `agents/skills/github-pr-review`）。
+2. Worker container 的 `agentdock pr-review-helper` 可執行（內建 subcommand，app/worker binary 要同版）。
+3. `secrets.GH_TOKEN` 在目標 PR 有 review comments 權限。
 
 ## Log 層級
 

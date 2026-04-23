@@ -86,11 +86,21 @@ func (p PromptConfig) IsWorkerRulesAllowed() bool {
 	return p.AllowWorkerRules == nil || *p.AllowWorkerRules
 }
 
-// PRReviewConfig gates the PR Review workflow. Disabled by default so
-// operators opt in after verifying the github-pr-review skill and its
-// agentdock pr-review-helper subcommand are available on their workers.
+// PRReviewConfig gates the PR Review workflow. **Enabled by default** —
+// the github-pr-review skill and `agentdock pr-review-helper` subcommand
+// are now baked into the release image, so opting in was just ceremony.
+// Operators can still force it off with `pr_review.enabled: false`.
+//
+// Pointer-to-bool (not plain bool) lets us distinguish "unset" (→ default
+// true) from "explicit false" (→ disabled). See IsEnabled() for the gate.
 type PRReviewConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled *bool `yaml:"enabled"`
+}
+
+// IsEnabled reports whether the PR Review workflow should run. Nil pointer
+// is treated as enabled — the default ships on.
+func (c PRReviewConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 type ChannelConfig struct {

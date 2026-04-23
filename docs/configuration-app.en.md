@@ -86,7 +86,7 @@ prompt:
   # output_rules: []
 
 pr_review:
-  enabled: false                      # PR Review workflow feature flag; off by default
+  enabled: true                       # PR Review workflow feature flag; on by default — set `false` to opt out
 
 skills_config: /etc/agentdock/skills.yaml   # optional dynamic skill loader config
 
@@ -137,14 +137,14 @@ secrets:
 
 **Legacy alias**: the flat `prompt.goal` / `prompt.output_rules` fields are copied into `prompt.issue.*` at load time, but only if `prompt.issue.*` is empty. This keeps pre-v2.1 yaml valid; new configs should write `prompt.issue.*` directly.
 
-## Enabling PR Review
+## PR Review
 
-`pr_review.enabled` defaults to `false`. Before turning it on, make sure:
+`pr_review.enabled` **defaults to `true`** (the `github-pr-review` skill and `agentdock pr-review-helper` subcommand both ship in the release image, so opt-in was just ceremony). To turn it off, set `pr_review.enabled: false` explicitly.
+
+`@bot review <PR URL>` routes to PRReviewWorkflow; with no URL, the workflow scans the thread and falls back to a modal. Before relying on it, verify:
 1. Workers have the `github-pr-review` skill mounted (their `skills_config` points to `agents/skills/github-pr-review`).
-2. `agentdock pr-review-helper` is available on the worker host (built-in subcommand — keep the binary in sync).
+2. `agentdock pr-review-helper` is available on the worker host (built-in subcommand — keep app/worker binaries on the same version).
 3. `secrets.GH_TOKEN` has enough permission to post review comments on the target PR.
-
-Once enabled, `@bot review <PR URL>` routes to PRReviewWorkflow; with no URL, the workflow scans the thread and falls back to a modal.
 
 ## Log levels
 

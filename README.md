@@ -12,7 +12,7 @@ AI agent 調度平台 — 從 Slack 接收請求，分派給 CLI agent（claude/
 | `ask` | `@bot ask 這段 retry 邏輯在哪？` | Agent 讀 thread（可選附 repo）→ 直接在 thread 內回答，不開 issue |
 | `review` | `@bot review <PR URL>` | Agent clone PR head → 直接在 PR 上留 line-level comments + summary，回 thread 報狀態 |
 
-不帶動詞（`@bot`）→ 跳出三顆按鈕讓你選 issue / ask / review。`review` 預設停用，需要 `pr_review.enabled: true`。
+不帶動詞（`@bot`）→ 跳出三顆按鈕讓你選 issue / ask / review。`review` 預設開啟，要關就設 `pr_review.enabled: false`。
 
 Go 單一 binary（`agentdock` with `app` / `worker` 兩個子命令）。Transport 以 Redis 為主，`queue.transport` 是保留的擴充點供未來新增 backend。Repo 內有 3 個獨立 Go module：
 

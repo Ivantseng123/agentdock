@@ -12,7 +12,7 @@ AI agent dispatch platform — receives requests from Slack, dispatches to CLI a
 | `ask` | `@bot ask where is the retry logic?` | Agent reads thread (repo optional) → answers inline in thread, no issue created |
 | `review` | `@bot review <PR URL>` | Agent clones PR head → posts line-level comments + summary to the PR, reports status back to thread |
 
-No verb (`@bot`) → three-button selector lets you pick issue / ask / review. `review` is off by default; enable with `pr_review.enabled: true`.
+No verb (`@bot`) → three-button selector lets you pick issue / ask / review. `review` is on by default; opt out with `pr_review.enabled: false`.
 
 Single Go binary (`agentdock` with `app` / `worker` subcommands). Redis is the only transport today; `queue.transport` stays as the extension point for future backends. Repo contains three independent Go modules:
 

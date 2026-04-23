@@ -129,7 +129,7 @@ Other v2.1 changes (additive — existing yaml keeps working):
 
 ### v2.1 → v2.2: no breaking changes
 
-Adds the `github-pr-review` skill and the `agentdock pr-review-helper` subcommand. The PR Review workflow itself stays off until you set `pr_review.enabled: true` (see next).
+Adds the `github-pr-review` skill and the `agentdock pr-review-helper` subcommand. At v2.2, the PR Review workflow itself required `pr_review.enabled: true`; from v2.3.x onward it defaults to enabled (flip `enabled: false` to opt out).
 
 ### v2.2 + workflow-types (PR #124): prompt schema reshape + PR Review feature flag
 
