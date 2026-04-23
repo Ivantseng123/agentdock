@@ -380,6 +380,51 @@ func TestIssueWorkflow_HandleResult_FallsBackToStateWorkerID(t *testing.T) {
 	}
 }
 
+// ── new tests for #140: defensive guard on BuildJob ──────────────────────────
+
+// TestIssueWorkflow_BuildJob_RejectsEmptyRepo verifies that BuildJob returns a
+// non-nil error containing "empty repo reference" when SelectedRepo is blank,
+// preventing a malformed job from reaching the worker queue.
+func TestIssueWorkflow_BuildJob_RejectsEmptyRepo(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		State: &issueState{SelectedRepo: ""}, // deliberately empty
+	}
+
+	job, status, err := w.BuildJob(context.Background(), p)
+	if err == nil {
+		t.Fatal("expected error for empty SelectedRepo, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty repo reference") {
+		t.Errorf("error = %q, want substring \"empty repo reference\"", err.Error())
+	}
+	if job != nil {
+		t.Errorf("job should be nil on error, got %+v", job)
+	}
+	if status != "" {
+		t.Errorf("status should be empty on error, got %q", status)
+	}
+}
+
+// TestIssueWorkflow_BuildJob_AcceptsNonEmptyRepo is the regression guard: a
+// normal job with SelectedRepo set must still build without error.
+func TestIssueWorkflow_BuildJob_AcceptsNonEmptyRepo(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		State: &issueState{SelectedRepo: "foo/bar"},
+	}
+
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatalf("BuildJob returned unexpected error: %v", err)
+	}
+	if job == nil {
+		t.Fatal("expected non-nil job")
+	}
+}
+
 // ── test helpers ─────────────────────────────────────────────────────────────
 
 type issueOpt func(*config.Config)

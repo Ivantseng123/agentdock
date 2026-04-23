@@ -260,6 +260,44 @@ func TestPRReviewWorkflow_ValidateAndBuild_PopulatesHeadSHA(t *testing.T) {
 	}
 }
 
+// ── new tests for #140: defensive guard on BuildJob ──────────────────────────
+
+// TestPRReviewWorkflow_BuildJob_RejectsEmptyHeadRepo verifies that BuildJob
+// returns an error containing "empty repo reference" when HeadRepo is blank,
+// preventing a fork-PR job with missing head info from reaching the worker.
+func TestPRReviewWorkflow_BuildJob_RejectsEmptyHeadRepo(t *testing.T) {
+	w, _ := newTestPRReviewWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		RequestID: "req-1",
+		TaskType:  "pr_review",
+		State: &prReviewState{
+			URL:      "https://github.com/foo/bar/pull/7",
+			Owner:    "foo",
+			Repo:     "bar",
+			Number:   7,
+			HeadRepo: "", // deliberately empty
+			HeadRef:  "feat/x",
+			HeadSHA:  "abc123",
+			BaseRef:  "main",
+		},
+	}
+
+	job, status, err := w.BuildJob(context.Background(), p)
+	if err == nil {
+		t.Fatal("expected error for empty HeadRepo, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty repo reference") {
+		t.Errorf("error = %q, want substring \"empty repo reference\"", err.Error())
+	}
+	if job != nil {
+		t.Errorf("job should be nil on error, got %+v", job)
+	}
+	if status != "" {
+		t.Errorf("status should be empty on error, got %q", status)
+	}
+}
+
 func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	t.Helper()
 	cfg := &config.Config{}

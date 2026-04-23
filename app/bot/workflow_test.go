@@ -471,6 +471,277 @@ func TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues(t *testing.T) {
 	}
 }
 
+// ── #141 pending invalidation + in-flight dedup ────────────────────────────
+
+// countingSelectionWorkflow counts Selection calls. Used by the
+// rapid-double-click test to assert only one click ever reaches dispatch.
+type countingSelectionWorkflow struct {
+	mu        sync.Mutex
+	selCalls  int
+	returnFn  func(p *workflow.Pending, value string) workflow.NextStep
+	signalCh  chan struct{} // closed by the first Selection caller if non-nil
+	waitUntil chan struct{} // if non-nil, Selection blocks until this closes
+}
+
+func (f *countingSelectionWorkflow) Type() string { return "issue" }
+func (f *countingSelectionWorkflow) Trigger(ctx context.Context, ev workflow.TriggerEvent, args string) (workflow.NextStep, error) {
+	return workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: &workflow.Pending{ChannelID: ev.ChannelID, ThreadTS: ev.ThreadTS, TaskType: "issue"}}, nil
+}
+func (f *countingSelectionWorkflow) Selection(ctx context.Context, p *workflow.Pending, value string) (workflow.NextStep, error) {
+	f.mu.Lock()
+	first := f.selCalls == 0
+	f.selCalls++
+	f.mu.Unlock()
+	if first && f.signalCh != nil {
+		close(f.signalCh)
+	}
+	if f.waitUntil != nil {
+		<-f.waitUntil
+	}
+	if f.returnFn != nil {
+		return f.returnFn(p, value), nil
+	}
+	return workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}, nil
+}
+func (f *countingSelectionWorkflow) BuildJob(ctx context.Context, p *workflow.Pending) (*queue.Job, string, error) {
+	return &queue.Job{TaskType: "issue"}, "status", nil
+}
+func (f *countingSelectionWorkflow) HandleResult(ctx context.Context, state *queue.JobState, result *queue.JobResult) error {
+	return nil
+}
+
+// TestHandleSelection_RapidDoubleClick_DispatchesOnce simulates two concurrent
+// clicks on the same selector message. The workflow's Selection is slow, so
+// both clicks reach HandleSelection before either has a chance to finish.
+// The atomic lookup-and-delete must ensure only the first click's lookup
+// succeeds; the second returns early and never dispatches.
+func TestHandleSelection_RapidDoubleClick_DispatchesOnce(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	gate := make(chan struct{})
+	fake := &countingSelectionWorkflow{waitUntil: gate}
+	reg.Register(fake)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
+
+	const selectorTS = "sel-double"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1", TaskType: "issue",
+		Phase: "issue_confirm", SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); wf.HandleSelection("C1", "issue_confirm", "ok", selectorTS, "") }()
+	go func() { defer wg.Done(); wf.HandleSelection("C1", "issue_confirm", "ok", selectorTS, "") }()
+
+	// Give both goroutines time to hit the lookup; only one should proceed
+	// into Selection (which blocks on gate). Release after a brief pause.
+	time.Sleep(20 * time.Millisecond)
+	close(gate)
+	wg.Wait()
+
+	fake.mu.Lock()
+	calls := fake.selCalls
+	fake.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("Selection call count = %d, want 1 (second click should have been deduped)", calls)
+	}
+}
+
+// TestHandleSelection_OpenModal_ReinsertsPending verifies the OpenModal
+// regression guard: when the workflow's Selection returns OpenModal with
+// ModalMetadata == selectorMsgTS (the lookup key), HandleSelection must
+// re-insert the pending under that key so the subsequent modal submit can
+// still resolve it via HandleDescriptionSubmit.
+func TestHandleSelection_OpenModal_ReinsertsPending(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	const selectorTS = "sel-modal-reinsert"
+	fake := &countingSelectionWorkflow{
+		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
+			return workflow.NextStep{
+				Kind:           workflow.NextStepOpenModal,
+				ModalTitle:     "補充說明",
+				ModalLabel:     "說明",
+				ModalInputName: "description_input",
+				ModalMetadata:  selectorTS,
+				Pending:        p,
+			}
+		},
+	}
+	reg.Register(fake)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1", TaskType: "issue",
+		Phase: "description", SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	wf.HandleSelection("C1", "description_action", "補充", selectorTS, "trig-1")
+
+	wf.mu.Lock()
+	stored, ok := wf.pending[selectorTS]
+	wf.mu.Unlock()
+	if !ok {
+		t.Fatal("pending must be re-inserted so HandleDescriptionSubmit can resolve it")
+	}
+	if stored != p {
+		t.Error("re-inserted pending is not the same pointer")
+	}
+}
+
+// TestExecuteStep_InvalidatedPending_DoesNotPostSelector: if the pending was
+// invalidated between dispatch and executeStep, NextStepPostSelector must
+// bail out before touching Slack.
+func TestExecuteStep_InvalidatedPending_DoesNotPostSelector(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1"}
+	p.Invalidate()
+
+	step := workflow.NextStep{
+		Kind:            workflow.NextStepPostSelector,
+		SelectorPrompt:  "pick",
+		SelectorActions: []workflow.SelectorAction{{ActionID: "a", Label: "L", Value: "V"}},
+		Pending:         p,
+	}
+	wf.executeStep(context.Background(), p, step, "")
+
+	wf.mu.Lock()
+	n := len(wf.pending)
+	wf.mu.Unlock()
+	if n != 0 {
+		t.Errorf("invalidated pending should not have been stored; got %d entries", n)
+	}
+}
+
+// TestExecuteStep_InvalidatedPending_DoesNotSubmit: NextStepSubmit on an
+// invalidated pending must NOT fire onSubmit.
+func TestExecuteStep_InvalidatedPending_DoesNotSubmit(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	submitted := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) { submitted = true })
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1"}
+	p.Invalidate()
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
+
+	if submitted {
+		t.Error("invalidated pending must not trigger onSubmit")
+	}
+}
+
+// TestHandleBackToRepo_InvalidatesOldPending: after clicking "back to repo",
+// the old pending carries the invalidated flag. An in-flight goroutine
+// observing it must skip the late side effect. We can't easily reach the
+// dispatcher's handleBackToRepo here without a real IssueWorkflow, so we
+// directly assert the flag transitions via the bot-layer entry.
+func TestHandleBackToRepo_InvalidatesOldPending(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	// A workflow whose Selection responds to "back_to_repo" by returning a
+	// PostSelector step. The bot layer re-clones, so the old pending stays
+	// invalidated while the fresh one is clean.
+	fake := &countingSelectionWorkflow{
+		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
+			return workflow.NextStep{
+				Kind:            workflow.NextStepPostSelector,
+				SelectorPrompt:  "pick a repo",
+				SelectorActions: []workflow.SelectorAction{{ActionID: "a", Label: "foo/bar", Value: "foo/bar"}},
+				Pending:         p,
+			}
+		},
+	}
+	reg.Register(fake)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	const selectorTS = "sel-back"
+	oldPending := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1", TaskType: "issue",
+		Phase: "branch", SelectorTS: selectorTS, RequestID: "req-back",
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = oldPending
+	wf.mu.Unlock()
+
+	wf.HandleBackToRepo("C1", selectorTS)
+
+	if !oldPending.IsInvalidated() {
+		t.Error("old pending should be invalidated after HandleBackToRepo")
+	}
+
+	// A fresh pending should now be keyed under the new selector TS.
+	wf.mu.Lock()
+	var fresh *workflow.Pending
+	for _, v := range wf.pending {
+		fresh = v
+	}
+	wf.mu.Unlock()
+	if fresh == nil {
+		t.Fatal("expected a fresh pending to be stored after back-to-repo")
+	}
+	if fresh == oldPending {
+		t.Error("fresh pending must be a different pointer from old pending")
+	}
+	if fresh.IsInvalidated() {
+		t.Error("fresh pending must not inherit invalidated flag")
+	}
+	if fresh.RequestID != oldPending.RequestID {
+		t.Errorf("fresh pending RequestID = %q, want %q (identity fields should carry over)", fresh.RequestID, oldPending.RequestID)
+	}
+}
+
+// TestInvalidatedPending_ConcurrentAccess stresses the atomic.Bool with
+// concurrent Invalidate / IsInvalidated calls. Must pass under `go test -race`
+// — if the flag were a bare bool the race detector would fail this test.
+func TestInvalidatedPending_ConcurrentAccess(t *testing.T) {
+	p := &workflow.Pending{ChannelID: "C1"}
+	const iters = 1000
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			p.Invalidate()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iters; i++ {
+			_ = p.IsInvalidated()
+		}
+	}()
+	wg.Wait()
+	if !p.IsInvalidated() {
+		t.Error("after Invalidate loop, IsInvalidated should return true")
+	}
+}
+
 func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
 	sl := &shimSlack{}
 	avail := &stubAvailability{SoftVerdict: queue.Verdict{Kind: queue.VerdictOK}}

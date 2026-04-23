@@ -202,6 +202,10 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 		return nil, "", fmt.Errorf("IssueWorkflow.BuildJob: unexpected state type")
 	}
 
+	if st.SelectedRepo == "" {
+		return nil, "", fmt.Errorf("empty repo reference")
+	}
+
 	reqID := p.RequestID
 	if reqID == "" {
 		reqID = logging.NewRequestID()

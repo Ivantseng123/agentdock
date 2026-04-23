@@ -159,8 +159,19 @@ var dSelectorLabel = map[string]string{
 // pending; NextStepPostSelector re-keys it under a new selectorTS inside
 // executeStep via storePending.
 func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, triggerID string) {
+	// Atomic lookup-and-delete: a rapid double-click arrives as two goroutines,
+	// both racing on selectorMsgTS. Whichever grabs the lock first consumes the
+	// entry; the second sees ok==false and returns early — no duplicate dispatch.
+	//
+	// Caveat: OpenModal flows persist the pending under the same selectorMsgTS
+	// via ModalMetadata (see issue.go / ask.go / pr_review.go: ModalMetadata =
+	// p.SelectorTS), so when the resulting step is OpenModal we re-insert below
+	// to preserve the lookup path HandleDescriptionSubmit depends on.
 	w.mu.Lock()
 	pending, ok := w.pending[selectorMsgTS]
+	if ok {
+		delete(w.pending, selectorMsgTS)
+	}
 	w.mu.Unlock()
 	if !ok {
 		return
@@ -180,14 +191,15 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, tr
 	step, err := w.dispatcher.HandleSelection(ctx, pending, value)
 	if err != nil {
 		w.logger.Error("HandleSelection dispatch failed", "phase", "失敗", "error", err)
-		w.mu.Lock()
-		delete(w.pending, selectorMsgTS)
-		w.mu.Unlock()
 		return
 	}
-	if step.Kind != workflow.NextStepOpenModal {
+	// OpenModal with an explicit ModalMetadata keyed by the original selectorTS
+	// needs the entry back so HandleDescriptionSubmit can resolve it. The
+	// modal-first path (ModalMetadata == "") is handled by executeStep's
+	// storePending under a synthesised key, so no re-insert needed here.
+	if step.Kind == workflow.NextStepOpenModal && step.ModalMetadata == selectorMsgTS {
 		w.mu.Lock()
-		delete(w.pending, selectorMsgTS)
+		w.pending[selectorMsgTS] = pending
 		w.mu.Unlock()
 	}
 	w.executeStep(ctx, pending, step, triggerID)
@@ -256,11 +268,20 @@ func (w *Workflow) HandleDescriptionSubmit(selectorMsgTS, extraText string) {
 }
 
 // HandleBackToRepo handles the "← 重新選 repo" back button.
+//
+// Invalidates the old pending under w.mu so any in-flight repo-prep goroutine
+// that completes after the user clicks "back" bails out in executeStep instead
+// of posting a stale branch selector (or submitting) on top of the fresh repo
+// picker we're about to render. The pending returned by dispatcher.handleBackToRepo
+// is the SAME pointer we just invalidated (the workflow mutates in place), so
+// we clone into a fresh *Pending — otherwise the invalidated flag follows the
+// pointer into the new generation and immediately suppresses its own selector.
 func (w *Workflow) HandleBackToRepo(channelID, selectorMsgTS string) {
 	w.mu.Lock()
-	pending, ok := w.pending[selectorMsgTS]
+	oldPending, ok := w.pending[selectorMsgTS]
 	if ok {
 		delete(w.pending, selectorMsgTS)
+		oldPending.Invalidate()
 	}
 	w.mu.Unlock()
 	if !ok {
@@ -268,14 +289,51 @@ func (w *Workflow) HandleBackToRepo(channelID, selectorMsgTS string) {
 	}
 
 	ctx := context.Background()
-	step, err := w.dispatcher.HandleSelection(ctx, pending, "back_to_repo")
+	step, err := w.dispatcher.HandleSelection(ctx, oldPending, "back_to_repo")
 	if err != nil {
 		w.logger.Error("HandleBackToRepo dispatch failed", "phase", "失敗", "error", err)
 		return
 	}
+	// Produce a fresh Pending generation. We can't reuse the pointer the
+	// dispatcher returns — workflows mutate the old pending in place — so we
+	// copy identity fields + State + Phase into a brand-new struct. The new
+	// struct has its own zero-valued `invalidated` flag. The original pending
+	// stays invalidated so any lingering goroutine still skips.
+	src := step.Pending
+	if src == nil {
+		src = oldPending
+	}
+	fresh := clonePendingForRegeneration(src)
+	step.Pending = fresh
+
 	// Update old selector to show we navigated back.
 	_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":leftwards_arrow_with_hook: 已返回 repo 選擇")
-	w.executeStep(ctx, pending, step, "")
+	w.executeStep(ctx, fresh, step, "")
+}
+
+// clonePendingForRegeneration builds a fresh *Pending carrying the same
+// identity/state/phase as src but with a zero-valued invalidation flag. Used
+// by HandleBackToRepo so the new generation isn't poisoned by the old one's
+// invalidated state. SelectorTS is cleared because the caller (executeStep →
+// storePending) will set the fresh selector TS after posting.
+func clonePendingForRegeneration(src *workflow.Pending) *workflow.Pending {
+	if src == nil {
+		return nil
+	}
+	return &workflow.Pending{
+		ChannelID:   src.ChannelID,
+		ThreadTS:    src.ThreadTS,
+		TriggerTS:   src.TriggerTS,
+		UserID:      src.UserID,
+		Reporter:    src.Reporter,
+		ChannelName: src.ChannelName,
+		RequestID:   src.RequestID,
+		SelectorTS:  "",
+		Phase:       src.Phase,
+		TaskType:    src.TaskType,
+		State:       src.State,
+		BusyHint:    src.BusyHint,
+	}
 }
 
 // executeStep applies a NextStep from a workflow: posts a selector, opens a
@@ -293,6 +351,22 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 	}
 	if pending == nil {
 		return
+	}
+	// If the pending was invalidated between dispatch and here (e.g. the user
+	// clicked "back to repo" while an in-flight repo-prep goroutine was still
+	// fetching branches), skip any user-visible side effect: posting a stale
+	// selector, opening a late modal, or submitting a job the user abandoned.
+	// Only applies to the "act on the user's flow" steps — Error/Cancel/Noop
+	// still clear dedup and are safe to run.
+	switch step.Kind {
+	case workflow.NextStepPostSelector,
+		workflow.NextStepPostExternalSelector,
+		workflow.NextStepOpenModal,
+		workflow.NextStepSubmit:
+		if pending.IsInvalidated() {
+			w.logger.Info("executeStep: pending invalidated, skipping", "phase", "跳過", "kind", step.Kind, "request_id", pending.RequestID)
+			return
+		}
 	}
 	switch step.Kind {
 	case workflow.NextStepPostSelector:

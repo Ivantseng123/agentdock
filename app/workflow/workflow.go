@@ -9,6 +9,7 @@ package workflow
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
@@ -40,6 +41,33 @@ type Pending struct {
 	TaskType    string // workflow identity, equal to Workflow.Type()
 	State       any    // per-workflow state struct
 	BusyHint    string // populated by bot.Workflow.submit() when verdict is BusyEnqueueOK; app.submitJob appends to statusText
+
+	// invalidated is set by HandleBackToRepo when the user abandons this pending
+	// generation. An in-flight repo-prep goroutine that completes after the
+	// back-button was clicked must observe this flag and skip posting the
+	// selector/modal/submit — otherwise a stale selector races with the fresh
+	// repo-picker posted by back-to-repo. Accessed concurrently by the bot
+	// goroutine (Invalidate) and the executeStep goroutine (IsInvalidated), so
+	// use sync/atomic.Bool — a bare bool would be a data race.
+	invalidated atomic.Bool
+}
+
+// Invalidate marks this pending generation as abandoned. Subsequent
+// IsInvalidated calls return true. Safe to call from any goroutine.
+func (p *Pending) Invalidate() {
+	if p == nil {
+		return
+	}
+	p.invalidated.Store(true)
+}
+
+// IsInvalidated reports whether Invalidate has been called on this pending.
+// Safe to call from any goroutine.
+func (p *Pending) IsInvalidated() bool {
+	if p == nil {
+		return false
+	}
+	return p.invalidated.Load()
 }
 
 // NextStepKind enumerates the actions a workflow's Trigger/Selection can
