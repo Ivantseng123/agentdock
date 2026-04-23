@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.2](https://github.com/Ivantseng123/agentdock/compare/v2.4.1...v2.4.2) (2026-04-23)
+
+
+### Bug Fixes
+
+* **docker:** symlink /agentdock into /usr/local/bin so PATH lookups resolve ([#136](https://github.com/Ivantseng123/agentdock/issues/136)) ([53d79a9](https://github.com/Ivantseng123/agentdock/commit/53d79a9c3c9493f49bf57c72ce63659269ec053e))
+
 ## [2.4.1](https://github.com/Ivantseng123/agentdock/compare/v2.4.0...v2.4.1) (2026-04-23)
 
 
