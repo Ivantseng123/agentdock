@@ -91,6 +91,9 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	if err := ctx.Err(); err != nil {
 		return classifyResult(job, startedAt, err, "", ctx, deps.store)
 	}
+	if isEmptyRepoReference(job) {
+		return classifyResult(job, startedAt, fmt.Errorf("empty repo reference: job has no usable repo/clone_url"), "", ctx, deps.store)
+	}
 	provider := selectProvider(job, deps.repoCache, ghToken)
 	repoPath, err := provider.Prepare(job)
 	if err != nil {
@@ -253,4 +256,26 @@ func cleanupSkills(repoPath string, skills map[string]*queue.SkillPayload, skill
 		os.RemoveAll(filepath.Join(dir, name))
 	}
 	os.Remove(dir) // only succeeds if empty (safe)
+}
+
+// isEmptyRepoReference returns true when a job carries a repo reference that
+// cannot be cloned.  Three cases are distinguished:
+//
+//  1. CloneURL == "" → NOT flagged; this is the legitimate Ask-with-no-repo path.
+//  2. CloneURL == "https://github.com/.git" → flagged; this is the artefact
+//     produced by cleanCloneURL("") on the app side and must not reach git-clone.
+//  3. CloneURL non-empty but Repo == "" → flagged; the job is structurally
+//     inconsistent and worker has no usable repo identity.
+func isEmptyRepoReference(job *queue.Job) bool {
+	if job.CloneURL == "" {
+		// Legitimate Ask-with-no-repo: EmptyDirProvider handles this.
+		return false
+	}
+	if job.CloneURL == "https://github.com/.git" {
+		return true
+	}
+	if job.Repo == "" {
+		return true
+	}
+	return false
 }

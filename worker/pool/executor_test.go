@@ -132,6 +132,86 @@ func TestExecuteJob_NilPromptContextFailsMalformed(t *testing.T) {
 	}
 }
 
+// ── new tests for #140: isEmptyRepoReference ─────────────────────────────────
+
+// TestIsEmptyRepoReference covers the three cases described in issue #140:
+//   1. CloneURL == ""                       → not flagged (Ask-with-no-repo)
+//   2. CloneURL == "https://github.com/.git" → flagged
+//   3. CloneURL non-empty but Repo == ""    → flagged
+func TestIsEmptyRepoReference(t *testing.T) {
+	tests := []struct {
+		name     string
+		job      *queue.Job
+		wantFlag bool
+	}{
+		{
+			name:     "empty CloneURL is Ask-with-no-repo — not flagged",
+			job:      &queue.Job{CloneURL: "", Repo: ""},
+			wantFlag: false,
+		},
+		{
+			name:     "cleanCloneURL('') artefact — flagged",
+			job:      &queue.Job{CloneURL: "https://github.com/.git", Repo: ""},
+			wantFlag: true,
+		},
+		{
+			name:     "non-empty CloneURL but empty Repo — flagged",
+			job:      &queue.Job{CloneURL: "https://github.com/foo/bar.git", Repo: ""},
+			wantFlag: true,
+		},
+		{
+			name:     "normal job — not flagged",
+			job:      &queue.Job{CloneURL: "https://github.com/foo/bar.git", Repo: "foo/bar"},
+			wantFlag: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isEmptyRepoReference(tc.job)
+			if got != tc.wantFlag {
+				t.Errorf("isEmptyRepoReference(%+v) = %v, want %v", tc.job, got, tc.wantFlag)
+			}
+		})
+	}
+}
+
+// TestExecuteJob_EmptyRepoReferenceFailsBeforeClone verifies that executeJob
+// returns a failed result containing "empty repo reference" when the job has
+// CloneURL == "https://github.com/.git" (the cleanCloneURL("") artefact),
+// and that Prepare is never called.
+func TestExecuteJob_EmptyRepoReferenceFailsBeforeClone(t *testing.T) {
+	store := queue.NewMemJobStore()
+	job := &queue.Job{
+		ID:       "j-empty-repo",
+		CloneURL: "https://github.com/.git",
+		Repo:     "",
+	}
+	store.Put(job)
+
+	prepareCalled := false
+	deps := executionDeps{
+		attachments: queuetest.NewAttachmentStore(),
+		repoCache: &mockRepo{
+			path:        "/tmp/r",
+			prepareHook: func() { prepareCalled = true },
+		},
+		runner: &mockRunner{},
+		store:  store,
+	}
+
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
+
+	if prepareCalled {
+		t.Error("Prepare must not be invoked for empty repo reference")
+	}
+	if result.Status != "failed" {
+		t.Errorf("status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Error, "empty repo reference") {
+		t.Errorf("error = %q, want substring \"empty repo reference\"", result.Error)
+	}
+}
+
 // Scenario B-race — Pre-Prepare ctx guard: store set to JobCancelled before Prepare runs
 // → Prepare is not invoked and the result is cancelled.
 func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
