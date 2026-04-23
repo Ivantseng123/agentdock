@@ -54,8 +54,12 @@ prompt:
   # 每個 workflow 各自一組 goal + response_schema + output_rules。留空就用內建預設。
   issue:
     goal: "Use the /triage-issue skill to investigate and produce a triage result."
-    response_schema: ""               # issue workflow 的輸出契約寫在 spec 裡，這裡通常留空
-    output_rules: []                  # 同上
+    response_schema: |
+      Your final response MUST end with ONE of these three shapes after ===TRIAGE_RESULT===:
+      CREATED  → {"status":"CREATED","title":"<required>","body":"...","labels":[...],"confidence":"high|medium","files_found":<int>,"open_questions":<int>}
+      REJECTED → {"status":"REJECTED","message":"..."}
+      ERROR    → {"status":"ERROR","message":"..."}
+    output_rules: []                  # 格式規則寫在 triage-issue skill 的 SKILL.md body template，不在這
   ask:
     goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
     response_schema: |
@@ -133,7 +137,7 @@ secrets:
 - `goal` 是給 agent 的**任務描述**——做什麼事、該呼叫哪個 skill（`triage-issue` / `ask-assistant` / `github-pr-review`）。不要在 goal 裡寫輸出格式。
 - `response_schema` 是**輸出契約**——機器可讀的 marker + JSON 結構（`===ASK_RESULT===` / `===REVIEW_RESULT===` 等）。此區塊在 prompt builder 裡**不會**被 XML escape，literal `"` 和 `<` 原樣送給 LLM，避免弱模型看到 `&quot;` 後把它複製成字面輸出導致 JSON parse 失敗。
 - `output_rules` 是**格式規則**——Slack mrkdwn 語法、字數限制、自稱 handle 等。會被 xml-escape 後 render 到 prompt 尾端。
-- 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。`issue.response_schema` 和 `issue.output_rules` 預設為空——issue workflow 的硬規則寫在 `app/workflow/issue.go` 的 spec 裡。
+- 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。`issue.output_rules` 預設為空——格式規則走 `triage-issue` skill 的 SKILL.md body template，config 這層不重複。
 
 **Legacy alias**：`prompt.goal` / `prompt.output_rules`（扁平）在載入時會被拷到 `prompt.issue.*`（前提是 `prompt.issue.*` 還沒設）。這只是為了讓 v2.1 之前的 yaml 還能跑；新配置直接寫 `prompt.issue.*`。
 

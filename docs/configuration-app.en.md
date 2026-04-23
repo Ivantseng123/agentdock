@@ -54,8 +54,12 @@ prompt:
   # One goal + response_schema + output_rules block per workflow. Unset fields fall back to hardcoded defaults.
   issue:
     goal: "Use the /triage-issue skill to investigate and produce a triage result."
-    response_schema: ""               # issue workflow's output contract lives in its spec
-    output_rules: []                  # same as above
+    response_schema: |
+      Your final response MUST end with ONE of these three shapes after ===TRIAGE_RESULT===:
+      CREATED  → {"status":"CREATED","title":"<required>","body":"...","labels":[...],"confidence":"high|medium","files_found":<int>,"open_questions":<int>}
+      REJECTED → {"status":"REJECTED","message":"..."}
+      ERROR    → {"status":"ERROR","message":"..."}
+    output_rules: []                  # formatting rules live in the triage-issue skill's SKILL.md body template, not here
   ask:
     goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
     response_schema: |
@@ -133,7 +137,7 @@ secrets:
 - `goal` is the **task description** — what to do, which skill to invoke (`triage-issue` / `ask-assistant` / `github-pr-review`). Keep output format OUT of the goal.
 - `response_schema` is the **machine-readable output contract** — marker + JSON shape (`===ASK_RESULT===` / `===REVIEW_RESULT===`, etc). This section is **NOT** XML-escaped in the rendered prompt — literal `"` and `<` reach the LLM verbatim, so weaker models don't copy `&quot;` into their output and break downstream JSON parsing.
 - `output_rules` are **formatting rules** (Slack mrkdwn, length caps, self-reference handle) rendered at the end of the prompt, XML-escaped.
-- Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`). `issue.response_schema` and `issue.output_rules` default to empty — issue workflow's hard rules live inline in `app/workflow/issue.go`'s spec.
+- Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`). `issue.output_rules` defaults to empty — formatting rules live in the triage-issue skill's SKILL.md body template, not here.
 
 **Legacy alias**: the flat `prompt.goal` / `prompt.output_rules` fields are copied into `prompt.issue.*` at load time, but only if `prompt.issue.*` is empty. This keeps pre-v2.1 yaml valid; new configs should write `prompt.issue.*` directly.
 

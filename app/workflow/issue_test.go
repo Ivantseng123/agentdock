@@ -129,6 +129,9 @@ func TestIssueWorkflow_BuildJob_SetsTaskType(t *testing.T) {
 	if job.PromptContext == nil || job.PromptContext.Goal == "" {
 		t.Error("PromptContext.Goal must be populated (from config or default)")
 	}
+	if job.PromptContext.ResponseSchema == "" {
+		t.Error("PromptContext.ResponseSchema must be populated (ApplyDefaults)")
+	}
 	if status == "" {
 		t.Error("status text should be non-empty; spec says :mag: 分析 codebase 中...")
 	}

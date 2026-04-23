@@ -141,9 +141,25 @@ func TestPromptConfig_ResponseSchemaDefaults(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
 
-	// Ask and PRReview must have a ResponseSchema; Issue intentionally does
-	// not (its output contract lives in app/workflow/issue.go as spec
-	// language).
+	// Issue ResponseSchema — mirrors issue_parser.TriageResult (CREATED /
+	// REJECTED / ERROR shapes).
+	if cfg.Prompt.Issue.ResponseSchema == "" {
+		t.Error("Issue.ResponseSchema default is empty")
+	}
+	if !strings.Contains(cfg.Prompt.Issue.ResponseSchema, "===TRIAGE_RESULT===") {
+		t.Errorf("Issue.ResponseSchema missing TRIAGE_RESULT marker: %q", cfg.Prompt.Issue.ResponseSchema)
+	}
+	for _, field := range []string{
+		`"status"`, `"title"`, `"body"`, `"labels"`,
+		`"confidence"`, `"files_found"`, `"open_questions"`, `"message"`,
+	} {
+		if !strings.Contains(cfg.Prompt.Issue.ResponseSchema, field) {
+			t.Errorf("Issue.ResponseSchema missing required field %s; current:\n%s",
+				field, cfg.Prompt.Issue.ResponseSchema)
+		}
+	}
+
+	// Ask ResponseSchema — single shape, literal "answer" key required.
 	if cfg.Prompt.Ask.ResponseSchema == "" {
 		t.Error("Ask.ResponseSchema default is empty")
 	}
@@ -154,14 +170,15 @@ func TestPromptConfig_ResponseSchemaDefaults(t *testing.T) {
 		t.Errorf("Ask.ResponseSchema missing literal \"answer\" key: %q", cfg.Prompt.Ask.ResponseSchema)
 	}
 
+	// PRReview ResponseSchema — must mention every field the
+	// pr_review_parser.ReviewResult cares about; losing any of these
+	// silently degrades Slack output.
 	if cfg.Prompt.PRReview.ResponseSchema == "" {
 		t.Error("PRReview.ResponseSchema default is empty")
 	}
 	if !strings.Contains(cfg.Prompt.PRReview.ResponseSchema, "===REVIEW_RESULT===") {
 		t.Errorf("PRReview.ResponseSchema missing REVIEW_RESULT marker: %q", cfg.Prompt.PRReview.ResponseSchema)
 	}
-	// Must mention every field the pr_review_parser.ReviewResult cares
-	// about — losing any of these silently degrades Slack output.
 	for _, field := range []string{
 		`"status"`,
 		`"summary"`,
@@ -185,6 +202,9 @@ func TestPromptConfig_GoalDoesNotDuplicateSchema(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
 
+	if strings.Contains(cfg.Prompt.Issue.Goal, "===TRIAGE_RESULT===") {
+		t.Errorf("Issue.Goal must NOT contain the TRIAGE_RESULT marker (belongs in ResponseSchema): %q", cfg.Prompt.Issue.Goal)
+	}
 	if strings.Contains(cfg.Prompt.Ask.Goal, "===ASK_RESULT===") {
 		t.Errorf("Ask.Goal must NOT contain the ASK_RESULT marker (belongs in ResponseSchema): %q", cfg.Prompt.Ask.Goal)
 	}

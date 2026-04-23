@@ -140,6 +140,26 @@ ERROR (review failed, helper exit != 0):
 {"status": "ERROR", "error": "<diagnostic message operators can act on>", "summary": "<what you would have posted>"}
 
 Use exactly these keys — no synonyms. Do NOT merge shapes (e.g. never emit "reason" when status is POSTED).`
+
+	// Mirrors app/workflow/issue_parser.go:TriageResult and the
+	// triage-issue skill's "Output result" section. Three discriminated
+	// shapes by status. Title is required when status is CREATED; missing
+	// title is a hard parse failure in the workflow.
+	defaultIssueResponseSchema = `Your final response MUST end with this exact block:
+
+===TRIAGE_RESULT===
+<ONE of the three JSON shapes below, chosen by status>
+
+CREATED (confidence is high or medium — issue should be filed):
+{"status": "CREATED", "title": "<concise issue title — REQUIRED>", "body": "<full markdown body as a single JSON string, \n for newlines>", "labels": ["bug"], "confidence": "high|medium", "files_found": <int>, "open_questions": <int>}
+
+REJECTED (confidence is low — not related to this repo):
+{"status": "REJECTED", "message": "<brief explanation why this is out of scope>"}
+
+ERROR (investigation couldn't complete):
+{"status": "ERROR", "message": "<what went wrong>"}
+
+Use exactly these keys — no synonyms. CREATED without a non-empty title is a hard failure. Do NOT run gh issue create yourself — just emit the JSON; the app creates the issue from your output.`
 )
 
 var (
@@ -173,6 +193,9 @@ func applyPromptDefaults(p *PromptConfig) {
 	if p.PRReview.Goal == "" {
 		p.PRReview.Goal = defaultPRReviewGoal
 	}
+	if p.Issue.ResponseSchema == "" {
+		p.Issue.ResponseSchema = defaultIssueResponseSchema
+	}
 	if p.Ask.ResponseSchema == "" {
 		p.Ask.ResponseSchema = defaultAskResponseSchema
 	}
@@ -185,9 +208,11 @@ func applyPromptDefaults(p *PromptConfig) {
 	if len(p.PRReview.OutputRules) == 0 {
 		p.PRReview.OutputRules = defaultPRReviewOutputRules
 	}
-	// Issue.OutputRules is intentionally left empty if operator didn't set
-	// it; the current spec's hardcoded Issue rules travel in
-	// app/workflow/issue.go as spec language, not as defaults here.
+	// Issue.OutputRules is intentionally left empty — formatting rules for
+	// triage output live in the triage-issue skill's SKILL.md body template,
+	// not here. The machine-readable contract (CREATED/REJECTED/ERROR
+	// shapes) now lives in Issue.ResponseSchema instead of being implicit
+	// in the skill.
 
 	// Preserve prior AllowWorkerRules default (pointer to true).
 	if p.AllowWorkerRules == nil {
