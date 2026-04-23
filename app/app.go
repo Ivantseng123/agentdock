@@ -613,7 +613,7 @@ func handleInteraction(
 		wf.HandleDescriptionSubmit(meta, firstModalValue(cb.View.State.Values))
 	case slack.InteractionTypeViewClosed:
 		meta := cb.View.PrivateMetadata
-		wf.HandleDescriptionSubmit(meta, "")
+		wf.HandleModalClosed(meta)
 	}
 }
 

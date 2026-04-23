@@ -63,18 +63,24 @@ func (w *AskWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string)
 		TaskType:    "ask",
 		State:       &askState{Question: args},
 	}
+	return w.attachPromptStep(pending), nil
+}
+
+// attachPromptStep builds the "附加 Repository?" selector used both on the
+// initial Trigger and when the user backs out of the repo picker.
+func (w *AskWorkflow) attachPromptStep(p *Pending) NextStep {
 	return NextStep{
 		Kind: NextStepSelector,
 		Selector: &SelectorSpec{
-			Prompt:   ":question: 要附加 repo context 嗎？",
+			Prompt:   ":question: 要附加 Repository 嗎？",
 			ActionID: "ask_attach_repo",
 			Options: []SelectorOption{
 				{Label: "附加", Value: "attach"},
 				{Label: "不用", Value: "skip"},
 			},
 		},
-		Pending: pending,
-	}, nil
+		Pending: p,
+	}
 }
 
 // Selection handles follow-up button clicks for the ask wizard. Five
@@ -111,8 +117,9 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 		repos := channelCfg.GetRepos()
 		p.Phase = "ask_repo_select"
 		if len(repos) == 0 {
-			// No repos configured — fall back to external search. Cancel button
-			// rides along so the user isn't stuck if they change their mind.
+			// No repos configured — fall back to external search. Back button
+			// rides along so the user can bail to the attach prompt without
+			// abandoning the whole flow.
 			return NextStep{
 				Kind: NextStepSelector,
 				Selector: &SelectorSpec{
@@ -120,8 +127,8 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 					ActionID:       "ask_repo",
 					Searchable:     true,
 					Placeholder:    "Type to search repos...",
-					CancelActionID: "ask_cancel",
-					CancelLabel:    "取消",
+					CancelActionID: "ask_repo_back",
+					CancelLabel:    "← 返回",
 				},
 				Pending: p,
 			}, nil
@@ -130,7 +137,7 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 		for _, r := range repos {
 			options = append(options, SelectorOption{Label: r, Value: r})
 		}
-		options = append(options, SelectorOption{Label: "取消", Value: "取消"})
+		options = append(options, SelectorOption{Label: "← 返回", Value: "back_to_attach"})
 		return NextStep{
 			Kind: NextStepSelector,
 			Selector: &SelectorSpec{
@@ -142,8 +149,13 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 		}, nil
 
 	case "ask_repo_select":
-		if value == "取消" {
-			return NextStep{Kind: NextStepCancel}, nil
+		if value == "back_to_attach" || value == "← 返回" {
+			// User bailed out of the repo picker — reset the attach choice
+			// and re-emit the attach/skip prompt so they can try again.
+			st.AttachRepo = false
+			st.SelectedRepo = ""
+			p.Phase = "ask_repo_prompt"
+			return w.attachPromptStep(p), nil
 		}
 		st.SelectedRepo = value
 		return w.afterRepoSelectedStep(p), nil

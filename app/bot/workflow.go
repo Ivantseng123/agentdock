@@ -147,6 +147,25 @@ var dSelectorLabel = map[string]string{
 	"pr_review": "🔍 Review PR",
 }
 
+// transitionalValues are selector picks whose ack would just clutter the
+// thread — the user skipped a step or backed out, and the next rendered
+// step (a new selector, a modal, or a status message) is the real signal
+// that the pick was accepted. Dropping the ack stops the thread from
+// growing by one message per no-op click.
+var transitionalValues = map[string]bool{
+	"skip":           true, // ask attach prompt: "不用"
+	"跳過":             true, // description prompt: "跳過"
+	"back_to_repo":   true, // issue/ask back button to repo picker
+	"back_to_attach": true, // ask back from repo picker to attach prompt
+}
+
+// isTransitionalValue reports whether a selection value represents a pure
+// navigation step (skip / back) rather than a substantive choice the user
+// might want a thread record of.
+func isTransitionalValue(value string) bool {
+	return transitionalValues[value]
+}
+
 // HandleSelection handles a button click or external-selector pick on a
 // selector message. It looks up the pending state by selectorMsgTS and
 // calls dispatcher.HandleSelection. triggerID is forwarded to executeStep
@@ -178,16 +197,26 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, tr
 	}
 
 	ctx := context.Background()
-	// Update the selector message to show the selection.
-	// For D-selector clicks use a friendly label; other selectors show the raw value.
-	ackLabel := value
-	if pending.Phase == "d_selector" {
-		if label, ok := dSelectorLabel[value]; ok {
-			ackLabel = label
+	// Transitional picks (skip / back_*) just navigate; the next step's own
+	// message conveys acceptance, so drop the selector entirely instead of
+	// leaving a trail of ":white_check_mark: skip" acks.
+	if isTransitionalValue(value) {
+		_ = w.slack.DeleteMessage(channelID, selectorMsgTS)
+	} else {
+		ackLabel := value
+		if pending.Phase == "d_selector" {
+			if label, ok := dSelectorLabel[value]; ok {
+				ackLabel = label
+			}
+		}
+		_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":white_check_mark: "+ackLabel)
+		// Remember the repo ack so a later "重新選 repo" click can delete it —
+		// otherwise every rejected repo pick leaves behind a ":white_check_mark:
+		// owner/repo" line the user already disowned.
+		if pending.Phase == "repo" || pending.Phase == "repo_search" {
+			pending.RepoAckTS = selectorMsgTS
 		}
 	}
-	_ = w.slack.UpdateMessage(channelID, selectorMsgTS,
-		":white_check_mark: "+ackLabel)
 	step, err := w.dispatcher.HandleSelection(ctx, pending, value)
 	if err != nil {
 		w.logger.Error("HandleSelection dispatch failed", "phase", "失敗", "error", err)
@@ -214,10 +243,23 @@ func (w *Workflow) HandleDescriptionAction(channelID, value, selectorMsgTS, trig
 		w.mu.Unlock()
 		return
 	}
+	// Defensive rewind: a button click here means the user is back on the
+	// selector. If the phase is still *_modal (the workflow set it before
+	// OpenModal and Slack never delivered a ViewClosed/ViewSubmission to
+	// reset it — a very real case when the user dismisses the modal with
+	// escape or an outside tap), treating "補充說明"/"跳過" as the modal's
+	// submitted text would append it to the description and fire the job.
+	// Rewind first so the downstream Selection re-enters the prompt branch.
+	if prev, rewind := rewindModalPhase(pending.Phase); rewind {
+		pending.Phase = prev
+	}
 	if value == "跳過" {
 		delete(w.pending, selectorMsgTS)
 		w.mu.Unlock()
-		_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":fast_forward: 跳過補充說明")
+		// Drop the prompt rather than leaving a ":fast_forward: 跳過補充說明"
+		// ack — the "分析 codebase 中..." status message that follows is
+		// the user-visible confirmation.
+		_ = w.slack.DeleteMessage(channelID, selectorMsgTS)
 		ctx := context.Background()
 		step, err := w.dispatcher.HandleSelection(ctx, pending, value)
 		if err != nil {
@@ -238,8 +280,68 @@ func (w *Workflow) HandleDescriptionAction(channelID, value, selectorMsgTS, trig
 	w.executeStep(ctx, pending, step, triggerID)
 }
 
-// HandleDescriptionSubmit handles a modal submission (or close) carrying
-// the extra description text.
+// rewindModalPhase maps a *_modal phase (the state a workflow sets right
+// before OpenModal) back to its prompt phase. Returns ok=true when the
+// cancelled modal can be rewound to a selector the user can re-click;
+// returns ok=false when the modal has no reversible prompt (e.g. PR Review's
+// URL modal — closing that one should surface the usual empty-URL error).
+func rewindModalPhase(phase string) (string, bool) {
+	switch phase {
+	case "description_modal":
+		return "description", true
+	case "ask_description_modal":
+		return "ask_description_prompt", true
+	}
+	return "", false
+}
+
+// HandleModalClosed handles the ViewClosed event — the user dismissed the
+// modal via the ✕ button / 取消 / escape without submitting.
+//
+// Three outcomes depending on the workflow's phase:
+//
+//  1. Description modals (description_modal / ask_description_modal): the
+//     pending stays alive and the phase rewinds to the prompt state so a
+//     subsequent click on the still-visible selector button re-opens the
+//     modal. Without this, the stuck *_modal phase would make the next
+//     button click feed "補充說明" into the workflow as the modal's
+//     submitted text.
+//
+//  2. PR Review URL modal (pr_review_modal): no reversible prompt exists
+//     (the modal was the entry point). Drop the pending, post a cancel
+//     acknowledgement, and clear dedup so the user can @bot again.
+//
+//  3. Any other phase falls through to HandleDescriptionSubmit("") — keeps
+//     the old empty-submit semantics for paths this handler doesn't know
+//     about, so new workflows don't silently break.
+func (w *Workflow) HandleModalClosed(selectorMsgTS string) {
+	w.mu.Lock()
+	pending, ok := w.pending[selectorMsgTS]
+	w.mu.Unlock()
+	if !ok {
+		return
+	}
+	if prev, canRewind := rewindModalPhase(pending.Phase); canRewind {
+		pending.Phase = prev
+		return
+	}
+	if pending.Phase == "pr_review_modal" {
+		w.mu.Lock()
+		delete(w.pending, selectorMsgTS)
+		w.mu.Unlock()
+		_ = w.slack.PostMessage(pending.ChannelID, ":white_check_mark: 已取消 PR Review", pending.ThreadTS)
+		if w.handler != nil {
+			w.handler.ClearThreadDedup(pending.ChannelID, pending.ThreadTS)
+		}
+		return
+	}
+	w.HandleDescriptionSubmit(selectorMsgTS, "")
+}
+
+// HandleDescriptionSubmit handles a modal submission carrying the extra
+// description text. ViewClosed events are routed through HandleModalClosed
+// so description modals can be rewound; this function handles the real
+// submit path.
 func (w *Workflow) HandleDescriptionSubmit(selectorMsgTS, extraText string) {
 	w.mu.Lock()
 	pending, ok := w.pending[selectorMsgTS]
@@ -286,6 +388,13 @@ func (w *Workflow) HandleBackToRepo(channelID, selectorMsgTS string) {
 	w.mu.Unlock()
 	if !ok {
 		return
+	}
+
+	// Drop the stale "✅ <repo>" ack so backing out doesn't leave abandoned
+	// picks piling up in the thread. The "已返回 repo 選擇" breadcrumb below
+	// is the one message we want to retain.
+	if oldPending.RepoAckTS != "" {
+		_ = w.slack.DeleteMessage(channelID, oldPending.RepoAckTS)
 	}
 
 	ctx := context.Background()

@@ -37,6 +37,8 @@ func (f *fakeSlackPort) UpdateMessage(ch, mts, text string) error {
 	return nil
 }
 
+func (f *fakeSlackPort) DeleteMessage(ch, mts string) error { return nil }
+
 func (f *fakeSlackPort) UpdateMessageWithButton(ch, mts, text, aid, bt, val string) error {
 	f.Posted = append(f.Posted, text)
 	return nil

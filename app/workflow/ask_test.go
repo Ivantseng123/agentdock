@@ -136,21 +136,37 @@ func TestAskWorkflow_Selection_RepoChoiceWithBranchesShowsBranchSelector(t *test
 	}
 }
 
-func TestAskWorkflow_Selection_RepoSelectCancelReturnsCancel(t *testing.T) {
-	// 取消 on repo picker must yield NextStepCancel so the dispatcher clears
-	// dedup and stops — no submit, no error.
+func TestAskWorkflow_Selection_RepoSelectBackReturnsToAttachPrompt(t *testing.T) {
+	// back_to_attach on repo picker rewinds to the attach/skip prompt
+	// rather than ending the task — user changed their mind about
+	// attaching a repo but doesn't want to abandon the whole ask.
 	w, _ := newTestAskWorkflow(t)
 	p := &Pending{Phase: "ask_repo_select", State: &askState{Question: "Q", AttachRepo: true}, ChannelID: "C1", ThreadTS: "1.0"}
-	step, err := w.Selection(context.Background(), p, "取消")
+	step, err := w.Selection(context.Background(), p, "back_to_attach")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepCancel {
-		t.Errorf("expected NextStepCancel, got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector (attach prompt), got %v", step.Kind)
+	}
+	if p.Phase != "ask_repo_prompt" {
+		t.Errorf("phase = %q, want ask_repo_prompt (rewound)", p.Phase)
 	}
 	st := p.State.(*askState)
+	if st.AttachRepo {
+		t.Error("AttachRepo should reset to false on back_to_attach")
+	}
 	if st.SelectedRepo != "" {
-		t.Errorf("SelectedRepo leaked on cancel: %q", st.SelectedRepo)
+		t.Errorf("SelectedRepo leaked on back: %q", st.SelectedRepo)
+	}
+	// Re-emitted prompt must be the attach/skip selector.
+	if step.Selector == nil || step.Selector.ActionID != "ask_attach_repo" {
+		t.Errorf("back must re-emit attach prompt, got action_id=%q", func() string {
+			if step.Selector == nil {
+				return "<nil>"
+			}
+			return step.Selector.ActionID
+		}())
 	}
 }
 
@@ -170,9 +186,10 @@ func TestAskWorkflow_Selection_BranchSelectCancelReturnsCancel(t *testing.T) {
 	}
 }
 
-func TestAskWorkflow_Selection_AttachWithReposIncludesCancel(t *testing.T) {
-	// Button-based repo selector must include 取消 so the user isn't stuck on
-	// the picker if they change their mind.
+func TestAskWorkflow_Selection_AttachWithReposIncludesBack(t *testing.T) {
+	// Button-based repo selector must include a back option so the user
+	// can unwind to the attach prompt instead of being stuck choosing a
+	// repo they no longer want.
 	w, _ := newTestAskWorkflow(t)
 	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
 	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"}, ChannelID: "C1", ThreadTS: "1.0"}
@@ -180,18 +197,18 @@ func TestAskWorkflow_Selection_AttachWithReposIncludesCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 2 repos + 1 cancel.
+	// 2 repos + 1 back.
 	if len(step.Selector.Options) != 3 {
-		t.Errorf("expected 3 actions (2 repos + 取消), got %d", len(step.Selector.Options))
+		t.Errorf("expected 3 options (2 repos + back), got %d", len(step.Selector.Options))
 	}
-	sawCancel := false
+	sawBack := false
 	for _, o := range step.Selector.Options {
-		if o.Value == "取消" {
-			sawCancel = true
+		if o.Value == "back_to_attach" {
+			sawBack = true
 		}
 	}
-	if !sawCancel {
-		t.Error("cancel option missing from repo selector")
+	if !sawBack {
+		t.Error("back option missing from repo selector")
 	}
 }
 

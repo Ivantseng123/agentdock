@@ -42,6 +42,13 @@ type Pending struct {
 	State       any    // per-workflow state struct
 	BusyHint    string // populated by bot.Workflow.submit() when verdict is BusyEnqueueOK; app.submitJob appends to statusText
 
+	// RepoAckTS is set by the bot layer after the user picks a repo — it
+	// points at the "✅ <repo>" acknowledgement message. HandleBackToRepo
+	// uses it to delete the abandoned pick so clicking "重新選 repo" leaves
+	// a single breadcrumb ("已返回 repo 選擇") instead of a growing stack of
+	// rejected repo choices. Zero value = no pending repo ack.
+	RepoAckTS string
+
 	// invalidated is set by HandleBackToRepo when the user abandons this pending
 	// generation. An in-flight repo-prep goroutine that completes after the
 	// back-button was clicked must observe this flag and skip posting the

@@ -34,6 +34,10 @@ func (a *slackAdapterPort) UpdateMessage(channelID, messageTS, text string) erro
 	return a.client.UpdateMessage(channelID, messageTS, text)
 }
 
+func (a *slackAdapterPort) DeleteMessage(channelID, messageTS string) error {
+	return a.client.DeleteMessage(channelID, messageTS)
+}
+
 func (a *slackAdapterPort) UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value string) error {
 	return a.client.UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value)
 }

@@ -357,15 +357,18 @@ func (c *Client) PostSmartSelector(channelID, threadTS string, spec SmartSelecto
 	}
 }
 
-// postButtonSelectorBlock renders spec as an actions block of buttons. All
-// buttons share spec.ActionID — Slack delivers the clicked option's Value
-// via action.Value, and the common ActionID is what app.go's router switches
-// on.
+// postButtonSelectorBlock renders spec as an actions block of buttons.
+// Each button's action_id is spec.ActionID + "_<idx>" — Slack rejects an
+// actions block whose interactive elements share the same action_id with
+// invalid_blocks 400, so the suffix is structural, not cosmetic.
+// app/app.go's router matches the router branches with HasPrefix
+// (description_action, cancel_job) or relies on Pending.Phase in
+// HandleSelection, so the suffix is transparent to callers.
 func (c *Client) postButtonSelectorBlock(channelID, threadTS string, spec SmartSelectorSpec) (string, error) {
 	buttons := make([]slack.BlockElement, 0, len(spec.Options)+2)
-	for _, o := range spec.Options {
+	for i, o := range spec.Options {
 		buttons = append(buttons, slack.NewButtonBlockElement(
-			spec.ActionID,
+			fmt.Sprintf("%s_%d", spec.ActionID, i),
 			o.Value,
 			slack.NewTextBlockObject(slack.PlainTextType, o.Label, false, false),
 		))
@@ -523,6 +526,11 @@ func (c *Client) OpenTextInputModal(triggerID, title, label, inputName, metadata
 		Close:           slack.NewTextBlockObject(slack.PlainTextType, "取消", false, false),
 		Blocks:          slack.Blocks{BlockSet: []slack.Block{inputBlock}},
 		PrivateMetadata: metadata,
+		// NotifyOnClose makes Slack deliver a view_closed event when the
+		// user dismisses the modal (✕ / 取消 / escape). Without it the bot
+		// is blind to cancellation and the pending entry sits in memory
+		// until the 1-minute timeout fires — the user sees "no next step".
+		NotifyOnClose: true,
 	}
 	_, err := c.api.OpenView(triggerID, modalView)
 	if err != nil {
@@ -562,6 +570,21 @@ func (c *Client) PostMessageWithButton(channelID, text, threadTS, actionID, butt
 		return "", fmt.Errorf("post message with button: %w", err)
 	}
 	return ts, nil
+}
+
+// DeleteMessage removes a message from the thread. Used to drop acks for
+// transitional selections (skip / 跳過 / back_*) where keeping the ack
+// would just grow the thread without carrying useful information — the
+// next step's own message is the real feedback.
+func (c *Client) DeleteMessage(channelID, messageTS string) error {
+	start := time.Now()
+	_, _, err := c.api.DeleteMessage(channelID, messageTS)
+	metrics.ExternalDuration.WithLabelValues("slack", "delete_message").Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "delete_message").Inc()
+		return fmt.Errorf("delete message: %w", err)
+	}
+	return nil
 }
 
 // UpdateMessage replaces an existing message (used to clear buttons after selection).
