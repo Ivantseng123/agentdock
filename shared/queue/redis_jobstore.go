@@ -160,27 +160,53 @@ func (s *RedisJobStore) ListAll() ([]*JobState, error) {
 // race window for a TTL'd store.
 func (s *RedisJobStore) listAllStates() ([]*JobState, error) {
 	ctx := context.Background()
+	// scanBatch: SCAN page size; mgetBatch: MGET chunk size. Chunking keeps
+	// MGET payload bounded on deep rehydrate (thousands of jobs). Using SCAN
+	// + MGET avoids the N+1 round-trip of per-key GETs.
+	const scanBatch = 100
+	const mgetBatch = 100
 	var result []*JobState
-	iter := s.rdb.Scan(ctx, 0, s.jobKeyPattern(), 100).Iterator()
-	for iter.Next(ctx) {
-		key := iter.Val()
-		data, err := s.rdb.Get(ctx, key).Bytes()
+	iter := s.rdb.Scan(ctx, 0, s.jobKeyPattern(), scanBatch).Iterator()
+	keys := make([]string, 0, mgetBatch)
+	flush := func() error {
+		if len(keys) == 0 {
+			return nil
+		}
+		values, err := s.rdb.MGet(ctx, keys...).Result()
 		if err != nil {
-			if errors.Is(err, redis.Nil) {
+			return fmt.Errorf("redis mget during scan: %w", err)
+		}
+		for i, v := range values {
+			if v == nil {
+				// Expired between SCAN and MGET; skip silently.
 				continue
 			}
-			return nil, fmt.Errorf("redis get during scan: %w", err)
+			raw, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("redis mget at %s: unexpected type %T", keys[i], v)
+			}
+			var state JobState
+			if err := json.Unmarshal([]byte(raw), &state); err != nil {
+				return fmt.Errorf("unmarshal job state at %s: %w", keys[i], err)
+			}
+			result = append(result, &state)
 		}
-		var state JobState
-		if err := json.Unmarshal(data, &state); err != nil {
-			// Corrupt entries should be visible but not fatal — surface via
-			// error so callers can log and continue.
-			return nil, fmt.Errorf("unmarshal job state at %s: %w", key, err)
+		keys = keys[:0]
+		return nil
+	}
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+		if len(keys) >= mgetBatch {
+			if err := flush(); err != nil {
+				return nil, err
+			}
 		}
-		result = append(result, &state)
 	}
 	if err := iter.Err(); err != nil {
 		return nil, fmt.Errorf("scan jobs: %w", err)
+	}
+	if err := flush(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -189,7 +215,7 @@ func (s *RedisJobStore) listAllStates() ([]*JobState, error) {
 // applies (StartedAt/WaitTime on first Running, CancelledAt on first
 // Cancelled).
 func (s *RedisJobStore) UpdateStatus(jobID string, status JobStatus) error {
-	return s.txUpdate(jobID, func(state *JobState) error {
+	err := s.txUpdate(jobID, func(state *JobState) error {
 		state.Status = status
 		if status == JobRunning && state.StartedAt.IsZero() {
 			state.StartedAt = time.Now()
@@ -200,14 +226,24 @@ func (s *RedisJobStore) UpdateStatus(jobID string, status JobStatus) error {
 		}
 		return nil
 	})
+	if errors.Is(err, errJobMissing) {
+		// Match MemJobStore's error shape so callers can diff/grep log output
+		// without caring which backend is wired.
+		return fmt.Errorf("job %q not found", jobID)
+	}
+	return err
 }
 
 // SetWorker tags a job with the worker ID that claimed it.
 func (s *RedisJobStore) SetWorker(jobID, workerID string) error {
-	return s.txUpdate(jobID, func(state *JobState) error {
+	err := s.txUpdate(jobID, func(state *JobState) error {
 		state.WorkerID = workerID
 		return nil
 	})
+	if errors.Is(err, errJobMissing) {
+		return fmt.Errorf("job %q not found", jobID)
+	}
+	return err
 }
 
 // SetAgentStatus stores the most recent StatusReport from the worker. Matches
@@ -330,5 +366,5 @@ func (s *RedisJobStore) txUpdate(jobID string, mutate func(*JobState) error) err
 		}
 		return err
 	}
-	return fmt.Errorf("redis tx update: exceeded %d retries", maxTxRetries)
+	return fmt.Errorf("redis tx update job %q: exceeded %d retries", jobID, maxTxRetries)
 }
