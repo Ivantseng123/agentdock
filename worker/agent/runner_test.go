@@ -210,6 +210,39 @@ echo "$2" > `+filepath.Join(dir, "captured-path.txt")+`
 	}
 }
 
+func TestNewRunnerFromConfig_EmptyProviders(t *testing.T) {
+	cfg := &config.Config{
+		Agents:    map[string]config.AgentConfig{},
+		Providers: []string{},
+	}
+	runner := NewRunnerFromConfig(cfg)
+	_, err := runner.Run(context.Background(), slog.Default(), t.TempDir(), "test", RunOptions{})
+	if err == nil {
+		t.Error("expected error when providers is empty")
+	}
+}
+
+func TestNewRunnerFromConfig_SingleProvider(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "single-agent")
+	os.WriteFile(script, []byte("#!/bin/sh\necho 'output from single provider agent padding padding padding'\n"), 0755)
+
+	cfg := &config.Config{
+		Agents: map[string]config.AgentConfig{
+			"myagent": {Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
+		},
+		Providers: []string{"myagent"},
+	}
+	runner := NewRunnerFromConfig(cfg)
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(output, "single provider") {
+		t.Errorf("unexpected output: %q", output)
+	}
+}
+
 func TestRunner_CancelShortCircuitsProviderChain(t *testing.T) {
 	runner := &Runner{
 		agents: []config.AgentConfig{

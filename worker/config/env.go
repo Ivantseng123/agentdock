@@ -18,9 +18,6 @@ func EnvOverrideMap() map[string]any {
 	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
 		out["redis.password"] = v
 	}
-	if v := os.Getenv("ACTIVE_AGENT"); v != "" {
-		out["active_agent"] = v
-	}
 	if v := os.Getenv("SECRET_KEY"); v != "" {
 		out["secret_key"] = v
 	}

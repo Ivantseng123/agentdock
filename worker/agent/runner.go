@@ -34,17 +34,11 @@ func NewRunner(agents []config.AgentConfig) *Runner {
 
 func NewRunnerFromConfig(cfg *config.Config) *Runner {
 	var chain []config.AgentConfig
-	if len(cfg.Providers) > 0 {
-		for _, name := range cfg.Providers {
-			if agent, ok := cfg.Agents[name]; ok {
-				chain = append(chain, agent)
-			} else {
-				slog.Warn("Provider 未找到", "phase", "失敗", "name", name)
-			}
-		}
-	} else if cfg.ActiveAgent != "" {
-		if agent, ok := cfg.Agents[cfg.ActiveAgent]; ok {
+	for _, name := range cfg.Providers {
+		if agent, ok := cfg.Agents[name]; ok {
 			chain = append(chain, agent)
+		} else {
+			slog.Warn("Provider 未找到", "phase", "失敗", "name", name)
 		}
 	}
 	runner := NewRunner(chain)

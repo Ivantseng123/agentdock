@@ -28,7 +28,6 @@ agents:
   claude:
     command: claude
     args: ["--print", "-p", "{prompt}"]
-active_agent: claude
 providers: [claude]
 `)
 	if cfg.Count != 7 {
@@ -42,6 +41,23 @@ providers: [claude]
 	}
 	if len(cfg.Providers) != 1 || cfg.Providers[0] != "claude" {
 		t.Errorf("providers = %v", cfg.Providers)
+	}
+}
+
+// TestLoadConfig_LegacyActiveAgentIgnored verifies that a yaml file containing
+// the removed active_agent key does not panic and leaves Providers empty (the
+// caller is responsible for handling empty providers as a config error).
+func TestLoadConfig_LegacyActiveAgentIgnored(t *testing.T) {
+	cfg := loadFromString(t, `
+agents:
+  claude:
+    command: claude
+    args: ["--print", "-p", "{prompt}"]
+active_agent: claude
+`)
+	// active_agent is an unknown key after removal; Providers must remain empty.
+	if len(cfg.Providers) != 0 {
+		t.Errorf("Providers = %v, want empty (legacy active_agent must not populate providers)", cfg.Providers)
 	}
 }
 

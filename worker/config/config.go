@@ -12,7 +12,6 @@ type Config struct {
 	Logging      LoggingConfig          `yaml:"logging"`
 	GitHub       GitHubConfig           `yaml:"github"`
 	Agents       map[string]AgentConfig `yaml:"agents"`
-	ActiveAgent  string                 `yaml:"active_agent"`
 	Providers    []string               `yaml:"providers"`
 	Count        int                    `yaml:"count"`
 	NicknamePool []string               `yaml:"nickname_pool"`

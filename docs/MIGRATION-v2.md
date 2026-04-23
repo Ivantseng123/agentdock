@@ -52,7 +52,7 @@ agentdock init worker -c ~/.config/agentdock/worker.yaml -i
 | `attachments.*` | `attachments.*` | app.yaml |
 | `server.port` | `server.port` | app.yaml |
 | `agents.*` | `agents.*` | **worker.yaml** |
-| `active_agent` | `active_agent` | **worker.yaml** |
+| `active_agent` | **（v2.5 移除）** 改用 `providers: [<name>]`；舊 yaml 中的 `active_agent:` 欄位會被 loader 忽略並 log warn | worker.yaml |
 | `providers` | `providers` | **worker.yaml** |
 | `worker.count` | **`count`**（扁平） | worker.yaml |
 | `worker.prompt.extra_rules` | **`prompt.extra_rules`**（扁平） | worker.yaml |

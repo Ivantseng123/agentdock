@@ -52,7 +52,7 @@ Old `config.yaml` → new `app.yaml` or `worker.yaml`:
 | `attachments.*` | `attachments.*` | app.yaml |
 | `server.port` | `server.port` | app.yaml |
 | `agents.*` | `agents.*` | **worker.yaml** |
-| `active_agent` | `active_agent` | **worker.yaml** |
+| `active_agent` | **removed in v2.5** — use `providers: [<name>]` instead; existing yaml with `active_agent:` is silently ignored by the loader (unknown key warning logged) | worker.yaml |
 | `providers` | `providers` | **worker.yaml** |
 | `worker.count` | **`count`** (flat) | worker.yaml |
 | `worker.prompt.extra_rules` | **`prompt.extra_rules`** (flat) | worker.yaml |

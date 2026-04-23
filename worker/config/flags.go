@@ -28,7 +28,6 @@ var flagToKey = map[string]string{
 	"repo-cache-dir":           "repo_cache.dir",
 	"repo-cache-max-age":       "repo_cache.max_age",
 	"workers":                  "count",
-	"active-agent":             "active_agent",
 	"providers":                "providers",
 }
 
@@ -70,7 +69,6 @@ func RegisterFlags(cmd *cobra.Command) {
 	f.Duration("repo-cache-max-age", 0, "max age before repo cache is refreshed")
 
 	f.Int("workers", 0, "number of worker goroutines (maps to count)")
-	f.String("active-agent", "", "active agent name (single-agent mode)")
 	f.StringSlice("providers", nil, "ordered provider chain (comma-separated)")
 }
 

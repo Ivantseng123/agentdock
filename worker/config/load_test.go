@@ -19,7 +19,7 @@ func clearWorkerEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
 		"GITHUB_TOKEN", "REDIS_ADDR", "REDIS_PASSWORD",
-		"SECRET_KEY", "ACTIVE_AGENT", "PROVIDERS",
+		"SECRET_KEY", "PROVIDERS",
 	} {
 		t.Setenv(k, "")
 	}

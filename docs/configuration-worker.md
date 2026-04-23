@@ -38,8 +38,7 @@ agents:
     timeout: 15m
     skill_dir: .opencode/skills
 
-active_agent: claude                  # 單一 agent 模式
-providers: [claude, codex, opencode]  # fallback chain（依序嘗試）
+providers: [claude, codex, opencode]  # fallback chain（依序嘗試）；單一 agent 模式：providers: [claude]
 
 count: 3                              # worker goroutine 數（扁平！舊是 worker.count）
 

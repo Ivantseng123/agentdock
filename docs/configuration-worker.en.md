@@ -38,8 +38,7 @@ agents:
     timeout: 15m
     skill_dir: .opencode/skills
 
-active_agent: claude                  # single-agent mode
-providers: [claude, codex, opencode]  # ordered fallback chain
+providers: [claude, codex, opencode]  # ordered fallback chain; single-agent mode: providers: [claude]
 
 count: 3                              # worker goroutine count (flat! was worker.count)
 
