@@ -3,7 +3,9 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -21,11 +23,29 @@ type RedisJobQueue struct {
 	consumerID string
 	stopCh     chan struct{}
 	seqCounter atomic.Uint64
+	logger     *slog.Logger
+}
+
+// RedisJobQueueOption configures optional behaviour on NewRedisJobQueue.
+type RedisJobQueueOption func(*RedisJobQueue)
+
+// WithRedisJobQueueLogger overrides the default logger (slog.Default) used for
+// receive-loop warnings. Callers should pass a component-scoped logger so
+// diagnostic output carries the Queue component tag.
+func WithRedisJobQueueLogger(l *slog.Logger) RedisJobQueueOption {
+	return func(q *RedisJobQueue) {
+		if l != nil {
+			q.logger = l
+		}
+	}
 }
 
 // NewRedisJobQueue creates a new Redis-backed job queue for the given task type.
-func NewRedisJobQueue(rdb *redis.Client, store JobStore, taskType string) *RedisJobQueue {
-	return &RedisJobQueue{
+// When no WithRedisJobQueueLogger option is supplied the default logger is
+// scoped to the Queue component so receive-loop warnings still carry the
+// conventional component tag in the fallback path.
+func NewRedisJobQueue(rdb *redis.Client, store JobStore, taskType string, opts ...RedisJobQueueOption) *RedisJobQueue {
+	q := &RedisJobQueue{
 		rdb:        rdb,
 		store:      store,
 		taskType:   taskType,
@@ -33,7 +53,12 @@ func NewRedisJobQueue(rdb *redis.Client, store JobStore, taskType string) *Redis
 		group:      "workers",
 		consumerID: fmt.Sprintf("worker-%d", time.Now().UnixNano()),
 		stopCh:     make(chan struct{}),
+		logger:     slog.Default().With("component", "Queue"),
 	}
+	for _, o := range opts {
+		o(q)
+	}
+	return q
 }
 
 // Submit adds a job to the Redis stream and stores it in the job store.
@@ -145,6 +170,10 @@ func (q *RedisJobQueue) Receive(ctx context.Context) (<-chan *Job, error) {
 	ch := make(chan *Job, 64)
 	go func() {
 		defer close(ch)
+		// consecutive counts non-redis.Nil XReadGroup failures in a row. Reset
+		// on any successful call (even empty) so transient blips don't ratchet
+		// backoff for the rest of the process's life.
+		consecutive := 0
 		for {
 			select {
 			case <-q.stopCh:
@@ -161,7 +190,14 @@ func (q *RedisJobQueue) Receive(ctx context.Context) (<-chan *Job, error) {
 			}).Result()
 			if err != nil {
 				if err == redis.Nil {
+					consecutive = 0
 					continue
+				}
+				// Only stopCh / parent ctx are shutdown signals here. Treat
+				// XReadGroup's own context.Canceled the same way — if the
+				// caller cancelled, we should stop.
+				if errors.Is(err, context.Canceled) {
+					return
 				}
 				select {
 				case <-q.stopCh:
@@ -169,9 +205,34 @@ func (q *RedisJobQueue) Receive(ctx context.Context) (<-chan *Job, error) {
 				case <-ctx.Done():
 					return
 				default:
-					continue
 				}
+				consecutive++
+				sleep := receiveBackoffDuration(consecutive)
+				// Warn on every failure — the previous silent `continue` is
+				// exactly what made a wedged consumer invisible in production.
+				// consecutive + sleep attrs let operators tell the difference
+				// between a one-off blip and a stuck loop without digging
+				// through timestamps.
+				q.logger.Warn("XReadGroup 失敗",
+					"phase", "失敗",
+					"stream", q.stream,
+					"consumer", q.consumerID,
+					"consecutive", consecutive,
+					"sleep_ms", sleep.Milliseconds(),
+					"error", err,
+				)
+				if sleep > 0 {
+					select {
+					case <-time.After(sleep):
+					case <-q.stopCh:
+						return
+					case <-ctx.Done():
+						return
+					}
+				}
+				continue
 			}
+			consecutive = 0
 
 			for _, stream := range streams {
 				for _, msg := range stream.Messages {
@@ -203,6 +264,33 @@ func (q *RedisJobQueue) Receive(ctx context.Context) (<-chan *Job, error) {
 	}()
 
 	return ch, nil
+}
+
+// receiveBackoffDuration returns the sleep between consecutive XReadGroup
+// failures in the Receive loop. The curve doubles every failure starting at
+// 1 second and caps at 30 seconds (reached at n=6). Kept deterministic — no
+// jitter — because a single consumer group has only one live worker at a time
+// and jitter would just make the logs harder to eyeball.
+//
+// n is the 1-based count of failures since the last successful (or empty)
+// XReadGroup. n<=0 returns 0 so the caller doesn't need its own guard.
+func receiveBackoffDuration(n int) time.Duration {
+	const (
+		base = 1 * time.Second
+		max  = 30 * time.Second
+	)
+	if n <= 0 {
+		return 0
+	}
+	// Guard against shift overflow: anything past 6 is already at the cap.
+	if n >= 6 {
+		return max
+	}
+	d := base * (1 << (n - 1))
+	if d > max {
+		return max
+	}
+	return d
 }
 
 // Ack acknowledges a job by updating its status and acking all pending

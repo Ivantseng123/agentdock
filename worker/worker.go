@@ -52,7 +52,9 @@ func Run(cfg *config.Config) error {
 			return fmt.Errorf("failed to connect to Redis: %w", err)
 		}
 		appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
-		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
+		queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
+		bundle = queue.NewRedisBundle(rdb, jobStore, "triage",
+			queue.WithRedisJobQueueLogger(queueLogger))
 	default:
 		return fmt.Errorf("unsupported queue.transport %q (supported: redis)", cfg.Queue.Transport)
 	}

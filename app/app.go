@@ -119,7 +119,8 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 		}
-		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
+		bundle = queue.NewRedisBundle(rdb, jobStore, "triage",
+			queue.WithRedisJobQueueLogger(queueLogger))
 		appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
 
 		sk, err := crypto.DecodeSecretKey(cfg.SecretKey)
