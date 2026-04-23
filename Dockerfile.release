@@ -33,6 +33,12 @@ RUN mkdir -p /data/repos && chown node:node /data/repos
 # COPY preserves the 0755 mode Go's linker writes; no chmod needed.
 COPY agentdock /agentdock
 
+# Symlink so child processes spawned by ENTRYPOINT (e.g. opencode → bash →
+# `agentdock pr-review-helper`) can resolve the binary via PATH lookup.
+# /agentdock alone works for ENTRYPOINT since the path is absolute, but
+# spawned tooling that runs `agentdock <subcommand>` would fail: not found.
+RUN ln -s /agentdock /usr/local/bin/agentdock
+
 USER node
 # Runtime picks the subcommand (app / worker / init). Pass e.g.:
 #   docker run ... agentdock:X app -c /etc/agentdock/config.yaml
