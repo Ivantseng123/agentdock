@@ -49,6 +49,20 @@ type Pending struct {
 	// rejected repo choices. Zero value = no pending repo ack.
 	RepoAckTS string
 
+	// DSelectorAckTS is the "✅ 📝 建 Issue" / "✅ ❓ 問問題" / "✅ 🔍 Review
+	// PR" message posted when the session started with a D-selector click.
+	// Preserved across timeout cleanup so the thread keeps a single
+	// breadcrumb showing what the user was trying to do. Zero value for
+	// sessions triggered with a verbed mention (`@bot issue foo/bar`).
+	DSelectorAckTS string
+
+	// SessionMsgTSs accumulates every bot-posted selector / ack / modal
+	// message in this flow except DSelectorAckTS. On timeout (or other
+	// flow-ending cleanup) the bot deletes them all so the thread collapses
+	// to the D-selector ack (if any) + the timeout notice — instead of
+	// keeping every abandoned step around.
+	SessionMsgTSs []string
+
 	// invalidated is set by HandleBackToRepo when the user abandons this pending
 	// generation. An in-flight repo-prep goroutine that completes after the
 	// back-button was clicked must observe this flag and skip posting the

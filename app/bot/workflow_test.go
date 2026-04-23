@@ -774,6 +774,66 @@ func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
 	}
 }
 
+// TestStorePending_Timeout_CondensesThreadKeepingDSelectorAck guards the
+// "selection timed out" cleanup: after pendingTimeout fires, every session
+// message the bot posted should be deleted except the D-selector ack
+// (":white_check_mark: 📝 建 Issue" / 問問題 / Review PR). The thread ends
+// up as: one breadcrumb + the timeout notice — not 5+ abandoned steps.
+func TestStorePending_Timeout_CondensesThreadKeepingDSelectorAck(t *testing.T) {
+	// Keep the test fast by overriding the package-level timeout; put it
+	// back at the end so later tests don't race against a shorter window.
+	origTimeout := pendingTimeout
+	pendingTimeout = 40 * time.Millisecond
+	defer func() { pendingTimeout = origTimeout }()
+
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	const dsAckTS = "ds-ack-1"
+	const step1TS = "step1-ts"
+	const step2TS = "step2-ts"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1", TaskType: "issue", RequestID: "req-timeout",
+		DSelectorAckTS: dsAckTS,
+		SessionMsgTSs:  []string{step1TS}, // pre-existing trail from earlier steps
+	}
+
+	wf.storePending(step2TS, p)
+
+	// Wait past the timeout window + a buffer for the goroutine's Slack calls.
+	time.Sleep(150 * time.Millisecond)
+
+	// Verify exactly the right set of TSs was deleted.
+	deleted := map[string]bool{}
+	for _, d := range sl.deleted {
+		deleted[d] = true
+	}
+	if deleted[dsAckTS] {
+		t.Errorf("D-selector ack %q must not be deleted on timeout", dsAckTS)
+	}
+	if !deleted[step1TS] {
+		t.Errorf("expected step1 ack %q deleted; got deleted=%v", step1TS, sl.deleted)
+	}
+	if !deleted[step2TS] {
+		t.Errorf("expected current selector %q deleted; got deleted=%v", step2TS, sl.deleted)
+	}
+
+	// Verify the single timeout notice was posted.
+	sawTimeoutNotice := false
+	for _, m := range sl.posted {
+		if strings.Contains(m, "選擇已超時") {
+			sawTimeoutNotice = true
+		}
+	}
+	if !sawTimeoutNotice {
+		t.Errorf("expected timeout notice posted; got posted=%v", sl.posted)
+	}
+}
+
 // TestHandleBackToRepo_DeletesStaleRepoAck guards the "thread doesn't grow
 // forever" UX: when the user picks a repo and then clicks 重新選 repo, the
 // rejected "✅ owner/repo" line must be deleted so the thread keeps only

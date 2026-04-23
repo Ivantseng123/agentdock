@@ -13,7 +13,10 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
-const pendingTimeout = 1 * time.Minute
+// pendingTimeout is the idle window before a wizard pending is evicted and
+// the thread is condensed to the "selection timed out" breadcrumb. Declared
+// var so tests can shorten it.
+var pendingTimeout = 1 * time.Minute
 
 // Workflow is the thin Slack-side handler. Real triage logic lives in
 // app/workflow workflows reached through the dispatcher.
@@ -202,14 +205,19 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, tr
 	// leaving a trail of ":white_check_mark: skip" acks.
 	if isTransitionalValue(value) {
 		_ = w.slack.DeleteMessage(channelID, selectorMsgTS)
-	} else {
+		pending.SessionMsgTSs = removeTS(pending.SessionMsgTSs, selectorMsgTS)
+	} else if pending.Phase == "d_selector" {
 		ackLabel := value
-		if pending.Phase == "d_selector" {
-			if label, ok := dSelectorLabel[value]; ok {
-				ackLabel = label
-			}
+		if label, ok := dSelectorLabel[value]; ok {
+			ackLabel = label
 		}
 		_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":white_check_mark: "+ackLabel)
+		// Promote this TS to the session-wide "breadcrumb" slot. Timeout
+		// cleanup keeps this one, deletes everything else.
+		pending.DSelectorAckTS = selectorMsgTS
+		pending.SessionMsgTSs = removeTS(pending.SessionMsgTSs, selectorMsgTS)
+	} else {
+		_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":white_check_mark: "+value)
 		// Remember the repo ack so a later "重新選 repo" click can delete it —
 		// otherwise every rejected repo pick leaves behind a ":white_check_mark:
 		// owner/repo" line the user already disowned.
@@ -430,18 +438,23 @@ func clonePendingForRegeneration(src *workflow.Pending) *workflow.Pending {
 		return nil
 	}
 	return &workflow.Pending{
-		ChannelID:   src.ChannelID,
-		ThreadTS:    src.ThreadTS,
-		TriggerTS:   src.TriggerTS,
-		UserID:      src.UserID,
-		Reporter:    src.Reporter,
-		ChannelName: src.ChannelName,
-		RequestID:   src.RequestID,
-		SelectorTS:  "",
-		Phase:       src.Phase,
-		TaskType:    src.TaskType,
-		State:       src.State,
-		BusyHint:    src.BusyHint,
+		ChannelID:      src.ChannelID,
+		ThreadTS:       src.ThreadTS,
+		TriggerTS:      src.TriggerTS,
+		UserID:         src.UserID,
+		Reporter:       src.Reporter,
+		ChannelName:    src.ChannelName,
+		RequestID:      src.RequestID,
+		SelectorTS:     "",
+		Phase:          src.Phase,
+		TaskType:       src.TaskType,
+		State:          src.State,
+		BusyHint:       src.BusyHint,
+		DSelectorAckTS: src.DSelectorAckTS,
+		SessionMsgTSs:  append([]string(nil), src.SessionMsgTSs...),
+		// RepoAckTS intentionally left zero — back-to-repo starts a fresh
+		// repo pick, and the old pick's ack has already been deleted by
+		// HandleBackToRepo.
 	}
 }
 
@@ -600,29 +613,72 @@ func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
 }
 
 // storePending registers a pending workflow state under selectorTS and starts
-// a goroutine that evicts the entry after pendingTimeout.
+// a goroutine that evicts the entry after pendingTimeout. The selector TS is
+// also tracked on pending.SessionMsgTSs so timeout cleanup can find every
+// bot-posted message in this flow.
 func (w *Workflow) storePending(selectorTS string, p *workflow.Pending) {
 	p.SelectorTS = selectorTS
 	w.mu.Lock()
 	w.pending[selectorTS] = p
+	// Register this message on the session trail (deduped — executeStep may
+	// re-key an existing pending under a new TS after a modal flow).
+	if !containsTS(p.SessionMsgTSs, selectorTS) {
+		p.SessionMsgTSs = append(p.SessionMsgTSs, selectorTS)
+	}
 	w.mu.Unlock()
 
 	go func() {
 		time.Sleep(pendingTimeout)
 		w.mu.Lock()
 		_, stillPending := w.pending[selectorTS]
+		var sessionTSs []string
+		var dsTS string
 		if stillPending {
 			delete(w.pending, selectorTS)
+			dsTS = p.DSelectorAckTS
+			sessionTSs = append([]string(nil), p.SessionMsgTSs...)
 		}
 		w.mu.Unlock()
 
-		if stillPending {
-			_ = w.slack.UpdateMessage(p.ChannelID, selectorTS, ":hourglass: 已超時")
-			_ = w.slack.PostMessage(p.ChannelID, ":hourglass: 選擇已超時，請重新觸發。", p.ThreadTS)
-			if w.handler != nil {
-				w.handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+		if !stillPending {
+			return
+		}
+		// Condense the thread: delete every session message (including the
+		// current selector) except the D-selector breadcrumb, then post the
+		// single timeout notice.
+		for _, ts := range sessionTSs {
+			if ts == dsTS {
+				continue
 			}
+			_ = w.slack.DeleteMessage(p.ChannelID, ts)
+		}
+		_ = w.slack.PostMessage(p.ChannelID, ":hourglass: 選擇已超時，請重新觸發。", p.ThreadTS)
+		if w.handler != nil {
+			w.handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
 		}
 	}()
+}
+
+// containsTS reports whether tsList contains ts.
+func containsTS(tsList []string, ts string) bool {
+	for _, v := range tsList {
+		if v == ts {
+			return true
+		}
+	}
+	return false
+}
+
+// removeTS returns tsList with the first occurrence of ts removed. Returns
+// the input unchanged when ts isn't present. Used when a TS transitions
+// from the session trail into a more specific slot (DSelectorAckTS) or gets
+// deleted outright, so timeout cleanup doesn't double-delete.
+func removeTS(tsList []string, ts string) []string {
+	for i, v := range tsList {
+		if v == ts {
+			return append(tsList[:i], tsList[i+1:]...)
+		}
+	}
+	return tsList
 }
 
