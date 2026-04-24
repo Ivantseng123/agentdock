@@ -1,7 +1,9 @@
 package queue
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -25,15 +27,35 @@ func newTestStore(t *testing.T, ttl time.Duration) *RedisJobStore {
 	return NewRedisJobStore(client, "ad:jobstore:test", ttl)
 }
 
+// TestRedisJobStore_Put_RespectsCancelledContext verifies #194: every method
+// on RedisJobStore must honour the caller's context so a degraded Redis
+// backend cannot stall the app indefinitely. A cancelled ctx should surface
+// quickly instead of blocking on a network round-trip.
+func TestRedisJobStore_Put_RespectsCancelledContext(t *testing.T) {
+	store := newTestStore(t, time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before the call
+
+	err := store.Put(ctx, makeJob("j-cancelled", "C1", "100.001"))
+	if err == nil {
+		t.Fatal("Put with cancelled ctx should have errored, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Put error = %v, want errors.Is(err, context.Canceled)", err)
+	}
+}
+
 func TestRedisJobStore_PutAndGet(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	got, err := store.Get("j1")
+	got, err := store.Get(ctx, "j1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -46,21 +68,23 @@ func TestRedisJobStore_PutAndGet(t *testing.T) {
 }
 
 func TestRedisJobStore_Get_Missing(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
-	if _, err := store.Get("nope"); err == nil {
+	if _, err := store.Get(ctx, "nope"); err == nil {
 		t.Fatal("expected error for missing jobID")
 	}
 }
 
 func TestRedisJobStore_GetByThread(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	got, err := store.GetByThread("C1", "100.001")
+	got, err := store.GetByThread(ctx, "C1", "100.001")
 	if err != nil {
 		t.Fatalf("GetByThread: %v", err)
 	}
@@ -68,26 +92,27 @@ func TestRedisJobStore_GetByThread(t *testing.T) {
 		t.Errorf("Job.ID = %q, want j1", got.Job.ID)
 	}
 
-	if _, err := store.GetByThread("C1", "missing"); err == nil {
+	if _, err := store.GetByThread(ctx, "C1", "missing"); err == nil {
 		t.Fatal("expected error for unknown thread")
 	}
 }
 
 func TestRedisJobStore_ListPending(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	for i := 0; i < 3; i++ {
 		job := makeJob(fmt.Sprintf("j%d", i), "C1", fmt.Sprintf("ts%d", i))
-		if err := store.Put(job); err != nil {
+		if err := store.Put(ctx, job); err != nil {
 			t.Fatalf("Put: %v", err)
 		}
 	}
 	// Advance one out of Pending.
-	if err := store.UpdateStatus("j1", JobRunning); err != nil {
+	if err := store.UpdateStatus(ctx, "j1", JobRunning); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
 
-	pending, err := store.ListPending()
+	pending, err := store.ListPending(ctx)
 	if err != nil {
 		t.Fatalf("ListPending: %v", err)
 	}
@@ -102,15 +127,16 @@ func TestRedisJobStore_ListPending(t *testing.T) {
 }
 
 func TestRedisJobStore_ListAll(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	for i := 0; i < 3; i++ {
 		job := makeJob(fmt.Sprintf("j%d", i), "C1", fmt.Sprintf("ts%d", i))
-		if err := store.Put(job); err != nil {
+		if err := store.Put(ctx, job); err != nil {
 			t.Fatalf("Put: %v", err)
 		}
 	}
-	all, err := store.ListAll()
+	all, err := store.ListAll(ctx)
 	if err != nil {
 		t.Fatalf("ListAll: %v", err)
 	}
@@ -120,17 +146,18 @@ func TestRedisJobStore_ListAll(t *testing.T) {
 }
 
 func TestRedisJobStore_UpdateStatus_RunningSideEffects(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	if err := store.UpdateStatus("j1", JobRunning); err != nil {
+	if err := store.UpdateStatus(ctx, "j1", JobRunning); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
-	got, err := store.Get("j1")
+	got, err := store.Get(ctx, "j1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -144,43 +171,46 @@ func TestRedisJobStore_UpdateStatus_RunningSideEffects(t *testing.T) {
 		t.Errorf("WaitTime = %v, want > 0", got.WaitTime)
 	}
 
-	if err := store.UpdateStatus("j1", JobCancelled); err != nil {
+	if err := store.UpdateStatus(ctx, "j1", JobCancelled); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
-	got, _ = store.Get("j1")
+	got, _ = store.Get(ctx, "j1")
 	if got.CancelledAt.IsZero() {
 		t.Error("CancelledAt should be set after cancellation")
 	}
 }
 
 func TestRedisJobStore_UpdateStatus_Missing(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
-	if err := store.UpdateStatus("nope", JobRunning); err == nil {
+	if err := store.UpdateStatus(ctx, "nope", JobRunning); err == nil {
 		t.Fatal("expected error updating missing job")
 	}
 }
 
 func TestRedisJobStore_SetWorker(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := store.SetWorker("j1", "worker-a"); err != nil {
+	if err := store.SetWorker(ctx, "j1", "worker-a"); err != nil {
 		t.Fatalf("SetWorker: %v", err)
 	}
-	got, _ := store.Get("j1")
+	got, _ := store.Get(ctx, "j1")
 	if got.WorkerID != "worker-a" {
 		t.Errorf("WorkerID = %q, want worker-a", got.WorkerID)
 	}
 }
 
 func TestRedisJobStore_SetAgentStatus(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -194,11 +224,11 @@ func TestRedisJobStore_SetAgentStatus(t *testing.T) {
 		LastEventAt: time.Now(),
 		ToolCalls:   5,
 	}
-	if err := store.SetAgentStatus("j1", report); err != nil {
+	if err := store.SetAgentStatus(ctx, "j1", report); err != nil {
 		t.Fatalf("SetAgentStatus: %v", err)
 	}
 
-	got, _ := store.Get("j1")
+	got, _ := store.Get(ctx, "j1")
 	if got.AgentStatus == nil {
 		t.Fatal("AgentStatus is nil, want populated")
 	}
@@ -210,78 +240,81 @@ func TestRedisJobStore_SetAgentStatus(t *testing.T) {
 	}
 
 	// Silent no-op when job is missing (matches MemJobStore semantics).
-	if err := store.SetAgentStatus("nope", report); err != nil {
+	if err := store.SetAgentStatus(ctx, "nope", report); err != nil {
 		t.Errorf("SetAgentStatus on missing job should no-op, got %v", err)
 	}
 }
 
 func TestRedisJobStore_Delete(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
-	if err := store.Delete("j1"); err != nil {
+	if err := store.Delete(ctx, "j1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := store.Get("j1"); err == nil {
+	if _, err := store.Get(ctx, "j1"); err == nil {
 		t.Fatal("expected Get to fail after Delete")
 	}
-	if _, err := store.GetByThread("C1", "100.001"); err == nil {
+	if _, err := store.GetByThread(ctx, "C1", "100.001"); err == nil {
 		t.Fatal("expected GetByThread to fail after Delete (secondary index must be cleared)")
 	}
 
 	// Idempotent: second delete is not an error.
-	if err := store.Delete("j1"); err != nil {
+	if err := store.Delete(ctx, "j1"); err != nil {
 		t.Errorf("Delete on missing job should be no-op, got %v", err)
 	}
 }
 
 func TestRedisJobStore_TTLExpiry(t *testing.T) {
+	ctx := context.Background()
 	// Short TTL + short wait. Using 1s so the test stays quick.
 	store := newTestStore(t, 1*time.Second)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
 	// Confirm it's there.
-	if _, err := store.Get("j1"); err != nil {
+	if _, err := store.Get(ctx, "j1"); err != nil {
 		t.Fatalf("Get right after Put: %v", err)
 	}
 
 	// Wait for expiry.
 	time.Sleep(1500 * time.Millisecond)
 
-	if _, err := store.Get("j1"); err == nil {
+	if _, err := store.Get(ctx, "j1"); err == nil {
 		t.Fatal("expected Get to fail after TTL expiry")
 	}
-	if _, err := store.GetByThread("C1", "100.001"); err == nil {
+	if _, err := store.GetByThread(ctx, "C1", "100.001"); err == nil {
 		t.Fatal("expected GetByThread to fail after TTL expiry")
 	}
 }
 
 func TestRedisJobStore_TTLRefreshedOnUpdate(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, 2*time.Second)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
 	// Sleep part-way, then refresh via update.
 	time.Sleep(1 * time.Second)
-	if err := store.UpdateStatus("j1", JobRunning); err != nil {
+	if err := store.UpdateStatus(ctx, "j1", JobRunning); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
 
 	// Original TTL would have expired by now (1.5s total since Put, original
 	// TTL 2s) — but refresh should have bumped TTL back to 2s, so still alive.
 	time.Sleep(1500 * time.Millisecond)
-	if _, err := store.Get("j1"); err != nil {
+	if _, err := store.Get(ctx, "j1"); err != nil {
 		t.Fatalf("Get after TTL refresh: %v — TTL was not refreshed on UpdateStatus", err)
 	}
 }
@@ -292,10 +325,11 @@ func TestRedisJobStore_TTLRefreshedOnUpdate(t *testing.T) {
 // interleaved with UpdateStatus could read a stale JobState and clobber the
 // status change.
 func TestRedisJobStore_ConcurrentUpdates_NoLostUpdate(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := makeJob("j1", "C1", "100.001")
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 
@@ -312,7 +346,7 @@ func TestRedisJobStore_ConcurrentUpdates_NoLostUpdate(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iters; i++ {
-				if err := store.UpdateStatus("j1", JobRunning); err != nil {
+				if err := store.UpdateStatus(ctx, "j1", JobRunning); err != nil {
 					errs <- fmt.Errorf("UpdateStatus(w=%d,i=%d): %w", w, i, err)
 					return
 				}
@@ -328,7 +362,7 @@ func TestRedisJobStore_ConcurrentUpdates_NoLostUpdate(t *testing.T) {
 					LastEventAt: time.Now(),
 					ToolCalls:   i,
 				}
-				if err := store.SetAgentStatus("j1", rep); err != nil {
+				if err := store.SetAgentStatus(ctx, "j1", rep); err != nil {
 					errs <- fmt.Errorf("SetAgentStatus(w=%d,i=%d): %w", w, i, err)
 					return
 				}
@@ -342,7 +376,7 @@ func TestRedisJobStore_ConcurrentUpdates_NoLostUpdate(t *testing.T) {
 		t.Errorf("concurrent write failed: %v", err)
 	}
 
-	got, err := store.Get("j1")
+	got, err := store.Get(ctx, "j1")
 	if err != nil {
 		t.Fatalf("Get after contention: %v", err)
 	}
@@ -364,6 +398,7 @@ func TestRedisJobStore_ConcurrentUpdates_NoLostUpdate(t *testing.T) {
 // round-trip — this is what lets a restarted app read back state written by a
 // previous process.
 func TestRedisJobStore_JSONRoundTrip(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	job := &Job{
@@ -383,10 +418,10 @@ func TestRedisJobStore_JSONRoundTrip(t *testing.T) {
 	}
 
 	// --- Primary put: AgentStatus nil, StartedAt/CancelledAt zero. ---
-	if err := store.Put(job); err != nil {
+	if err := store.Put(ctx, job); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	got, err := store.Get("j1")
+	got, err := store.Get(ctx, "j1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -421,10 +456,10 @@ func TestRedisJobStore_JSONRoundTrip(t *testing.T) {
 		OutputTokens: 200,
 		JobStatus:    JobRunning,
 	}
-	if err := store.SetAgentStatus("j1", rep); err != nil {
+	if err := store.SetAgentStatus(ctx, "j1", rep); err != nil {
 		t.Fatalf("SetAgentStatus: %v", err)
 	}
-	got, err = store.Get("j1")
+	got, err = store.Get(ctx, "j1")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -451,15 +486,16 @@ func TestRedisJobStore_JSONRoundTrip(t *testing.T) {
 // works with many keys in the namespace — the real enforcement (SCAN vs KEYS)
 // is a review-time concern since both return the same data.
 func TestRedisJobStore_SCANNotKEYS(t *testing.T) {
+	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
 
 	for i := 0; i < 50; i++ {
 		job := makeJob(fmt.Sprintf("job-%d", i), "C1", fmt.Sprintf("ts-%d", i))
-		if err := store.Put(job); err != nil {
+		if err := store.Put(ctx, job); err != nil {
 			t.Fatalf("Put[%d]: %v", i, err)
 		}
 	}
-	all, err := store.ListAll()
+	all, err := store.ListAll(ctx)
 	if err != nil {
 		t.Fatalf("ListAll: %v", err)
 	}

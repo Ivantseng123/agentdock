@@ -143,7 +143,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	}
 
 	// Execute agent.
-	deps.store.UpdateStatus(job.ID, queue.JobRunning)
+	deps.store.UpdateStatus(ctx, job.ID, queue.JobRunning)
 	logger.Info("執行 agent 中", "phase", "處理中")
 	opts.Secrets = mergedSecrets
 	output, err := deps.runner.Run(ctx, repoPath, promptXML, opts)
@@ -199,7 +199,11 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]prompt
 
 func classifyResult(job *queue.Job, startedAt time.Time, err error, repoPath string, ctx context.Context, store queue.JobStore) *queue.JobResult {
 	if ctx.Err() == context.Canceled {
-		if state, lookupErr := store.Get(job.ID); lookupErr == nil && state.Status == queue.JobCancelled {
+		// ctx is already cancelled here; use a detached ctx with short timeout
+		// so the post-cancel lookup can complete.
+		lookupCtx, cancel := context.WithTimeout(context.Background(), queue.DefaultStoreOpTimeout)
+		defer cancel()
+		if state, lookupErr := store.Get(lookupCtx, job.ID); lookupErr == nil && state.Status == queue.JobCancelled {
 			return cancelledResult(job, startedAt, repoPath)
 		}
 	}

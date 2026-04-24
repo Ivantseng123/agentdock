@@ -68,7 +68,7 @@ func (q *JobQueue) Submit(ctx context.Context, job *queue.Job) error {
 	}
 	job.Seq = q.seqCounter.Add(1)
 	heap.Push(&q.pq, &queueEntry{job: job})
-	q.store.Put(job)
+	q.store.Put(ctx, job)
 	q.cond.Signal()
 	return nil
 }
@@ -91,7 +91,7 @@ func (q *JobQueue) Receive(ctx context.Context) (<-chan *queue.Job, error) {
 }
 
 func (q *JobQueue) Ack(ctx context.Context, jobID string) error {
-	q.store.UpdateStatus(jobID, queue.JobPreparing)
+	q.store.UpdateStatus(ctx, jobID, queue.JobPreparing)
 	return nil
 }
 

@@ -11,9 +11,10 @@ import (
 )
 
 func TestWatchdog_PublishesFailedResultOnTimeout(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-10 * time.Minute)})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-10 * time.Minute)})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	results := queuetest.NewResultBus(10)
 	defer results.Close()
@@ -48,18 +49,19 @@ func TestWatchdog_PublishesFailedResultOnTimeout(t *testing.T) {
 		t.Fatal("timeout waiting for result on ResultBus")
 	}
 
-	state, _ := store.Get("j1")
+	state, _ := store.Get(ctx, "j1")
 	if state.Status != queue.JobFailed {
 		t.Errorf("store status = %q, want failed", state.Status)
 	}
 }
 
 func TestWatchdog_CancelFallbackAfterTimeout(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-5 * time.Minute)})
-	store.UpdateStatus("j1", queue.JobCancelled)
+	store.Put(ctx, &queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-5 * time.Minute)})
+	store.UpdateStatus(ctx, "j1", queue.JobCancelled)
 	// Force CancelledAt older than cancelTimeout
-	state, _ := store.Get("j1")
+	state, _ := store.Get(ctx, "j1")
 	state.CancelledAt = time.Now().Add(-2 * time.Minute)
 
 	results := queuetest.NewResultBus(10)
@@ -92,16 +94,17 @@ func TestWatchdog_CancelFallbackAfterTimeout(t *testing.T) {
 	}
 
 	// Store status should remain JobCancelled (not flipped to JobFailed)
-	state, _ = store.Get("j1")
+	state, _ = store.Get(ctx, "j1")
 	if state.Status != queue.JobCancelled {
 		t.Errorf("store status = %q, want JobCancelled", state.Status)
 	}
 }
 
 func TestWatchdog_CancelWithinTimeoutDoesNotFire(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-5 * time.Minute)})
-	store.UpdateStatus("j1", queue.JobCancelled) // CancelledAt is now()
+	store.Put(ctx, &queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-5 * time.Minute)})
+	store.UpdateStatus(ctx, "j1", queue.JobCancelled) // CancelledAt is now()
 
 	results := queuetest.NewResultBus(10)
 	defer results.Close()
@@ -127,9 +130,10 @@ func TestWatchdog_CancelWithinTimeoutDoesNotFire(t *testing.T) {
 }
 
 func TestWatchdog_CancelStatePreemptsJobTimeout(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-30 * time.Minute)})
-	store.UpdateStatus("j1", queue.JobCancelled)
+	store.Put(ctx, &queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-30 * time.Minute)})
+	store.UpdateStatus(ctx, "j1", queue.JobCancelled)
 
 	results := queuetest.NewResultBus(10)
 	defer results.Close()
@@ -152,16 +156,17 @@ func TestWatchdog_CancelStatePreemptsJobTimeout(t *testing.T) {
 	case <-ctx.Done():
 		// ok — cancelled state must not trigger jobTimeout killAndPublish
 	}
-	state, _ := store.Get("j1")
+	state, _ := store.Get(ctx, "j1")
 	if state.Status != queue.JobCancelled {
 		t.Errorf("store flipped to %q, should stay JobCancelled", state.Status)
 	}
 }
 
 func TestWatchdog_KillAndPublishBackOffOnRaceCancel(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-5 * time.Minute)})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1", SubmittedAt: time.Now().Add(-5 * time.Minute)})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	results := queuetest.NewResultBus(10)
 	defer results.Close()
@@ -171,13 +176,13 @@ func TestWatchdog_KillAndPublishBackOffOnRaceCancel(t *testing.T) {
 	wd := queue.NewWatchdog(store, commands, results, queue.WatchdogConfig{}, slog.Default())
 
 	// Simulate race: caller flips to JobCancelled between check() and killAndPublish.
-	store.UpdateStatus("j1", queue.JobCancelled)
+	store.UpdateStatus(ctx, "j1", queue.JobCancelled)
 
-	state, _ := store.Get("j1")
+	state, _ := store.Get(ctx, "j1")
 	wd.KillAndPublish(state, "job timeout")
 
 	// Store must remain JobCancelled (back-off kicked in).
-	state, _ = store.Get("j1")
+	state, _ = store.Get(ctx, "j1")
 	if state.Status != queue.JobCancelled {
 		t.Errorf("store flipped to %q, back-off failed", state.Status)
 	}

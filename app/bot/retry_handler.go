@@ -27,7 +27,11 @@ func NewRetryHandler(store queue.JobStore, q JobSubmitter, slack SlackPoster, lo
 }
 
 func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
-	state, err := h.store.Get(jobID)
+	// Retry is driven from a Slack interaction that doesn't plumb ctx today;
+	// bound JobStore calls so a Redis hang cannot wedge the handler.
+	ctx, cancel := context.WithTimeout(context.Background(), queue.DefaultStoreOpTimeout)
+	defer cancel()
+	state, err := h.store.Get(ctx, jobID)
 	if err != nil {
 		h.logger.Warn("重試：找不到工作", "phase", "重試", "job_id", jobID, "error", err)
 		h.slack.UpdateMessage(channelID, msgTS, ":warning: 此任務已過期，請重新觸發")
@@ -65,9 +69,8 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 	}
 
 	// Put in store before posting button (so cancel_job can find it).
-	h.store.Put(newJob)
+	h.store.Put(ctx, newJob)
 
-	ctx := context.Background()
 	if err := h.queue.Submit(ctx, newJob); err != nil {
 		h.logger.Error("重試：提交失敗", "phase", "重試", "job_id", newJob.ID, "error", err)
 		h.slack.PostMessage(channelID, ":x: 重試失敗: "+err.Error(), original.ThreadTS)
@@ -81,7 +84,7 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 		original.ThreadTS, "cancel_job", "取消", newJob.ID)
 	if err == nil {
 		newJob.StatusMsgTS = statusMsgTS
-		h.store.Put(newJob) // update with StatusMsgTS
+		h.store.Put(ctx, newJob) // update with StatusMsgTS
 	}
 
 	h.logger.Info("重試工作已提交", "phase", "重試",
