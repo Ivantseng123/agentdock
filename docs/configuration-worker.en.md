@@ -83,6 +83,28 @@ Slack status messages use a playful template regardless of whether a nickname is
 
 (Text is Chinese because this is a zh-first product; the template applies to every worker uniformly.)
 
+## Agent overrides (optional)
+
+Omitting the `agents:` block is recommended — `mergeBuiltinAgents` fills the built-in defaults at startup. Add entries only when you need to override a specific field:
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string | Executable name or path |
+| `args` | []string | CLI arguments; `{prompt}` is substituted with the job prompt |
+| `timeout` | duration | Per-job wall-clock limit (e.g. `30m`) |
+| `skill_dir` | string | Repo-relative directory where skill files are written |
+| `stream` | bool | Enable real-time JSON event parsing (claude only) |
+
+You only need to specify the fields you want to override; unset fields inherit from `BuiltinAgents`. Example:
+
+```yaml
+agents:
+  opencode:
+    timeout: 30m    # extend timeout; command/args/skill_dir stay at built-in values
+  claude:
+    skill_dir: .claude/custom-skills
+```
+
 ## Agent streaming
 
 Claude supports `--output-format stream-json`. With `stream: true`, the worker tracks:

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -115,8 +116,10 @@ providers: [claude]
 			continue
 		}
 		want := BuiltinAgents[name]
-		if got.Command != want.Command {
-			t.Errorf("agent %q: Command = %q, want %q", name, got.Command, want.Command)
+		// Validate the full struct — Args especially, since stale Args were the
+		// root cause of the --pure incident that motivated this PR.
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("agent %q: got %+v, want %+v", name, got, want)
 		}
 	}
 }

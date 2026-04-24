@@ -81,6 +81,28 @@ Slack 狀態訊息會從冷冰冰的 `:gear: 準備中 · worker-0` 改為擬人
 
 沒設暱稱時 `worker-N` 還是會套用同樣的句型（robot-worker 人設）。
 
+## Agent 覆寫（選用）
+
+建議省略 `agents:` 區塊 — 啟動時 `mergeBuiltinAgents` 自動填入內建預設值。只有在需要覆寫特定欄位時才需要寫：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `command` | string | 執行檔名稱或路徑 |
+| `args` | []string | CLI 引數；`{prompt}` 會被替換為 job 的 prompt 內容 |
+| `timeout` | duration | 單一 job 的 wall-clock 上限（例如 `30m`） |
+| `skill_dir` | string | Repo 內寫入 skill 檔的相對目錄 |
+| `stream` | bool | 啟用即時 JSON 事件解析（僅 claude 支援） |
+
+只需寫要覆寫的欄位；其他欄位沿用 `BuiltinAgents`。範例：
+
+```yaml
+agents:
+  opencode:
+    timeout: 30m    # 只改 timeout，command/args/skill_dir 沿用內建
+  claude:
+    skill_dir: .claude/custom-skills
+```
+
 ## Agent Stream
 
 Claude 支援 `--output-format stream-json`，開啟 `stream: true` 可即時追蹤：
