@@ -177,6 +177,30 @@ v2.0 還支援 `queue.transport: inmem`（app 和 worker 跑在同一個 process
 
 欄位完整說明：[configuration-app.md](configuration-app.md#workflow-specific-prompts)、[configuration-app.md](configuration-app.md#pr-review-啟用)。
 
+### v2.5 → v2.6：`queue.store` 新欄位（**預設 redis，升級後行為會變**）
+
+v2.6 把 `RedisJobStore`（#145 / PR #147）接進 App（#146），並把 `queue.store` 預設設為 `redis`，讓生產部署預設就能在 app 重啟後 resume in-flight job（#123）。
+
+**⚠️ 升級影響（既有 yaml 沒設 `queue.store` 的情況）**
+
+- **行為改變**：app 重啟從「掉所有 in-flight state（`:hourglass:` 卡住）」變成「從 Redis 讀回來、正確完成 Slack thread」。生產端是看的是 bug 修好。
+- **Redis 流量增加**：多 ~0.6 × N QPS（N = active worker 數），來自 ResultListener / StatusListener 每個 StatusReport 週期的 `store.Get` + 必要時的 `UpdateStatus`。Sizing Redis 時納入考量，對一般規模 Redis 可忽略。
+- **TTL 預設 1h**：每次寫入 refresh；若 job 跑超過 1h 可能被 TTL evict，請把 `queue.store_ttl` 設得比最長預期 job runtime 大。
+
+**想保留 v2.5 的 in-process 行為**（local dev / 單 pod 測試、不想依賴 Redis 持久化），在 `app.yaml` 明確寫 `mem`：
+
+```yaml
+queue:
+  # ... 其他欄位不變 ...
+  store: mem            # 明確 opt-out，回到 v2.5 行為：app 重啟時 in-flight job state 會掉
+```
+
+只影響 app，worker.yaml 不用動（worker 不讀 JobStore，只產 JobResult / StatusReport）。
+
+**啟動行為**：app 走 `redis` 路徑時會 `ListAll()` 一次並 log `rehydrated in-flight jobs from previous instance`（數量 = 非 terminal state 筆數）。Terminal state 讓 TTL evict，不主動刪。
+
+背景：[#123](https://github.com/Ivantseng123/agentdock/issues/123) incident——app 重啟時 in-flight Slack thread 被 orphan（`:hourglass:` 停留不會消失），即使 worker 把 result 推出來也沒人接。
+
 ### v2.6 → v2.7：`init worker` 不再凍結 BuiltinAgents 快照
 
 **行為變化**：`agentdock init worker` 產出的 `worker.yaml` 不再包含 `agents:` 區塊。Worker 啟動時改由 `mergeBuiltinAgents` 從當下 binary 補齊所有內建值（claude / codex / opencode）。

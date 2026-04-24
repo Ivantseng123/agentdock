@@ -60,6 +60,75 @@ func TestApplyDefaults_Timeouts(t *testing.T) {
 	}
 }
 
+func TestApplyDefaults_QueueStore(t *testing.T) {
+	// Empty yaml → default "redis" + 1h TTL. Redis-backed persistence is the
+	// default so production deployments don't need to opt into the #123 fix;
+	// local dev / single-pod tests set queue.store: mem explicitly.
+	cfg := loadFromString(t, ``)
+	if cfg.Queue.Store != "redis" {
+		t.Errorf("default queue.store = %q, want redis", cfg.Queue.Store)
+	}
+	if cfg.Queue.StoreTTL != time.Hour {
+		t.Errorf("default queue.store_ttl = %v, want 1h", cfg.Queue.StoreTTL)
+	}
+}
+
+func TestLoadConfig_QueueStoreMem(t *testing.T) {
+	// Opt-out path for local dev: explicit mem overrides the redis default.
+	cfg := loadFromString(t, `
+queue:
+  store: mem
+`)
+	if cfg.Queue.Store != "mem" {
+		t.Errorf("queue.store = %q, want mem", cfg.Queue.Store)
+	}
+}
+
+func TestLoadConfig_QueueStoreRedis(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  store: redis
+  store_ttl: 2h
+`)
+	if cfg.Queue.Store != "redis" {
+		t.Errorf("queue.store = %q, want redis", cfg.Queue.Store)
+	}
+	if cfg.Queue.StoreTTL != 2*time.Hour {
+		t.Errorf("queue.store_ttl = %v, want 2h", cfg.Queue.StoreTTL)
+	}
+}
+
+func TestValidate_QueueStoreUnknown(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  store: postgres
+`)
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "queue.store") {
+		t.Errorf("expected validation error for unknown store, got %v", err)
+	}
+}
+
+// Guards the defensive branch in Validate: if a caller constructs a Config
+// directly and forgets to run ApplyDefaults, redis store with zero TTL must
+// surface a clear error rather than silently proceeding with a zero TTL that
+// would make RedisJobStore evict records immediately. Normal load path can't
+// reach this (ApplyDefaults fixes 0 → 1h), so we Validate a Config built
+// without ApplyDefaults.
+func TestValidate_QueueStoreRedisRequiresTTL(t *testing.T) {
+	cfg := &Config{
+		Queue: QueueConfig{
+			Transport: "redis",
+			Store:     "redis",
+			StoreTTL:  0,
+		},
+	}
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "queue.store_ttl") {
+		t.Errorf("expected validation error for redis store with zero TTL, got %v", err)
+	}
+}
+
 func TestApplyDefaults_PromptGoal(t *testing.T) {
 	cfg := loadFromString(t, ``)
 	if cfg.Prompt.Issue.Goal != defaultIssueGoal {

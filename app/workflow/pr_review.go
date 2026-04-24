@@ -312,7 +312,7 @@ func (w *PRReviewWorkflow) HandleResult(ctx context.Context, state *queue.JobSta
 	parsed, err := ParseReviewOutput(r.RawOutput)
 	if err != nil {
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "parse_failed").Inc()
-		w.logger.Warn("pr_review parse failed", "output_head", firstN(r.RawOutput, 2000))
+		w.logger.Warn("pr_review parse failed", "output_head", firstN(logging.Redact(r.RawOutput, w.cfg.Secrets), 2000))
 		// Intentionally keep r.Status="completed" — PR Review is best-effort
 		// with no retry lane. Listener clears dedup after this branch returns.
 		return w.post(job, fmt.Sprintf(":x: Review 失敗：parse error: %v", err))

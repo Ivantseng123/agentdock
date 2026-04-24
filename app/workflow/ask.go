@@ -438,7 +438,7 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 
 	parsed, err := ParseAskOutput(r.RawOutput)
 	if err != nil {
-		truncated := r.RawOutput
+		truncated := logging.Redact(r.RawOutput, w.cfg.Secrets)
 		if len(truncated) > 2000 {
 			truncated = truncated[:2000] + "…(truncated)"
 		}

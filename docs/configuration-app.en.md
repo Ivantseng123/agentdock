@@ -106,6 +106,8 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis                    # extension point; only redis is supported today
+  store: redis                        # JobStore backend: redis (default) / mem
+  store_ttl: 1h                       # per-record TTL when store=redis (ignored when store=mem)
   job_timeout: 20m                    # watchdog: max job lifecycle
   agent_idle_timeout: 5m              # stream-json: no-event timeout
   prepare_timeout: 3m
@@ -130,6 +132,23 @@ secrets:
   GH_TOKEN: ghp_xxx                   # key = env var name, value = plaintext; encrypted before sending to worker
   K8S_TOKEN: your-k8s-token
 ```
+
+## JobStore backend (`queue.store`)
+
+The app tracks each Job's lifecycle (Pending → Running → Completed/Failed/Cancelled) via `JobStore`. `queue.store` picks where that state lives:
+
+| Value | Behaviour | Recommended for |
+|---|---|---|
+| `redis` (default) | Persisted to Redis (`jobstore:*` keys). In-flight jobs survive app restarts. | Production, most deployments |
+| `mem` | In-process memory. All state is lost when the app restarts. | Unit tests, single-pod local dev (when Redis persistence isn't needed) |
+
+`queue.store_ttl` (default `1h`) is the per-record TTL applied by `RedisJobStore` on every Put / UpdateStatus / SetWorker / SetAgentStatus. Terminal-state jobs are not deleted proactively — TTL evicts them. Set the TTL comfortably larger than your **longest expected job runtime**; otherwise a slow job risks having its state evicted mid-run. Ignored when `store=mem` (MemJobStore runs its own 1h cleanup).
+
+On startup with `store=redis`, the app calls `ListAll()` once and logs `rehydrated in-flight jobs from previous instance` with the count of non-terminal records. No in-memory index is rebuilt — `ResultListener` resolves jobs via `store.Get` directly against Redis.
+
+**Expected Redis load**: switching to `store=redis` adds ~2 `store.Get` calls per worker StatusReport (default `worker.status_interval: 5s`) plus 1 `UpdateStatus` (WATCH/MULTI/EXEC round-trip) on state transitions. Roughly `0.6 × N` QPS per active worker — size your Redis accordingly; negligible for typical deployments.
+
+Background / incident: [#123](https://github.com/Ivantseng123/agentdock/issues/123) (in-flight Slack jobs orphaned on app restart), [#146](https://github.com/Ivantseng123/agentdock/issues/146) (wire-up PR).
 
 ## Workflow-specific prompts
 

@@ -41,6 +41,18 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Queue.Transport == "" {
 		cfg.Queue.Transport = "redis"
 	}
+	// Default JobStore backend is "redis" because production is the common
+	// deployment shape and #123 is a production-hurt bug (orphaned Slack
+	// threads on app restart). Making the fix opt-in would leave production
+	// defaulting to broken. Local dev / single-pod test deployments without
+	// Redis persistence set "mem" explicitly. See docs/MIGRATION-v2.md for
+	// the v2.5 → v2.6 upgrade note.
+	if cfg.Queue.Store == "" {
+		cfg.Queue.Store = "redis"
+	}
+	if cfg.Queue.StoreTTL <= 0 {
+		cfg.Queue.StoreTTL = 1 * time.Hour
+	}
 	if cfg.ChannelPriority == nil {
 		cfg.ChannelPriority = map[string]int{"default": 50}
 	}

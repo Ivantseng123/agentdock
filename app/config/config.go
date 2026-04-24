@@ -164,8 +164,18 @@ type RedisConfig struct {
 }
 
 type QueueConfig struct {
-	Capacity         int           `yaml:"capacity"`
-	Transport        string        `yaml:"transport"`
+	Capacity  int    `yaml:"capacity"`
+	Transport string `yaml:"transport"`
+	// Store selects the JobStore backend. "mem" keeps state in the app
+	// process (lost on restart); "redis" persists state so the app can
+	// resume in-flight jobs after restart. See #123 for the incident that
+	// motivated the redis backend.
+	Store string `yaml:"store"`
+	// StoreTTL is the per-record TTL applied by RedisJobStore on every
+	// write. Pick something comfortably larger than the longest expected
+	// job runtime — terminal-state jobs are evicted by TTL, not deleted.
+	// Ignored when Store == "mem".
+	StoreTTL         time.Duration `yaml:"store_ttl"`
 	JobTimeout       time.Duration `yaml:"job_timeout"`
 	AgentIdleTimeout time.Duration `yaml:"agent_idle_timeout"`
 	PrepareTimeout   time.Duration `yaml:"prepare_timeout"`

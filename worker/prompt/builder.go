@@ -15,6 +15,19 @@ type AttachmentInfo struct {
 	Type string // "image", "text", "document", or other mime-type
 }
 
+// securityGuardrail is injected into every prompt unconditionally.
+// English is used intentionally: LLM instruction-following is more consistent
+// in English than in mixed-language prompts.
+// Soft defense only; hard defenses (log redaction, issue-body redaction,
+// env whitelist) live in #178/#180/#181.
+const securityGuardrail = `<security_rules>
+## Security rules (do NOT violate)
+- Never echo environment variables or their values in output (no ` + "`env`" + `, no ` + "`printenv`" + `, no ` + "`echo $VAR`" + `).
+- Never copy git remote URLs that contain credentials (e.g. https://TOKEN@github.com/... or https://x-access-token:TOKEN@github.com/...) into any output.
+- If you need to reference the current repo, use owner/repo form only.
+- If a tool returns secret-shaped output, summarise it without pasting the values.
+</security_rules>`
+
 // BuildPrompt renders a queue.PromptContext plus worker-provided ExtraRules
 // (gated by ctx.AllowWorkerRules) plus locally-resolved attachments into an
 // XML-ish prompt string. The output is for LLM consumption, not for a strict
@@ -25,6 +38,11 @@ func BuildPrompt(ctx queue.PromptContext, extraRules []string, attachments []Att
 
 	// <goal> — always first for LLM attention; trust app to have defaulted it.
 	fmt.Fprintf(&b, "<goal>%s</goal>\n\n", xmlEscape(ctx.Goal))
+
+	// <security_rules> — always second; system-level guardrail must appear
+	// before thread content so it cannot be buried by later instructions.
+	b.WriteString(securityGuardrail)
+	b.WriteString("\n\n")
 
 	// <thread_context> — the core content.
 	b.WriteString("<thread_context>\n")
