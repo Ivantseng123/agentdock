@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,23 @@ func loadFromString(t *testing.T, yamlContent string) *Config {
 	return &cfg
 }
 
+// loadWithSlogCapture loads config and captures slog output during
+// ApplyDefaults. Used to assert migration warnings fire.
+func loadWithSlogCapture(t *testing.T, yamlContent string) (*Config, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(yamlContent), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	ApplyDefaults(&cfg)
+	return &cfg, buf.String()
+}
+
 func TestLoadConfig_AppFields(t *testing.T) {
 	cfg := loadFromString(t, `
 slack:
@@ -25,7 +44,7 @@ slack:
   app_token: xapp-test
 github:
   token: ghp-test
-prompt:
+prompt_defaults:
   language: zh-TW
 channels:
   C123:
@@ -38,8 +57,8 @@ max_thread_messages: 30
 	if cfg.Slack.BotToken != "xoxb-test" {
 		t.Errorf("bot_token = %q", cfg.Slack.BotToken)
 	}
-	if cfg.Prompt.Language != "zh-TW" {
-		t.Errorf("language = %q", cfg.Prompt.Language)
+	if cfg.PromptDefaults.Language != "zh-TW" {
+		t.Errorf("language = %q", cfg.PromptDefaults.Language)
 	}
 	ch := cfg.Channels["C123"]
 	if repos := ch.GetRepos(); len(repos) != 1 || repos[0] != "owner/repo-a" {
@@ -61,9 +80,6 @@ func TestApplyDefaults_Timeouts(t *testing.T) {
 }
 
 func TestApplyDefaults_QueueStore(t *testing.T) {
-	// Empty yaml → default "redis" + 1h TTL. Redis-backed persistence is the
-	// default so production deployments don't need to opt into the #123 fix;
-	// local dev / single-pod tests set queue.store: mem explicitly.
 	cfg := loadFromString(t, ``)
 	if cfg.Queue.Store != "redis" {
 		t.Errorf("default queue.store = %q, want redis", cfg.Queue.Store)
@@ -74,7 +90,6 @@ func TestApplyDefaults_QueueStore(t *testing.T) {
 }
 
 func TestLoadConfig_QueueStoreMem(t *testing.T) {
-	// Opt-out path for local dev: explicit mem overrides the redis default.
 	cfg := loadFromString(t, `
 queue:
   store: mem
@@ -109,12 +124,6 @@ queue:
 	}
 }
 
-// Guards the defensive branch in Validate: if a caller constructs a Config
-// directly and forgets to run ApplyDefaults, redis store with zero TTL must
-// surface a clear error rather than silently proceeding with a zero TTL that
-// would make RedisJobStore evict records immediately. Normal load path can't
-// reach this (ApplyDefaults fixes 0 → 1h), so we Validate a Config built
-// without ApplyDefaults.
 func TestValidate_QueueStoreRedisRequiresTTL(t *testing.T) {
 	cfg := &Config{
 		Queue: QueueConfig{
@@ -131,15 +140,15 @@ func TestValidate_QueueStoreRedisRequiresTTL(t *testing.T) {
 
 func TestApplyDefaults_PromptGoal(t *testing.T) {
 	cfg := loadFromString(t, ``)
-	if cfg.Prompt.Issue.Goal != defaultIssueGoal {
-		t.Errorf("default Issue.Goal = %q, want %q", cfg.Prompt.Issue.Goal, defaultIssueGoal)
+	if cfg.Workflows.Issue.Prompt.Goal != defaultIssueGoal {
+		t.Errorf("default Issue.Prompt.Goal = %q, want %q", cfg.Workflows.Issue.Prompt.Goal, defaultIssueGoal)
 	}
 }
 
 func TestApplyDefaults_AllowWorkerRules(t *testing.T) {
 	cfg := loadFromString(t, ``)
-	if cfg.Prompt.AllowWorkerRules == nil || !*cfg.Prompt.AllowWorkerRules {
-		t.Errorf("allow_worker_rules default = %v, want true", cfg.Prompt.AllowWorkerRules)
+	if cfg.PromptDefaults.AllowWorkerRules == nil || !*cfg.PromptDefaults.AllowWorkerRules {
+		t.Errorf("allow_worker_rules default = %v, want true", cfg.PromptDefaults.AllowWorkerRules)
 	}
 }
 
@@ -162,9 +171,61 @@ func TestDefaultsMap_ShapeMatchesYAMLTags(t *testing.T) {
 	if q["transport"] != "redis" {
 		t.Errorf("queue.transport = %v, want redis", q["transport"])
 	}
+	// New shape: workflows / prompt_defaults present, legacy prompt / pr_review
+	// cleared after migration.
+	if _, ok := m["workflows"]; !ok {
+		t.Error("DefaultsMap missing workflows key")
+	}
+	if _, ok := m["prompt_defaults"]; !ok {
+		t.Error("DefaultsMap missing prompt_defaults key")
+	}
 }
 
-func TestPromptConfig_LegacyFlatAliasedToIssue(t *testing.T) {
+// --- NEW SHAPE ---
+
+func TestLoadConfig_NewShape(t *testing.T) {
+	cfg := loadFromString(t, `
+workflows:
+  issue:
+    prompt:
+      goal: "new issue goal"
+      output_rules:
+        - "new rule"
+  ask:
+    prompt:
+      goal: "new ask goal"
+  pr_review:
+    enabled: false
+    prompt:
+      goal: "new pr_review goal"
+
+prompt_defaults:
+  language: "日本語"
+  allow_worker_rules: false
+`)
+	if cfg.Workflows.Issue.Prompt.Goal != "new issue goal" {
+		t.Errorf("Issue.Prompt.Goal = %q", cfg.Workflows.Issue.Prompt.Goal)
+	}
+	if cfg.Workflows.Ask.Prompt.Goal != "new ask goal" {
+		t.Errorf("Ask.Prompt.Goal = %q", cfg.Workflows.Ask.Prompt.Goal)
+	}
+	if cfg.Workflows.PRReview.Prompt.Goal != "new pr_review goal" {
+		t.Errorf("PRReview.Prompt.Goal = %q", cfg.Workflows.PRReview.Prompt.Goal)
+	}
+	if cfg.Workflows.PRReview.IsEnabled() {
+		t.Error("explicit enabled:false should disable PRReview")
+	}
+	if cfg.PromptDefaults.Language != "日本語" {
+		t.Errorf("Language = %q", cfg.PromptDefaults.Language)
+	}
+	if cfg.PromptDefaults.IsWorkerRulesAllowed() {
+		t.Error("allow_worker_rules:false should disable worker rules")
+	}
+}
+
+// --- Old-A (pre-#124 flat) alias ---
+
+func TestPromptConfig_LegacyOldA_FlatAliasedToIssue(t *testing.T) {
 	cfg := loadFromString(t, `
 prompt:
   language: "zh-TW"
@@ -172,53 +233,130 @@ prompt:
   output_rules:
     - "legacy rule"
 `)
-	if cfg.Prompt.Issue.Goal != "legacy flat goal" {
-		t.Errorf("Issue.Goal = %q, want legacy flat alias", cfg.Prompt.Issue.Goal)
+	if cfg.Workflows.Issue.Prompt.Goal != "legacy flat goal" {
+		t.Errorf("Issue.Prompt.Goal = %q, want legacy flat alias", cfg.Workflows.Issue.Prompt.Goal)
 	}
-	if len(cfg.Prompt.Issue.OutputRules) != 1 || cfg.Prompt.Issue.OutputRules[0] != "legacy rule" {
-		t.Errorf("Issue.OutputRules = %v", cfg.Prompt.Issue.OutputRules)
+	if len(cfg.Workflows.Issue.Prompt.OutputRules) != 1 || cfg.Workflows.Issue.Prompt.OutputRules[0] != "legacy rule" {
+		t.Errorf("Issue.Prompt.OutputRules = %v", cfg.Workflows.Issue.Prompt.OutputRules)
+	}
+	if cfg.PromptDefaults.Language != "zh-TW" {
+		t.Errorf("language alias failed: %q", cfg.PromptDefaults.Language)
+	}
+	// Legacy block must be cleared after migration.
+	if !cfg.Prompt.IsZero() {
+		t.Errorf("legacy Prompt block should be cleared post-migration: %+v", cfg.Prompt)
 	}
 }
 
-func TestPromptConfig_NestedOverridesFlat(t *testing.T) {
+// --- Old-B (#124 nested-under-prompt) alias ---
+
+func TestPromptConfig_LegacyOldB_NestedAliasedToWorkflows(t *testing.T) {
 	cfg := loadFromString(t, `
 prompt:
-  goal: "legacy"
+  language: "繁體中文"
+  allow_worker_rules: false
   issue:
-    goal: "nested issue goal"
+    goal: "old-B issue"
+    output_rules: ["r1"]
+  ask:
+    goal: "old-B ask"
+  pr_review:
+    goal: "old-B pr_review"
+
+pr_review:
+  enabled: false
 `)
-	if cfg.Prompt.Issue.Goal != "nested issue goal" {
-		t.Errorf("nested must win over flat: got %q", cfg.Prompt.Issue.Goal)
+	if cfg.Workflows.Issue.Prompt.Goal != "old-B issue" {
+		t.Errorf("Issue.Prompt.Goal = %q", cfg.Workflows.Issue.Prompt.Goal)
+	}
+	if cfg.Workflows.Ask.Prompt.Goal != "old-B ask" {
+		t.Errorf("Ask.Prompt.Goal = %q", cfg.Workflows.Ask.Prompt.Goal)
+	}
+	if cfg.Workflows.PRReview.Prompt.Goal != "old-B pr_review" {
+		t.Errorf("PRReview.Prompt.Goal = %q", cfg.Workflows.PRReview.Prompt.Goal)
+	}
+	if cfg.Workflows.PRReview.IsEnabled() {
+		t.Error("old-B pr_review.enabled:false should carry through")
+	}
+	if cfg.PromptDefaults.Language != "繁體中文" {
+		t.Errorf("language alias failed: %q", cfg.PromptDefaults.Language)
+	}
+	if cfg.PromptDefaults.IsWorkerRulesAllowed() {
+		t.Error("old-B allow_worker_rules:false should carry through")
+	}
+	// Legacy blocks must be cleared.
+	if !cfg.Prompt.IsZero() || !cfg.PRReview.IsZero() {
+		t.Errorf("legacy blocks should be cleared: prompt=%+v pr_review=%+v", cfg.Prompt, cfg.PRReview)
+	}
+}
+
+// --- Mixed new + legacy: new shape wins + warning emitted ---
+
+func TestPromptConfig_MixedNewWinsOverLegacyWithWarning(t *testing.T) {
+	cfg, logs := loadWithSlogCapture(t, `
+workflows:
+  issue:
+    prompt:
+      goal: "new-wins issue goal"
+
+prompt:
+  goal: "legacy-should-lose"
+  issue:
+    goal: "legacy-nested-should-lose"
+`)
+	if cfg.Workflows.Issue.Prompt.Goal != "new-wins issue goal" {
+		t.Errorf("new shape must win: got %q", cfg.Workflows.Issue.Prompt.Goal)
+	}
+	if !strings.Contains(logs, "設定同時使用新舊 schema") {
+		t.Errorf("expected migration warning in slog output, got:\n%s", logs)
+	}
+	// Only legacy prompt: was set in this fixture, so the warn must name
+	// prompt: but NOT pr_review:.
+	if !strings.Contains(logs, "legacy prompt: 區塊") {
+		t.Errorf("warn should name the offending legacy block 'prompt:' only, got:\n%s", logs)
+	}
+	if strings.Contains(logs, "pr_review:") {
+		t.Errorf("warn should NOT name pr_review: when only prompt: was set, got:\n%s", logs)
+	}
+}
+
+func TestPromptConfig_NestedOverridesFlatWithinLegacy(t *testing.T) {
+	// Within the legacy prompt: block, nested issue.* beats flat goal.
+	cfg := loadFromString(t, `
+prompt:
+  goal: "flat legacy"
+  issue:
+    goal: "nested legacy"
+`)
+	if cfg.Workflows.Issue.Prompt.Goal != "nested legacy" {
+		t.Errorf("nested must win over flat within legacy: got %q", cfg.Workflows.Issue.Prompt.Goal)
 	}
 }
 
 func TestPromptConfig_DefaultsPopulated(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
-	if cfg.Prompt.Issue.Goal == "" {
-		t.Error("Issue.Goal default is empty")
+	if cfg.Workflows.Issue.Prompt.Goal == "" {
+		t.Error("Issue.Prompt.Goal default is empty")
 	}
-	if cfg.Prompt.Ask.Goal == "" {
-		t.Error("Ask.Goal default is empty")
+	if cfg.Workflows.Ask.Prompt.Goal == "" {
+		t.Error("Ask.Prompt.Goal default is empty")
 	}
-	if cfg.Prompt.PRReview.Goal == "" {
-		t.Error("PRReview.Goal default is empty")
+	if cfg.Workflows.PRReview.Prompt.Goal == "" {
+		t.Error("PRReview.Prompt.Goal default is empty")
 	}
 }
 
 // TestPromptConfig_CwdOnlyRuleInAllWorkflows pins the sandbox guard to all
-// three workflows. Removing it from any workflow re-opens the silent-failure
-// class where the LLM redirects bash output to /tmp/* in a worktree-cwd job
-// and headless `opencode run` cascade-collapses the session. See defaults.go
-// cwdOnlySandboxRule and worker/agent/runner.go for the post-mortem context.
+// three workflows.
 func TestPromptConfig_CwdOnlyRuleInAllWorkflows(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
 
 	cases := map[string][]string{
-		"Issue":    cfg.Prompt.Issue.OutputRules,
-		"Ask":      cfg.Prompt.Ask.OutputRules,
-		"PRReview": cfg.Prompt.PRReview.OutputRules,
+		"Issue":    cfg.Workflows.Issue.Prompt.OutputRules,
+		"Ask":      cfg.Workflows.Ask.Prompt.OutputRules,
+		"PRReview": cfg.Workflows.PRReview.Prompt.OutputRules,
 	}
 	for name, rules := range cases {
 		var found bool
@@ -239,120 +377,111 @@ func TestPromptConfig_ResponseSchemaDefaults(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
 
-	// Issue ResponseSchema — mirrors issue_parser.TriageResult (CREATED /
-	// REJECTED / ERROR shapes).
-	if cfg.Prompt.Issue.ResponseSchema == "" {
-		t.Error("Issue.ResponseSchema default is empty")
+	if cfg.Workflows.Issue.Prompt.ResponseSchema == "" {
+		t.Error("Issue.Prompt.ResponseSchema default is empty")
 	}
-	if !strings.Contains(cfg.Prompt.Issue.ResponseSchema, "===TRIAGE_RESULT===") {
-		t.Errorf("Issue.ResponseSchema missing TRIAGE_RESULT marker: %q", cfg.Prompt.Issue.ResponseSchema)
+	if !strings.Contains(cfg.Workflows.Issue.Prompt.ResponseSchema, "===TRIAGE_RESULT===") {
+		t.Errorf("Issue.Prompt.ResponseSchema missing TRIAGE_RESULT marker: %q", cfg.Workflows.Issue.Prompt.ResponseSchema)
 	}
 	for _, field := range []string{
 		`"status"`, `"title"`, `"body"`, `"labels"`,
 		`"confidence"`, `"files_found"`, `"open_questions"`, `"message"`,
 	} {
-		if !strings.Contains(cfg.Prompt.Issue.ResponseSchema, field) {
-			t.Errorf("Issue.ResponseSchema missing required field %s; current:\n%s",
-				field, cfg.Prompt.Issue.ResponseSchema)
+		if !strings.Contains(cfg.Workflows.Issue.Prompt.ResponseSchema, field) {
+			t.Errorf("Issue.Prompt.ResponseSchema missing required field %s", field)
 		}
 	}
 }
 
 func TestPromptConfig_IssueSchemaCarriesStripTriageHeaders(t *testing.T) {
-	// app/workflow/issue.go:stripTriageSection uses these exact header
-	// strings to trim low-confidence content in degraded runs. If the
-	// schema stops promising them, degraded issues will publish full
-	// low-confidence RCA/TDD content to GitHub. Keep both sides in sync.
 	cfg := &Config{}
 	ApplyDefaults(cfg)
 	for _, header := range []string{"## Root Cause Analysis", "## TDD Fix Plan"} {
-		if !strings.Contains(cfg.Prompt.Issue.ResponseSchema, header) {
-			t.Errorf("Issue.ResponseSchema missing stripTriageSection header %q — must stay in sync with app/workflow/issue.go:stripTriageSection", header)
+		if !strings.Contains(cfg.Workflows.Issue.Prompt.ResponseSchema, header) {
+			t.Errorf("Issue.Prompt.ResponseSchema missing stripTriageSection header %q", header)
 		}
 	}
 
-	// Ask ResponseSchema — single shape, literal "answer" key required.
-	if cfg.Prompt.Ask.ResponseSchema == "" {
-		t.Error("Ask.ResponseSchema default is empty")
+	if cfg.Workflows.Ask.Prompt.ResponseSchema == "" {
+		t.Error("Ask.Prompt.ResponseSchema default is empty")
 	}
-	if !strings.Contains(cfg.Prompt.Ask.ResponseSchema, "===ASK_RESULT===") {
-		t.Errorf("Ask.ResponseSchema missing ASK_RESULT marker: %q", cfg.Prompt.Ask.ResponseSchema)
+	if !strings.Contains(cfg.Workflows.Ask.Prompt.ResponseSchema, "===ASK_RESULT===") {
+		t.Errorf("Ask.Prompt.ResponseSchema missing ASK_RESULT marker")
 	}
-	if !strings.Contains(cfg.Prompt.Ask.ResponseSchema, `"answer"`) {
-		t.Errorf("Ask.ResponseSchema missing literal \"answer\" key: %q", cfg.Prompt.Ask.ResponseSchema)
+	if !strings.Contains(cfg.Workflows.Ask.Prompt.ResponseSchema, `"answer"`) {
+		t.Errorf("Ask.Prompt.ResponseSchema missing literal \"answer\" key")
 	}
 
-	// PRReview ResponseSchema — must mention every field the
-	// pr_review_parser.ReviewResult cares about; losing any of these
-	// silently degrades Slack output.
-	if cfg.Prompt.PRReview.ResponseSchema == "" {
-		t.Error("PRReview.ResponseSchema default is empty")
+	if cfg.Workflows.PRReview.Prompt.ResponseSchema == "" {
+		t.Error("PRReview.Prompt.ResponseSchema default is empty")
 	}
-	if !strings.Contains(cfg.Prompt.PRReview.ResponseSchema, "===REVIEW_RESULT===") {
-		t.Errorf("PRReview.ResponseSchema missing REVIEW_RESULT marker: %q", cfg.Prompt.PRReview.ResponseSchema)
+	if !strings.Contains(cfg.Workflows.PRReview.Prompt.ResponseSchema, "===REVIEW_RESULT===") {
+		t.Errorf("PRReview.Prompt.ResponseSchema missing REVIEW_RESULT marker")
 	}
 	for _, field := range []string{
-		`"status"`,
-		`"summary"`,
-		`"comments_posted"`,
-		`"comments_skipped"`,
-		`"severity_summary"`,
-		`"reason"`,
-		`"error"`,
+		`"status"`, `"summary"`, `"comments_posted"`, `"comments_skipped"`,
+		`"severity_summary"`, `"reason"`, `"error"`,
 	} {
-		if !strings.Contains(cfg.Prompt.PRReview.ResponseSchema, field) {
-			t.Errorf("PRReview.ResponseSchema missing required field %s; current:\n%s",
-				field, cfg.Prompt.PRReview.ResponseSchema)
+		if !strings.Contains(cfg.Workflows.PRReview.Prompt.ResponseSchema, field) {
+			t.Errorf("PRReview.Prompt.ResponseSchema missing required field %s", field)
 		}
 	}
 }
 
 func TestPromptConfig_GoalDoesNotDuplicateSchema(t *testing.T) {
-	// Regression: the marker + JSON shape belong in ResponseSchema, not in
-	// Goal. Keeping them separate prevents weak models from mixing task
-	// framing with exact-string requirements.
 	cfg := &Config{}
 	ApplyDefaults(cfg)
 
-	if strings.Contains(cfg.Prompt.Issue.Goal, "===TRIAGE_RESULT===") {
-		t.Errorf("Issue.Goal must NOT contain the TRIAGE_RESULT marker (belongs in ResponseSchema): %q", cfg.Prompt.Issue.Goal)
+	if strings.Contains(cfg.Workflows.Issue.Prompt.Goal, "===TRIAGE_RESULT===") {
+		t.Errorf("Issue.Prompt.Goal must NOT contain TRIAGE_RESULT marker")
 	}
-	if strings.Contains(cfg.Prompt.Ask.Goal, "===ASK_RESULT===") {
-		t.Errorf("Ask.Goal must NOT contain the ASK_RESULT marker (belongs in ResponseSchema): %q", cfg.Prompt.Ask.Goal)
+	if strings.Contains(cfg.Workflows.Ask.Prompt.Goal, "===ASK_RESULT===") {
+		t.Errorf("Ask.Prompt.Goal must NOT contain ASK_RESULT marker")
 	}
-	if strings.Contains(cfg.Prompt.PRReview.Goal, "===REVIEW_RESULT===") {
-		t.Errorf("PRReview.Goal must NOT contain the REVIEW_RESULT marker (belongs in ResponseSchema): %q", cfg.Prompt.PRReview.Goal)
+	if strings.Contains(cfg.Workflows.PRReview.Prompt.Goal, "===REVIEW_RESULT===") {
+		t.Errorf("PRReview.Prompt.Goal must NOT contain REVIEW_RESULT marker")
 	}
 }
 
 func TestPromptConfig_OperatorResponseSchemaWins(t *testing.T) {
 	cfg := loadFromString(t, `
-prompt:
+workflows:
   ask:
-    response_schema: "custom schema"
+    prompt:
+      response_schema: "custom schema"
 `)
-	if cfg.Prompt.Ask.ResponseSchema != "custom schema" {
-		t.Errorf("operator-provided ResponseSchema dropped: got %q", cfg.Prompt.Ask.ResponseSchema)
+	if cfg.Workflows.Ask.Prompt.ResponseSchema != "custom schema" {
+		t.Errorf("operator-provided ResponseSchema dropped: got %q", cfg.Workflows.Ask.Prompt.ResponseSchema)
 	}
 }
 
 func TestPRReviewConfig_DefaultEnabled(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
-	if !cfg.PRReview.IsEnabled() {
+	if !cfg.Workflows.PRReview.IsEnabled() {
 		t.Error("PRReview default should be enabled (opt-out, not opt-in)")
 	}
 }
 
-func TestPRReviewConfig_ExplicitFalseWins(t *testing.T) {
-	// ApplyDefaults must not clobber an explicit `enabled: false` — operator
-	// override beats the new default-on behavior.
+func TestPRReviewConfig_ExplicitFalseWins_NewShape(t *testing.T) {
+	cfg := loadFromString(t, `
+workflows:
+  pr_review:
+    enabled: false
+`)
+	if cfg.Workflows.PRReview.IsEnabled() {
+		t.Error("explicit workflows.pr_review.enabled: false should turn the feature off")
+	}
+}
+
+func TestPRReviewConfig_LegacyTopLevelFalseWins(t *testing.T) {
+	// Old-B alias: top-level pr_review.enabled:false must still disable.
 	cfg := loadFromString(t, `
 pr_review:
   enabled: false
 `)
-	if cfg.PRReview.IsEnabled() {
-		t.Error("explicit pr_review.enabled: false should turn the feature off")
+	if cfg.Workflows.PRReview.IsEnabled() {
+		t.Error("legacy top-level pr_review.enabled: false should turn the feature off")
 	}
 }
 
@@ -363,10 +492,10 @@ mantis:
   api_token: mantis-token
 `)
 	if got := cfg.Secrets["MANTIS_API_URL"]; got != "https://mantis.example.com/api/rest" {
-		t.Errorf("MANTIS_API_URL = %q, want https://mantis.example.com/api/rest", got)
+		t.Errorf("MANTIS_API_URL = %q", got)
 	}
 	if got := cfg.Secrets["MANTIS_API_TOKEN"]; got != "mantis-token" {
-		t.Errorf("MANTIS_API_TOKEN = %q, want mantis-token", got)
+		t.Errorf("MANTIS_API_TOKEN = %q", got)
 	}
 }
 
@@ -400,7 +529,7 @@ secrets:
   MANTIS_API_TOKEN: from-secrets
 `)
 	if got := cfg.Secrets["MANTIS_API_TOKEN"]; got != "from-secrets" {
-		t.Errorf("MANTIS_API_TOKEN = %q, want from-secrets (user override preserved)", got)
+		t.Errorf("MANTIS_API_TOKEN = %q, want from-secrets", got)
 	}
 }
 
@@ -414,7 +543,7 @@ mantis:
 		t.Fatal("expected validation error for partial mantis config")
 	}
 	if !strings.Contains(err.Error(), "mantis.base_url and mantis.api_token") {
-		t.Errorf("error = %v, want message naming both fields", err)
+		t.Errorf("error = %v", err)
 	}
 }
 

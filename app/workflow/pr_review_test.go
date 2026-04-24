@@ -75,7 +75,7 @@ func TestPRReviewWorkflow_TriggerAPath_PartialURLRejected(t *testing.T) {
 func TestPRReviewWorkflow_TriggerDisabled(t *testing.T) {
 	w, _ := newTestPRReviewWorkflow(t)
 	f := false
-	w.cfg.PRReview.Enabled = &f
+	w.cfg.Workflows.PRReview.Enabled = &f
 	step, _ := w.Trigger(context.Background(), TriggerEvent{ChannelID: "C1"}, "https://github.com/foo/bar/pull/7")
 	if step.Kind != NextStepError {
 		t.Errorf("expected NextStepError when feature-flag disabled")
@@ -85,7 +85,7 @@ func TestPRReviewWorkflow_TriggerDisabled(t *testing.T) {
 func TestPRReviewWorkflow_DisabledErrorTextNoPrefix(t *testing.T) {
 	w, _ := newTestPRReviewWorkflow(t)
 	f := false
-	w.cfg.PRReview.Enabled = &f
+	w.cfg.Workflows.PRReview.Enabled = &f
 	step, _ := w.Trigger(context.Background(), TriggerEvent{ChannelID: "C1"}, "")
 	if strings.HasPrefix(step.ErrorText, ":warning:") || strings.HasPrefix(step.ErrorText, ":x:") {
 		t.Errorf("ErrorText should NOT start with emoji prefix (dispatcher adds :x:): got %q", step.ErrorText)
@@ -305,7 +305,7 @@ func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	// ApplyDefaults now sets Enabled to &true, but the helper keeps the
 	// explicit assignment for clarity — this workflow needs it on.
 	tp := true
-	cfg.PRReview.Enabled = &tp
+	cfg.Workflows.PRReview.Enabled = &tp
 	slack := newFakeSlackPort()
 	w := NewPRReviewWorkflow(cfg, slack, &fakeGitHubPR{}, nil, slog.Default())
 	return w, slack

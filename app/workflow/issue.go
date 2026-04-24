@@ -229,15 +229,15 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 		Priority:    w.channelPriority(p.ChannelID),
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
-			Goal:             w.cfg.Prompt.Issue.Goal,
-			ResponseSchema:   w.cfg.Prompt.Issue.ResponseSchema,
-			OutputRules:      w.cfg.Prompt.Issue.OutputRules,
-			Language:         w.cfg.Prompt.Language,
+			Goal:             w.cfg.Workflows.Issue.Prompt.Goal,
+			ResponseSchema:   w.cfg.Workflows.Issue.Prompt.ResponseSchema,
+			OutputRules:      w.cfg.Workflows.Issue.Prompt.OutputRules,
+			Language:         w.cfg.PromptDefaults.Language,
 			ExtraDescription: st.ExtraDesc,
 			Branch:           st.SelectedBranch,
 			Channel:          p.ChannelName,
 			Reporter:         p.Reporter,
-			AllowWorkerRules: w.cfg.Prompt.IsWorkerRulesAllowed(),
+			AllowWorkerRules: w.cfg.PromptDefaults.IsWorkerRulesAllowed(),
 			// ThreadMessages, Attachments, Skills, EncryptedSecrets filled by Task 2.7 helper.
 		},
 	}

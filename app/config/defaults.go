@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,10 +91,11 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Attachments.TTL <= 0 {
 		cfg.Attachments.TTL = 30 * time.Minute
 	}
-	applyPromptDefaults(&cfg.Prompt)
-	if cfg.PRReview.Enabled == nil {
+	migrateLegacy(cfg)
+	applyPromptDefaults(cfg)
+	if cfg.Workflows.PRReview.Enabled == nil {
 		t := true
-		cfg.PRReview.Enabled = &t
+		cfg.Workflows.PRReview.Enabled = &t
 	}
 	resolveSecrets(cfg)
 }
@@ -226,52 +228,112 @@ var (
 	}
 )
 
-func applyPromptDefaults(p *PromptConfig) {
-	// Alias: flat → Issue when Issue is empty.
-	if p.Issue.Goal == "" && p.Goal != "" {
-		p.Issue.Goal = p.Goal
-	}
-	if len(p.Issue.OutputRules) == 0 && len(p.OutputRules) > 0 {
-		p.Issue.OutputRules = p.OutputRules
+// migrateLegacy copies legacy `prompt:` / `pr_review:` blocks into the new
+// Workflows / PromptDefaults shape. When BOTH legacy and new shapes carry
+// data, the new shape wins and a warning is logged. After migration the
+// legacy blocks are zeroed so downstream marshalling only emits the new shape.
+func migrateLegacy(cfg *Config) {
+	legacyPrompt := !cfg.Prompt.IsZero()
+	legacyPRReview := !cfg.PRReview.IsZero()
+	if !legacyPrompt && !legacyPRReview {
+		return
 	}
 
-	// Hardcoded defaults for each workflow.
-	if p.Issue.Goal == "" {
-		p.Issue.Goal = defaultIssueGoal
+	newShape := !isWorkflowsZero(cfg.Workflows) ||
+		cfg.PromptDefaults.Language != "" ||
+		cfg.PromptDefaults.AllowWorkerRules != nil
+	if newShape {
+		var offending []string
+		if legacyPrompt {
+			offending = append(offending, "prompt:")
+		}
+		if legacyPRReview {
+			offending = append(offending, "pr_review:")
+		}
+		slog.Warn("設定同時使用新舊 schema，採用新 shape（workflows: / prompt_defaults:），請移除 legacy "+strings.Join(offending, " / ")+" 區塊",
+			"component", "config", "phase", "載入")
 	}
-	if p.Ask.Goal == "" {
-		p.Ask.Goal = defaultAskGoal
-	}
-	if p.PRReview.Goal == "" {
-		p.PRReview.Goal = defaultPRReviewGoal
-	}
-	if p.Issue.ResponseSchema == "" {
-		p.Issue.ResponseSchema = defaultIssueResponseSchema
-	}
-	if p.Ask.ResponseSchema == "" {
-		p.Ask.ResponseSchema = defaultAskResponseSchema
-	}
-	if p.PRReview.ResponseSchema == "" {
-		p.PRReview.ResponseSchema = defaultPRReviewResponseSchema
-	}
-	if len(p.Ask.OutputRules) == 0 {
-		p.Ask.OutputRules = defaultAskOutputRules
-	}
-	if len(p.PRReview.OutputRules) == 0 {
-		p.PRReview.OutputRules = defaultPRReviewOutputRules
-	}
-	if len(p.Issue.OutputRules) == 0 {
-		p.Issue.OutputRules = defaultIssueOutputRules
-	}
-	// Issue.OutputRules formerly stayed empty — formatting lives in the
-	// triage-issue SKILL.md, machine schema lives in Issue.ResponseSchema.
-	// It now carries exactly one entry: the cwdOnlySandboxRule sandbox
-	// guard, promoted from skill text per "硬規則直接升格到 output_rules".
 
-	// Preserve prior AllowWorkerRules default (pointer to true).
-	if p.AllowWorkerRules == nil {
+	// Old-B nested first: prompt.{issue,ask,pr_review}.* → workflows.<name>.prompt.*
+	// Old-A flat falls back into Issue only when Old-B left it empty.
+	mergeWorkflowPrompt(&cfg.Workflows.Issue.Prompt, cfg.Prompt.Issue)
+	mergeWorkflowPrompt(&cfg.Workflows.Ask.Prompt, cfg.Prompt.Ask)
+	mergeWorkflowPrompt(&cfg.Workflows.PRReview.Prompt, cfg.Prompt.PRReview)
+	mergeWorkflowPrompt(&cfg.Workflows.Issue.Prompt, WorkflowPromptConfig{
+		Goal:           cfg.Prompt.Goal,
+		ResponseSchema: cfg.Prompt.ResponseSchema,
+		OutputRules:    cfg.Prompt.OutputRules,
+	})
+
+	if cfg.PromptDefaults.Language == "" {
+		cfg.PromptDefaults.Language = cfg.Prompt.Language
+	}
+	if cfg.PromptDefaults.AllowWorkerRules == nil {
+		cfg.PromptDefaults.AllowWorkerRules = cfg.Prompt.AllowWorkerRules
+	}
+	if cfg.Workflows.PRReview.Enabled == nil {
+		cfg.Workflows.PRReview.Enabled = cfg.PRReview.Enabled
+	}
+
+	cfg.Prompt = LegacyPromptConfig{}
+	cfg.PRReview = LegacyPRReviewConfig{}
+}
+
+func mergeWorkflowPrompt(dst *WorkflowPromptConfig, src WorkflowPromptConfig) {
+	if dst.Goal == "" && src.Goal != "" {
+		dst.Goal = src.Goal
+	}
+	if dst.ResponseSchema == "" && src.ResponseSchema != "" {
+		dst.ResponseSchema = src.ResponseSchema
+	}
+	if len(dst.OutputRules) == 0 && len(src.OutputRules) > 0 {
+		dst.OutputRules = src.OutputRules
+	}
+}
+
+func isWorkflowsZero(w WorkflowsConfig) bool {
+	return isWorkflowPromptZero(w.Issue.Prompt) &&
+		isWorkflowPromptZero(w.Ask.Prompt) &&
+		isWorkflowPromptZero(w.PRReview.Prompt) &&
+		w.PRReview.Enabled == nil
+}
+
+func applyPromptDefaults(cfg *Config) {
+	issue := &cfg.Workflows.Issue.Prompt
+	ask := &cfg.Workflows.Ask.Prompt
+	pr := &cfg.Workflows.PRReview.Prompt
+
+	if issue.Goal == "" {
+		issue.Goal = defaultIssueGoal
+	}
+	if ask.Goal == "" {
+		ask.Goal = defaultAskGoal
+	}
+	if pr.Goal == "" {
+		pr.Goal = defaultPRReviewGoal
+	}
+	if issue.ResponseSchema == "" {
+		issue.ResponseSchema = defaultIssueResponseSchema
+	}
+	if ask.ResponseSchema == "" {
+		ask.ResponseSchema = defaultAskResponseSchema
+	}
+	if pr.ResponseSchema == "" {
+		pr.ResponseSchema = defaultPRReviewResponseSchema
+	}
+	if len(ask.OutputRules) == 0 {
+		ask.OutputRules = defaultAskOutputRules
+	}
+	if len(pr.OutputRules) == 0 {
+		pr.OutputRules = defaultPRReviewOutputRules
+	}
+	if len(issue.OutputRules) == 0 {
+		issue.OutputRules = defaultIssueOutputRules
+	}
+
+	if cfg.PromptDefaults.AllowWorkerRules == nil {
 		t := true
-		p.AllowWorkerRules = &t
+		cfg.PromptDefaults.AllowWorkerRules = &t
 	}
 }
 

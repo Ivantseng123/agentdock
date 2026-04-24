@@ -121,7 +121,7 @@ func TestAskHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 func cfgWithSecretPRReview(secret string) *config.Config {
 	cfg := cfgWithSecret(secret)
 	tp := true
-	cfg.PRReview.Enabled = &tp
+	cfg.Workflows.PRReview.Enabled = &tp
 	return cfg
 }
 

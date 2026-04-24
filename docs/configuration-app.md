@@ -47,50 +47,47 @@ channel_priority:
   C_INCIDENTS: 100
   default: 50
 
-prompt:
+workflows:
+  # 每個 workflow 各自一組 prompt（goal + response_schema + output_rules）。留空就用內建預設。
+  issue:
+    prompt:
+      goal: "Use the /triage-issue skill to investigate and produce a triage result."
+      response_schema: |
+        Your final response MUST end with ONE of these three shapes after ===TRIAGE_RESULT===:
+        CREATED  → {"status":"CREATED","title":"<required>","body":"...","labels":[...],"confidence":"high|medium","files_found":<int>,"open_questions":<int>}
+        REJECTED → {"status":"REJECTED","message":"..."}
+        ERROR    → {"status":"ERROR","message":"..."}
+      output_rules: []                # 格式規則寫在 triage-issue skill 的 SKILL.md body template，不在這
+  ask:
+    prompt:
+      goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
+      response_schema: |
+        Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
+
+        ===ASK_RESULT===
+        {"answer": "<your full markdown answer as a single JSON string>"}
+
+        The JSON key MUST be literally "answer". Do NOT use "text", "content", "response" or any synonym.
+      output_rules:
+        - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
+        - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
+        - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
+  pr_review:
+    enabled: true                     # PR Review workflow feature flag；預設開啟，`enabled: false` 才關
+    prompt:
+      goal: "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
+      response_schema: |
+        Your final response MUST end with ONE of these three shapes after ===REVIEW_RESULT===:
+        POSTED  → {"status":"POSTED","summary":"...","comments_posted":<int>,"comments_skipped":<int>,"severity_summary":"clean|minor|major"}
+        SKIPPED → {"status":"SKIPPED","summary":"...","reason":"lockfile_only|vendored|generated|pure_docs|pure_config"}
+        ERROR   → {"status":"ERROR","error":"<diagnostic>","summary":"<what you would have posted>"}
+      output_rules:
+        - "Focus on correctness, security, style"
+        - "Summary ≤ 2000 chars"
+
+prompt_defaults:
   language: 繁體中文
   allow_worker_rules: true            # 是否讓 worker 的 extra_rules 生效
-
-  # 每個 workflow 各自一組 goal + response_schema + output_rules。留空就用內建預設。
-  issue:
-    goal: "Use the /triage-issue skill to investigate and produce a triage result."
-    response_schema: |
-      Your final response MUST end with ONE of these three shapes after ===TRIAGE_RESULT===:
-      CREATED  → {"status":"CREATED","title":"<required>","body":"...","labels":[...],"confidence":"high|medium","files_found":<int>,"open_questions":<int>}
-      REJECTED → {"status":"REJECTED","message":"..."}
-      ERROR    → {"status":"ERROR","message":"..."}
-    output_rules: []                  # 格式規則寫在 triage-issue skill 的 SKILL.md body template，不在這
-  ask:
-    goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
-    response_schema: |
-      Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
-
-      ===ASK_RESULT===
-      {"answer": "<your full markdown answer as a single JSON string>"}
-
-      The JSON key MUST be literally "answer". Do NOT use "text", "content", "response" or any synonym.
-    output_rules:
-      - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
-      - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
-      - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
-  pr_review:
-    goal: "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
-    response_schema: |
-      Your final response MUST end with ONE of these three shapes after ===REVIEW_RESULT===:
-      POSTED  → {"status":"POSTED","summary":"...","comments_posted":<int>,"comments_skipped":<int>,"severity_summary":"clean|minor|major"}
-      SKIPPED → {"status":"SKIPPED","summary":"...","reason":"lockfile_only|vendored|generated|pure_docs|pure_config"}
-      ERROR   → {"status":"ERROR","error":"<diagnostic>","summary":"<what you would have posted>"}
-    output_rules:
-      - "Focus on correctness, security, style"
-      - "Summary ≤ 2000 chars"
-
-  # Legacy flat 欄位（v2.1 之前的寫法）。只有在 prompt.issue.* 留空時，才會被拷到
-  # prompt.issue.*。新配置建議直接寫 prompt.issue.*，不要混用。
-  # goal: "..."
-  # output_rules: []
-
-pr_review:
-  enabled: true                       # PR Review workflow feature flag；預設開啟，`enabled: false` 才關
 
 skills_config: /etc/agentdock/skills.yaml   # 動態 skill 載入設定（可選）
 
@@ -152,17 +149,24 @@ App 用 `JobStore` 追蹤每個 Job 的 lifecycle（Pending → Running → Comp
 
 ## Workflow-specific prompts
 
-`prompt.issue` / `prompt.ask` / `prompt.pr_review` 各自一組 `goal` + `response_schema` + `output_rules`：
+`workflows.issue.prompt` / `workflows.ask.prompt` / `workflows.pr_review.prompt` 各自一組 `goal` + `response_schema` + `output_rules`：
 - `goal` 是給 agent 的**任務描述**——做什麼事、該呼叫哪個 skill（`triage-issue` / `ask-assistant` / `github-pr-review`）。不要在 goal 裡寫輸出格式。
 - `response_schema` 是**輸出契約**——機器可讀的 marker + JSON 結構（`===ASK_RESULT===` / `===REVIEW_RESULT===` 等）。此區塊在 prompt builder 裡**不會**被 XML escape，literal `"` 和 `<` 原樣送給 LLM，避免弱模型看到 `&quot;` 後把它複製成字面輸出導致 JSON parse 失敗。
 - `output_rules` 是**格式規則**——Slack mrkdwn 語法、字數限制、自稱 handle 等。會被 xml-escape 後 render 到 prompt 尾端。
-- 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。`issue.output_rules` 預設為空——格式規則走 `triage-issue` skill 的 SKILL.md body template，config 這層不重複。
+- 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。
 
-**Legacy alias**：`prompt.goal` / `prompt.output_rules`（扁平）在載入時會被拷到 `prompt.issue.*`（前提是 `prompt.issue.*` 還沒設）。這只是為了讓 v2.1 之前的 yaml 還能跑；新配置直接寫 `prompt.issue.*`。
+跨 workflow 共用的兩個欄位放在 `prompt_defaults:`：
+- `prompt_defaults.language`：送給 agent 的語言偏好（e.g. `繁體中文`）。
+- `prompt_defaults.allow_worker_rules`：是否讓 worker 端的 `prompt.extra_rules` 生效（預設 `true`）。
+
+**Legacy alias**（v2.3+ 自動處理，**建議遷移**）：
+- **Old-A（v2.1 以前）**：`prompt.goal` / `prompt.output_rules` / `prompt.response_schema` → `workflows.issue.prompt.*`。
+- **Old-B（v2.2 中間型）**：`prompt.{issue,ask,pr_review}.*` + 頂層 `pr_review.enabled` → `workflows.<name>.prompt.*` / `workflows.pr_review.enabled`。同時 `prompt.language` / `prompt.allow_worker_rules` → `prompt_defaults.*`。
+- 新舊同檔時以新 shape（`workflows:` / `prompt_defaults:`）為準，啟動時會 log 一條 `config` warning 提醒遷移。
 
 ## PR Review
 
-`pr_review.enabled` **預設 `true`**（`github-pr-review` skill 和 `agentdock pr-review-helper` subcommand 都已經包進 release image，預設 opt-out 即可）。若要關掉，顯式寫 `pr_review.enabled: false`。
+`workflows.pr_review.enabled` **預設 `true`**（`github-pr-review` skill 和 `agentdock pr-review-helper` subcommand 都已經包進 release image，預設 opt-out 即可）。若要關掉，顯式寫 `workflows.pr_review.enabled: false`（舊寫法 `pr_review.enabled: false` 也仍被接受，但會走 legacy alias 路徑）。
 
 `@bot review <PR URL>` 走 PRReviewWorkflow；沒帶 URL 時會掃 thread、掃不到就開 modal。執行前確認：
 1. Worker 側已經載到 `github-pr-review` skill（`skills_config` 有指到 `agents/skills/github-pr-review`）。

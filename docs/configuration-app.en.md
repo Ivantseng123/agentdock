@@ -47,50 +47,47 @@ channel_priority:
   C_INCIDENTS: 100
   default: 50
 
-prompt:
+workflows:
+  # One prompt (goal + response_schema + output_rules) per workflow. Unset fields fall back to hardcoded defaults.
+  issue:
+    prompt:
+      goal: "Use the /triage-issue skill to investigate and produce a triage result."
+      response_schema: |
+        Your final response MUST end with ONE of these three shapes after ===TRIAGE_RESULT===:
+        CREATED  → {"status":"CREATED","title":"<required>","body":"...","labels":[...],"confidence":"high|medium","files_found":<int>,"open_questions":<int>}
+        REJECTED → {"status":"REJECTED","message":"..."}
+        ERROR    → {"status":"ERROR","message":"..."}
+      output_rules: []                # formatting rules live in the triage-issue skill's SKILL.md body template, not here
+  ask:
+    prompt:
+      goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
+      response_schema: |
+        Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
+
+        ===ASK_RESULT===
+        {"answer": "<your full markdown answer as a single JSON string>"}
+
+        The JSON key MUST be literally "answer". Do NOT use "text", "content", "response" or any synonym.
+      output_rules:
+        - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
+        - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
+        - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
+  pr_review:
+    enabled: true                     # PR Review workflow feature flag; on by default — set `false` to opt out
+    prompt:
+      goal: "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
+      response_schema: |
+        Your final response MUST end with ONE of these three shapes after ===REVIEW_RESULT===:
+        POSTED  → {"status":"POSTED","summary":"...","comments_posted":<int>,"comments_skipped":<int>,"severity_summary":"clean|minor|major"}
+        SKIPPED → {"status":"SKIPPED","summary":"...","reason":"lockfile_only|vendored|generated|pure_docs|pure_config"}
+        ERROR   → {"status":"ERROR","error":"<diagnostic>","summary":"<what you would have posted>"}
+      output_rules:
+        - "Focus on correctness, security, style"
+        - "Summary ≤ 2000 chars"
+
+prompt_defaults:
   language: English
   allow_worker_rules: true            # whether worker.prompt.extra_rules is rendered
-
-  # One goal + response_schema + output_rules block per workflow. Unset fields fall back to hardcoded defaults.
-  issue:
-    goal: "Use the /triage-issue skill to investigate and produce a triage result."
-    response_schema: |
-      Your final response MUST end with ONE of these three shapes after ===TRIAGE_RESULT===:
-      CREATED  → {"status":"CREATED","title":"<required>","body":"...","labels":[...],"confidence":"high|medium","files_found":<int>,"open_questions":<int>}
-      REJECTED → {"status":"REJECTED","message":"..."}
-      ERROR    → {"status":"ERROR","message":"..."}
-    output_rules: []                  # formatting rules live in the triage-issue skill's SKILL.md body template, not here
-  ask:
-    goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
-    response_schema: |
-      Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
-
-      ===ASK_RESULT===
-      {"answer": "<your full markdown answer as a single JSON string>"}
-
-      The JSON key MUST be literally "answer". Do NOT use "text", "content", "response" or any synonym.
-    output_rules:
-      - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
-      - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
-      - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
-  pr_review:
-    goal: "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
-    response_schema: |
-      Your final response MUST end with ONE of these three shapes after ===REVIEW_RESULT===:
-      POSTED  → {"status":"POSTED","summary":"...","comments_posted":<int>,"comments_skipped":<int>,"severity_summary":"clean|minor|major"}
-      SKIPPED → {"status":"SKIPPED","summary":"...","reason":"lockfile_only|vendored|generated|pure_docs|pure_config"}
-      ERROR   → {"status":"ERROR","error":"<diagnostic>","summary":"<what you would have posted>"}
-    output_rules:
-      - "Focus on correctness, security, style"
-      - "Summary ≤ 2000 chars"
-
-  # Legacy flat fields (pre-v2.1). Only copied into prompt.issue.* if prompt.issue.* is
-  # unset. New configs should write prompt.issue.* directly.
-  # goal: "..."
-  # output_rules: []
-
-pr_review:
-  enabled: true                       # PR Review workflow feature flag; on by default — set `false` to opt out
 
 skills_config: /etc/agentdock/skills.yaml   # optional dynamic skill loader config
 
@@ -152,17 +149,24 @@ Background / incident: [#123](https://github.com/Ivantseng123/agentdock/issues/1
 
 ## Workflow-specific prompts
 
-`prompt.issue` / `prompt.ask` / `prompt.pr_review` each carry their own `goal` + `response_schema` + `output_rules`:
+`workflows.issue.prompt` / `workflows.ask.prompt` / `workflows.pr_review.prompt` each carry their own `goal` + `response_schema` + `output_rules`:
 - `goal` is the **task description** — what to do, which skill to invoke (`triage-issue` / `ask-assistant` / `github-pr-review`). Keep output format OUT of the goal.
 - `response_schema` is the **machine-readable output contract** — marker + JSON shape (`===ASK_RESULT===` / `===REVIEW_RESULT===`, etc). This section is **NOT** XML-escaped in the rendered prompt — literal `"` and `<` reach the LLM verbatim, so weaker models don't copy `&quot;` into their output and break downstream JSON parsing.
 - `output_rules` are **formatting rules** (Slack mrkdwn, length caps, self-reference handle) rendered at the end of the prompt, XML-escaped.
-- Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`). `issue.output_rules` defaults to empty — formatting rules live in the triage-issue skill's SKILL.md body template, not here.
+- Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultIssueResponseSchema` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`).
 
-**Legacy alias**: the flat `prompt.goal` / `prompt.output_rules` fields are copied into `prompt.issue.*` at load time, but only if `prompt.issue.*` is empty. This keeps pre-v2.1 yaml valid; new configs should write `prompt.issue.*` directly.
+Cross-workflow knobs live in `prompt_defaults:`:
+- `prompt_defaults.language` — language preference passed to the agent (e.g. `English`).
+- `prompt_defaults.allow_worker_rules` — whether worker-side `prompt.extra_rules` is rendered (default `true`).
+
+**Legacy aliases** (handled automatically in v2.3+; **migrate when convenient**):
+- **Old-A (pre-v2.1)**: flat `prompt.goal` / `prompt.output_rules` / `prompt.response_schema` → `workflows.issue.prompt.*`.
+- **Old-B (v2.2 interim)**: `prompt.{issue,ask,pr_review}.*` + top-level `pr_review.enabled` → `workflows.<name>.prompt.*` / `workflows.pr_review.enabled`. Also `prompt.language` / `prompt.allow_worker_rules` → `prompt_defaults.*`.
+- If a file contains both the new shape and a legacy block, the new shape wins and a `config` warning is logged at startup suggesting migration.
 
 ## PR Review
 
-`pr_review.enabled` **defaults to `true`** (the `github-pr-review` skill and `agentdock pr-review-helper` subcommand both ship in the release image, so opt-in was just ceremony). To turn it off, set `pr_review.enabled: false` explicitly.
+`workflows.pr_review.enabled` **defaults to `true`** (the `github-pr-review` skill and `agentdock pr-review-helper` subcommand both ship in the release image, so opt-in was just ceremony). To turn it off, set `workflows.pr_review.enabled: false` explicitly (the legacy top-level `pr_review.enabled: false` still works via alias).
 
 `@bot review <PR URL>` routes to PRReviewWorkflow; with no URL, the workflow scans the thread and falls back to a modal. Before relying on it, verify:
 1. Workers have the `github-pr-review` skill mounted (their `skills_config` points to `agents/skills/github-pr-review`).

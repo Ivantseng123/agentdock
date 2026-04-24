@@ -11,7 +11,8 @@ import (
 func AssemblePromptContext(
 	threadMsgs []queue.ThreadMessage,
 	extraDesc, channel, reporter, branch string,
-	pc config.PromptConfig,
+	wp config.WorkflowPromptConfig,
+	defaults config.PromptDefaultsConfig,
 ) queue.PromptContext {
 	return queue.PromptContext{
 		ThreadMessages:   threadMsgs,
@@ -19,9 +20,9 @@ func AssemblePromptContext(
 		Channel:          channel,
 		Reporter:         reporter,
 		Branch:           branch,
-		Language:         pc.Language,
-		Goal:             pc.Goal,
-		OutputRules:      pc.OutputRules,
-		AllowWorkerRules: pc.IsWorkerRulesAllowed(),
+		Language:         defaults.Language,
+		Goal:             wp.Goal,
+		OutputRules:      wp.OutputRules,
+		AllowWorkerRules: defaults.IsWorkerRulesAllowed(),
 	}
 }
