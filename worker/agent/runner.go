@@ -77,6 +77,24 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 
 	const maxArgLen = 32 * 1024 // 32KB safe limit for command args
 
+	// Warn if the user has both a full args override (without {extra_args}) and
+	// extra_args set — the extra_args will be silently ignored in that case.
+	if len(agent.Args) > 0 && len(agent.ExtraArgs) > 0 {
+		hasExtraArgsToken := false
+		for _, a := range agent.Args {
+			if a == "{extra_args}" {
+				hasExtraArgsToken = true
+				break
+			}
+		}
+		if !hasExtraArgsToken {
+			logger.Warn("agent has both args override and extra_args; extra_args ignored",
+				"phase", "處理中",
+				"command", agent.Command,
+			)
+		}
+	}
+
 	hasPromptPlaceholder := false
 	hasOutputFilePlaceholder := false
 	for _, a := range agent.Args {
@@ -110,11 +128,15 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 			if strings.Contains(a, "{prompt}") {
 				continue
 			}
+			if a == "{extra_args}" {
+				args = append(args, agent.ExtraArgs...)
+				continue
+			}
 			args = append(args, strings.ReplaceAll(a, "{output_file}", outputFile))
 		}
 		logger.Info("Prompt 過大，改用 stdin", "phase", "處理中", "prompt_len", len(prompt))
 	} else {
-		args = substitutePlaceholders(agent.Args, map[string]string{
+		args = substitutePlaceholders(agent.Args, agent.ExtraArgs, map[string]string{
 			"{prompt}":      prompt,
 			"{output_file}": outputFile,
 		})
@@ -229,9 +251,20 @@ func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queu
 	return result
 }
 
-func substitutePlaceholders(args []string, values map[string]string) []string {
-	result := make([]string, 0, len(args))
+// substitutePlaceholders expands placeholders in args.
+//
+// The "{extra_args}" token is treated as a splice point: if extraArgs is
+// non-empty the token slot is replaced with each element as a separate arg; if
+// extraArgs is nil or empty the slot is dropped entirely (no empty-string arg
+// is emitted). All other {key} tokens in values are replaced via
+// strings.ReplaceAll on the arg string.
+func substitutePlaceholders(args []string, extraArgs []string, values map[string]string) []string {
+	result := make([]string, 0, len(args)+len(extraArgs))
 	for _, a := range args {
+		if a == "{extra_args}" {
+			result = append(result, extraArgs...)
+			continue
+		}
 		for k, v := range values {
 			a = strings.ReplaceAll(a, k, v)
 		}
