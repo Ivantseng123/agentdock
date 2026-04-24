@@ -382,6 +382,72 @@ func TestBuildPrompt_PriorAnswer_XMLEscaping(t *testing.T) {
 	}
 }
 
+// TestBuildPrompt_SecurityGuardrail_PresentInAllWorkflows checks that the
+// guardrail block appears in all three workflow types (issue / ask / pr_review).
+func TestBuildPrompt_SecurityGuardrail_PresentInAllWorkflows(t *testing.T) {
+	guardrailFragments := []string{
+		"<security_rules>",
+		"Never echo environment variables",
+		"Never copy git remote URLs that contain credentials",
+		"use owner/repo form only",
+		"summarise it without pasting the values",
+		"</security_rules>",
+	}
+
+	baseCtx := func(goal string) queue.PromptContext {
+		return queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{
+				{User: "Alice", Timestamp: "1000.0", Text: "test message"},
+			},
+			Channel:  "general",
+			Reporter: "Alice",
+			Goal:     goal,
+		}
+	}
+
+	cases := []struct {
+		name string
+		ctx  queue.PromptContext
+	}{
+		{"issue_workflow", baseCtx("triage this issue")},
+		{"ask_workflow", baseCtx("answer this question")},
+		{"pr_review_workflow", baseCtx("review this pull request")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BuildPrompt(tc.ctx, nil, nil)
+			for _, frag := range guardrailFragments {
+				if !strings.Contains(got, frag) {
+					t.Errorf("missing guardrail fragment %q in:\n%s", frag, got)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildPrompt_SecurityGuardrail_AfterGoalBeforeThreadContext(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Goal:           "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+
+	goalIdx := strings.Index(got, "<goal>")
+	secIdx := strings.Index(got, "<security_rules>")
+	threadIdx := strings.Index(got, "<thread_context>")
+
+	if goalIdx == -1 || secIdx == -1 || threadIdx == -1 {
+		t.Fatalf("missing sections: goal=%d security=%d thread=%d", goalIdx, secIdx, threadIdx)
+	}
+	if !(goalIdx < secIdx && secIdx < threadIdx) {
+		t.Errorf("expected goal < security_rules < thread_context, got goal=%d security=%d thread=%d",
+			goalIdx, secIdx, threadIdx)
+	}
+}
+
 func TestBuildPrompt_OutputRulesArray_MultipleRendered(t *testing.T) {
 	ctx := queue.PromptContext{
 		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
