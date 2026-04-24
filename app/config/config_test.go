@@ -96,12 +96,20 @@ queue:
 	}
 }
 
+// Guards the defensive branch in Validate: if a caller constructs a Config
+// directly and forgets to run ApplyDefaults, redis store with zero TTL must
+// surface a clear error rather than silently proceeding with a zero TTL that
+// would make RedisJobStore evict records immediately. Normal load path can't
+// reach this (ApplyDefaults fixes 0 → 1h), so we Validate a Config built
+// without ApplyDefaults.
 func TestValidate_QueueStoreRedisRequiresTTL(t *testing.T) {
-	cfg := loadFromString(t, `
-queue:
-  store: redis
-  store_ttl: 0s
-`)
+	cfg := &Config{
+		Queue: QueueConfig{
+			Transport: "redis",
+			Store:     "redis",
+			StoreTTL:  0,
+		},
+	}
 	err := Validate(cfg)
 	if err == nil || !strings.Contains(err.Error(), "queue.store_ttl") {
 		t.Errorf("expected validation error for redis store with zero TTL, got %v", err)
