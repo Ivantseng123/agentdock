@@ -160,15 +160,17 @@ node <path-to-skill>/scripts/mantis.js assignment-stats --project <project_id>
 ```bash
 node <path-to-skill>/scripts/mantis.js list-attachments <issue_id>
 node <path-to-skill>/scripts/mantis.js download-attachment <issue_id> <file_id>
-node <path-to-skill>/scripts/mantis.js download-attachment <issue_id> <file_id> --output /tmp/<screenshot_filename>
+node <path-to-skill>/scripts/mantis.js download-attachment <issue_id> <file_id> --output ./screenshot.png
 ```
 
 #### 查看圖片附件流程
 
 1. 先用 `list-attachments` 取得附件清單與 `file_id`
 2. 再用 `download-attachment` 下載附件
+   - 不帶 `--output` 時，預設寫到當前 cwd：`./mantis_<file_id>_<filename>`
+   - 若自行指定 `--output`，**請保留在 cwd 之內**（例如 `./foo.png`）
+   - 禁止輸出到 `/tmp/`、`$HOME`、`~` 等 cwd 之外路徑：AgentDock worker 跑在 opencode 沙箱下，cwd 之外屬 `external_directory`，headless 模式會自動拒絕寫入導致任務靜默失敗
 3. 下載完成後，用 Read 工具讀取圖片或檔案內容
-4. 若在 Windows 環境，注意暫存路徑需改用實際 Windows temp 路徑
 
 ## 常見狀態 ID 對照
 
