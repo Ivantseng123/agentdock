@@ -106,6 +106,8 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis                    # extension point; only redis is supported today
+  store: mem                          # JobStore backend: mem (default) / redis
+  store_ttl: 1h                       # per-record TTL when store=redis (ignored when store=mem)
   job_timeout: 20m                    # watchdog: max job lifecycle
   agent_idle_timeout: 5m              # stream-json: no-event timeout
   prepare_timeout: 3m
@@ -130,6 +132,21 @@ secrets:
   GH_TOKEN: ghp_xxx                   # key = env var name, value = plaintext; encrypted before sending to worker
   K8S_TOKEN: your-k8s-token
 ```
+
+## JobStore backend (`queue.store`)
+
+The app tracks each Job's lifecycle (Pending → Running → Completed/Failed/Cancelled) via `JobStore`. `queue.store` picks where that state lives:
+
+| Value | Behaviour | Recommended for |
+|---|---|---|
+| `mem` (default) | In-process memory. All state is lost when the app restarts. | Unit tests, single-pod small deployments |
+| `redis` | Persisted to Redis (`jobstore:*` keys). In-flight jobs survive app restarts. | Production |
+
+`queue.store_ttl` (default `1h`) is the per-record TTL applied by `RedisJobStore` on every Put / UpdateStatus / SetWorker / SetAgentStatus. Terminal-state jobs are not deleted proactively — TTL evicts them. Set the TTL comfortably larger than your **longest expected job runtime**; otherwise a slow job risks having its state evicted mid-run. Ignored when `store=mem` (MemJobStore runs its own 1h cleanup).
+
+On startup with `store=redis`, the app calls `ListAll()` once and logs `rehydrated in-flight jobs from previous instance` with the count of non-terminal records. No in-memory index is rebuilt — `ResultListener` resolves jobs via `store.Get` directly against Redis.
+
+Background / incident: [#123](https://github.com/Ivantseng123/agentdock/issues/123) (in-flight Slack jobs orphaned on app restart), [#146](https://github.com/Ivantseng123/agentdock/issues/146) (wire-up PR).
 
 ## Workflow-specific prompts
 

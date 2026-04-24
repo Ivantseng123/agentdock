@@ -176,3 +176,22 @@ Three verbs (`issue` / `ask` / `review`) each with their own prompt. All changes
 3. **Slack `/triage` slash command is now a fallback**: real triggers are `@bot <verb>` (`issue` / `ask` / `review`). The old `/triage` command is still registered — when invoked, the bot replies with a hint to switch to `@bot`. No manifest change is required for this to keep working, but updating the slash-command `description` to mark it legacy is recommended.
 
 Full field reference: [configuration-app.en.md](configuration-app.en.md#workflow-specific-prompts) and [configuration-app.en.md](configuration-app.en.md#enabling-pr-review).
+
+### v2.5 → v2.6: `queue.store` field added (additive, defaults to `mem` for back-compat)
+
+v2.6 wires `RedisJobStore` (#145 / PR #147) into the app (#146). Existing yaml keeps working unchanged — `queue.store` defaults to `mem`, preserving the pre-v2.6 behaviour (in-flight job state is lost on app restart).
+
+To enable redis-backed persistence (recommended for production), add two lines to `app.yaml`:
+
+```yaml
+queue:
+  # ... other fields unchanged ...
+  store: redis          # default is mem; with redis the app resumes in-flight jobs across restarts
+  store_ttl: 1h         # per-record TTL, refreshed on every write; keep larger than your longest job runtime
+```
+
+`queue.store: redis` does not affect `queue.transport` or anything on the worker side — only the app changes. Workers do not read JobStore (they only publish JobResult / StatusReport), so `worker.yaml` stays as is.
+
+Restart behaviour: on startup with `store=redis`, the app calls `ListAll()` once and logs `rehydrated in-flight jobs from previous instance` with the count of non-terminal records. Terminal-state records are left to TTL — the app never deletes them proactively.
+
+Background: [#123](https://github.com/Ivantseng123/agentdock/issues/123) — on app restart, in-flight Slack threads were orphaned (the :hourglass: status never cleared) because even when the worker published the final result, the app's fresh MemJobStore had no record to correlate against.

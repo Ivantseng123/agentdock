@@ -176,3 +176,22 @@ v2.0 還支援 `queue.transport: inmem`（app 和 worker 跑在同一個 process
 3. **Slack `/triage` slash command 變成 fallback**：實際觸發改成 `@bot <verb>`（`issue` / `ask` / `review`）。舊的 `/triage` 仍註冊，被呼叫會回一條提示叫使用者改用 `@bot`。不需要改 Manifest 就能繼續運作，但建議把 slash command 的 `description` 更新成 legacy 說明。
 
 欄位完整說明：[configuration-app.md](configuration-app.md#workflow-specific-prompts)、[configuration-app.md](configuration-app.md#pr-review-啟用)。
+
+### v2.5 → v2.6：`queue.store` 新欄位（additive，預設 mem 保 back-compat）
+
+v2.6 把 `RedisJobStore`（#145 / PR #147）接進 App（#146）。舊 yaml 不改也能跑——`queue.store` 預設 `mem`，行為與 v2.5 之前一致（app 重啟時 in-flight job state 會掉）。
+
+要啟用 redis-backed 持久化（生產建議），`app.yaml` 加兩行：
+
+```yaml
+queue:
+  # ... 其他欄位不變 ...
+  store: redis          # 預設 mem；切 redis 後 app 重啟仍可 resume in-flight job
+  store_ttl: 1h         # 每筆紀錄 TTL，每次寫入 refresh；要比最長 job 執行時間大
+```
+
+`queue.store: redis` 不影響 `queue.transport` 或任何 worker side config——只有 app 需要改。Worker 不讀 JobStore（worker 只產 JobResult / StatusReport），所以 worker.yaml 不用動。
+
+重啟行為：app 啟動走 `redis` 路徑時會 `ListAll()` 一次並 log `rehydrated in-flight jobs from previous instance`（數量 = 非 terminal state 筆數）。Terminal state 讓 TTL evict，不主動刪除。
+
+背景：[#123](https://github.com/Ivantseng123/agentdock/issues/123) incident——app 重啟時 in-flight Slack thread 被 orphan（:hourglass: 停留不會消失），即使 worker 把 result 推出來也沒人接。
