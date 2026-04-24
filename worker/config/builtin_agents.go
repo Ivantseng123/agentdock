@@ -10,11 +10,12 @@ import "time"
 // automatically on next startup; no `agentdock init` rerun needed.
 var BuiltinAgents = map[string]AgentConfig{
 	"claude": {
-		Command:  "claude",
-		Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
-		Timeout:  15 * time.Minute,
-		SkillDir: ".claude/skills",
-		Stream:   true,
+		Command:         "claude",
+		Args:            []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
+		Timeout:         15 * time.Minute,
+		SkillDir:        ".claude/skills",
+		Stream:          true,
+		RequiredSecrets: []string{"GH_TOKEN"},
 	},
 	"codex": {
 		Command: "codex",
@@ -22,7 +23,8 @@ var BuiltinAgents = map[string]AgentConfig{
 		Timeout: 15 * time.Minute,
 		// Codex CLI discovers skills from .agents/skills (repo/CWD scope),
 		// NOT .codex/skills. See https://developers.openai.com/codex/skills.
-		SkillDir: ".agents/skills",
+		SkillDir:        ".agents/skills",
+		RequiredSecrets: []string{"GH_TOKEN"},
 	},
 	"opencode": {
 		Command: "opencode",
@@ -31,8 +33,9 @@ var BuiltinAgents = map[string]AgentConfig{
 		// BackgroundManager cause `opencode run` to exit on the main agent's
 		// first "I dispatched" text — before the sub-agents return a parseable
 		// TRIAGE_RESULT. Internal auth plugins still load, so credentials stay intact.
-		Args:     []string{"run", "--pure", "{prompt}"},
-		Timeout:  15 * time.Minute,
-		SkillDir: ".opencode/skills",
+		Args:            []string{"run", "--pure", "{prompt}"},
+		Timeout:         15 * time.Minute,
+		SkillDir:        ".opencode/skills",
+		RequiredSecrets: []string{"GH_TOKEN"},
 	},
 }

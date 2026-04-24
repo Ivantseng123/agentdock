@@ -25,11 +25,19 @@ type Config struct {
 
 // AgentConfig is the worker's agent CLI description.
 type AgentConfig struct {
-	Command  string        `yaml:"command"`
-	Args     []string      `yaml:"args"`
-	Timeout  time.Duration `yaml:"timeout"`
-	SkillDir string        `yaml:"skill_dir"`
-	Stream   bool          `yaml:"stream"`
+	Command         string        `yaml:"command"`
+	Args            []string      `yaml:"args"`
+	Timeout         time.Duration `yaml:"timeout"`
+	SkillDir        string        `yaml:"skill_dir"`
+	Stream          bool          `yaml:"stream"`
+	// RequiredSecrets is the whitelist of secret keys injected into the agent
+	// child process as env vars.  Only keys present in both mergedSecrets and
+	// this list are forwarded.
+	//
+	//   nil (field absent in yaml) → fallback default ["GH_TOKEN"] for back-compat
+	//   []string{}                 → no secrets (zero-trust provider)
+	//   []string{"GH_TOKEN", "X"} → exactly those two keys
+	RequiredSecrets []string `yaml:"required_secrets"`
 }
 
 // PromptConfig is the worker-owned prompt extension (the extra_rules segment

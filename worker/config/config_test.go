@@ -89,3 +89,64 @@ github:
 		t.Errorf("GH_TOKEN = %q", cfg.Secrets["GH_TOKEN"])
 	}
 }
+
+func TestLoadConfig_AgentRequiredSecretsOverride(t *testing.T) {
+	cfg := loadFromString(t, `
+agents:
+  custom-agent:
+    command: /usr/bin/custom-agent
+    args: ["{prompt}"]
+    required_secrets: [GH_TOKEN, OPENAI_API_KEY]
+`)
+	agent, ok := cfg.Agents["custom-agent"]
+	if !ok {
+		t.Fatal("custom-agent not found in Agents map")
+	}
+	if len(agent.RequiredSecrets) != 2 {
+		t.Fatalf("RequiredSecrets len = %d, want 2; got %v", len(agent.RequiredSecrets), agent.RequiredSecrets)
+	}
+	if agent.RequiredSecrets[0] != "GH_TOKEN" {
+		t.Errorf("RequiredSecrets[0] = %q, want GH_TOKEN", agent.RequiredSecrets[0])
+	}
+	if agent.RequiredSecrets[1] != "OPENAI_API_KEY" {
+		t.Errorf("RequiredSecrets[1] = %q, want OPENAI_API_KEY", agent.RequiredSecrets[1])
+	}
+}
+
+func TestLoadConfig_AgentRequiredSecretsEmptyList(t *testing.T) {
+	cfg := loadFromString(t, `
+agents:
+  zero-trust:
+    command: /usr/bin/zero-trust
+    args: ["{prompt}"]
+    required_secrets: []
+`)
+	agent, ok := cfg.Agents["zero-trust"]
+	if !ok {
+		t.Fatal("zero-trust not found in Agents map")
+	}
+	// Explicit empty list must unmarshal as []string{}, not nil.
+	if agent.RequiredSecrets == nil {
+		t.Error("RequiredSecrets must be []string{} (non-nil) for explicit empty list, got nil")
+	}
+	if len(agent.RequiredSecrets) != 0 {
+		t.Errorf("RequiredSecrets len = %d, want 0; got %v", len(agent.RequiredSecrets), agent.RequiredSecrets)
+	}
+}
+
+func TestLoadConfig_AgentRequiredSecretsAbsentIsNil(t *testing.T) {
+	cfg := loadFromString(t, `
+agents:
+  legacy-agent:
+    command: /usr/bin/legacy
+    args: ["{prompt}"]
+`)
+	agent, ok := cfg.Agents["legacy-agent"]
+	if !ok {
+		t.Fatal("legacy-agent not found in Agents map")
+	}
+	// Field absent from yaml must unmarshal as nil (not empty slice).
+	if agent.RequiredSecrets != nil {
+		t.Errorf("RequiredSecrets must be nil when absent from yaml, got %v", agent.RequiredSecrets)
+	}
+}
