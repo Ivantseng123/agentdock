@@ -22,6 +22,12 @@ type SlackPort interface {
 	ResolveUser(userID string) string
 	GetChannelName(channelID string) string
 	FetchThreadContext(channelID, threadTS, triggerTS string, limit int) ([]slackclient.ThreadRawMessage, error)
+	// FetchPriorBotAnswer returns the most recent qualifying bot-authored
+	// answer in the thread, or nil if none qualifies. Used by AskWorkflow
+	// for multi-turn continuity; other workflows don't need it. Returning
+	// nil with nil error is the "no prior answer" case — callers should
+	// treat it as graceful degradation, not an error path.
+	FetchPriorBotAnswer(channelID, threadTS, triggerTS string, limit int) (*slackclient.ThreadRawMessage, error)
 	DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload
 	UploadFile(channelID, threadTS, filename, title, content, initialComment string) error
 }

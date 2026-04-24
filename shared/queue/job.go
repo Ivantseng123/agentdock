@@ -69,6 +69,11 @@ type PromptContext struct {
 	ResponseSchema   string          `json:"response_schema,omitempty"`
 	OutputRules      []string        `json:"output_rules"`
 	AllowWorkerRules bool            `json:"allow_worker_rules"`
+	// PriorAnswer carries bot's own previous substantive answers in this
+	// thread so multi-turn Ask conversations don't regress to amnesia.
+	// Slice shape reserves room for multi-turn history; v1 only fills the
+	// most recent qualifying message.
+	PriorAnswer []ThreadMessage `json:"prior_answer,omitempty"`
 }
 
 type JobResult struct {

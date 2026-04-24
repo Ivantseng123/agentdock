@@ -84,6 +84,10 @@ func (a *slackAdapterPort) FetchThreadContext(channelID, threadTS, triggerTS str
 	return a.client.FetchThreadContext(channelID, threadTS, triggerTS, a.identity.UserID, a.identity.BotID, limit)
 }
 
+func (a *slackAdapterPort) FetchPriorBotAnswer(channelID, threadTS, triggerTS string, limit int) (*slackclient.ThreadRawMessage, error) {
+	return a.client.FetchPriorBotAnswer(channelID, threadTS, triggerTS, a.identity.UserID, a.identity.BotID, limit)
+}
+
 func (a *slackAdapterPort) DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload {
 	return a.client.DownloadAttachments(messages, tempDir)
 }

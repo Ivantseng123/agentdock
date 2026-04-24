@@ -298,6 +298,90 @@ func TestBuildPrompt_Attachments_UnknownTypeSelfClosing(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_PriorAnswer_RenderedWhenPresent(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{
+			{User: "Alice", Timestamp: "1000.0", Text: "what does X do?"},
+		},
+		PriorAnswer: []queue.ThreadMessage{
+			{User: "bot:ai_trigger_issue_bot", Timestamp: "1500.0", Text: "X runs the migration — see migrate.go:42"},
+		},
+		Channel:  "c",
+		Reporter: "r",
+		Goal:     "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	if !strings.Contains(got, "<prior_answer>") {
+		t.Fatalf("missing <prior_answer> section in:\n%s", got)
+	}
+	if !strings.Contains(got, `<message user="bot:ai_trigger_issue_bot" ts="1500.0">X runs the migration — see migrate.go:42</message>`) {
+		t.Errorf("prior answer message not rendered verbatim in:\n%s", got)
+	}
+}
+
+func TestBuildPrompt_PriorAnswer_OmittedWhenEmpty(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Goal:           "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	if strings.Contains(got, "<prior_answer>") {
+		t.Errorf("expected no <prior_answer> when empty, got:\n%s", got)
+	}
+}
+
+func TestBuildPrompt_PriorAnswer_OrderingBetweenExtraAndIssueContext(t *testing.T) {
+	// prior_answer lives between extra_description and issue_context so
+	// the agent sees: user's clarification → what you said last time → where
+	// the conversation is happening. Any reordering would weaken that flow.
+	ctx := queue.PromptContext{
+		ThreadMessages:   []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		ExtraDescription: "follow up on the migration",
+		PriorAnswer: []queue.ThreadMessage{
+			{User: "bot:x", Timestamp: "1500.0", Text: "prior answer body long enough to pass the filter check"},
+		},
+		Channel:  "c",
+		Reporter: "r",
+		Goal:     "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	extraIdx := strings.Index(got, "<extra_description>")
+	priorIdx := strings.Index(got, "<prior_answer>")
+	issueIdx := strings.Index(got, "<issue_context>")
+	if extraIdx == -1 || priorIdx == -1 || issueIdx == -1 {
+		t.Fatalf("missing sections: extra=%d prior=%d issue=%d", extraIdx, priorIdx, issueIdx)
+	}
+	if !(extraIdx < priorIdx && priorIdx < issueIdx) {
+		t.Errorf("expected extra < prior < issue, got extra=%d prior=%d issue=%d",
+			extraIdx, priorIdx, issueIdx)
+	}
+}
+
+func TestBuildPrompt_PriorAnswer_XMLEscaping(t *testing.T) {
+	// Prior answers often contain code snippets / stack traces with angle
+	// brackets. Guard that they still go through xmlEscape like other
+	// message text, to prevent them from derailing the XML-ish structure.
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		PriorAnswer: []queue.ThreadMessage{
+			{User: "bot:x", Timestamp: "1.0", Text: `see <Button onClick="fn"> & the spec`},
+		},
+		Goal: "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	if strings.Contains(got, `<Button`) {
+		t.Errorf("unescaped <Button in prior_answer:\n%s", got)
+	}
+	if !strings.Contains(got, `&lt;Button`) {
+		t.Errorf("expected escaped <Button, got:\n%s", got)
+	}
+	if !strings.Contains(got, `&amp;`) {
+		t.Errorf("expected escaped & in prior_answer, got:\n%s", got)
+	}
+}
+
 func TestBuildPrompt_OutputRulesArray_MultipleRendered(t *testing.T) {
 	ctx := queue.PromptContext{
 		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},

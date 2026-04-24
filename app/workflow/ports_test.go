@@ -13,6 +13,13 @@ type fakeSlackPort struct {
 	Posted    []string
 	Selectors []string
 	Modal     bool
+
+	// PriorBotAnswer is the canned response for FetchPriorBotAnswer. Tests
+	// that exercise the multi-turn opt-in path set this to a non-nil
+	// ThreadRawMessage so the workflow renders the opt-in button.
+	PriorBotAnswer      *slackclient.ThreadRawMessage
+	PriorBotAnswerErr   error
+	PriorBotAnswerCalls int
 }
 
 func newFakeSlackPort() *fakeSlackPort { return &fakeSlackPort{} }
@@ -59,6 +66,18 @@ func (f *fakeSlackPort) GetChannelName(cid string) string    { return "ch-" + ci
 
 func (f *fakeSlackPort) FetchThreadContext(c, ts, tts string, lim int) ([]slackclient.ThreadRawMessage, error) {
 	return nil, nil
+}
+
+// PriorBotAnswer is the canned response for FetchPriorBotAnswer calls. nil
+// (the default) models "no prior answer in thread" so existing tests behave
+// as before. PriorBotAnswerCalls counts invocations so tests can verify
+// fetch-once semantics in the Ask workflow.
+func (f *fakeSlackPort) FetchPriorBotAnswer(c, ts, tts string, lim int) (*slackclient.ThreadRawMessage, error) {
+	f.PriorBotAnswerCalls++
+	if f.PriorBotAnswerErr != nil {
+		return nil, f.PriorBotAnswerErr
+	}
+	return f.PriorBotAnswer, nil
 }
 
 func (f *fakeSlackPort) DownloadAttachments(msgs []slackclient.ThreadRawMessage, dir string) []slackclient.AttachmentDownload {

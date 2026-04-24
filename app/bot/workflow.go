@@ -268,12 +268,18 @@ func (w *Workflow) HandleDescriptionAction(channelID, value, selectorMsgTS, trig
 	if prev, rewind := rewindModalPhase(pending.Phase); rewind {
 		pending.Phase = prev
 	}
-	if value == "跳過" {
+	// Submit-path values: the click dispatches a Submit directly (no modal
+	// follows) so the selector message and pending entry must be cleaned up
+	// here — nothing downstream will. The only non-submit value is
+	// "補充說明", which falls through to OpenModal (modal cleanup owns that
+	// path). Keep this list in sync with the description-prompt options in
+	// the workflows that use description_action.
+	if value == "跳過" || value == workflow.AskPriorAnswerOptIn {
 		delete(w.pending, selectorMsgTS)
 		w.mu.Unlock()
-		// Drop the prompt rather than leaving a ":fast_forward: 跳過補充說明"
-		// ack — the "分析 codebase 中..." status message that follows is
-		// the user-visible confirmation.
+		// Drop the prompt rather than leaving an ack — the status message
+		// that follows ("分析 codebase 中..." / "思考中...") is the real
+		// user-visible confirmation.
 		_ = w.slack.DeleteMessage(channelID, selectorMsgTS)
 		ctx := context.Background()
 		step, err := w.dispatcher.HandleSelection(ctx, pending, value)

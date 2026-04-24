@@ -2,11 +2,13 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
@@ -503,5 +505,162 @@ func TestAskWorkflow_HandleResult_NilStateReturnsError(t *testing.T) {
 	result := &queue.JobResult{JobID: "j1", Status: "completed"}
 	if err := w.HandleResult(context.Background(), nil, result); err == nil {
 		t.Error("expected error on nil state")
+	}
+}
+
+func TestAskWorkflow_DescriptionPrompt_NoPriorAnswer_ShowsTwoButtons(t *testing.T) {
+	// Default fake returns nil PriorBotAnswer → no opt-in button.
+	w, slack := newTestAskWorkflow(t)
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"},
+		ChannelID: "C1", ThreadTS: "1.0", TriggerTS: "2.0"}
+	step, err := w.Selection(context.Background(), p, "skip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slack.PriorBotAnswerCalls != 1 {
+		t.Errorf("FetchPriorBotAnswer called %d times, want 1", slack.PriorBotAnswerCalls)
+	}
+	if len(step.Selector.Options) != 2 {
+		t.Errorf("expected 2 options (補充說明, 跳過), got %d", len(step.Selector.Options))
+	}
+	for _, o := range step.Selector.Options {
+		if o.Value == AskPriorAnswerOptIn {
+			t.Errorf("opt-in button should be hidden when no prior answer exists")
+		}
+	}
+}
+
+func TestAskWorkflow_DescriptionPrompt_WithPriorAnswer_AddsThirdButton(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+	slack.PriorBotAnswer = &slackclient.ThreadRawMessage{
+		User:      "bot:ai_trigger_issue_bot",
+		Timestamp: "1500.0",
+		Text:      strings.Repeat("prior substantive answer ", 5),
+	}
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"},
+		ChannelID: "C1", ThreadTS: "1.0", TriggerTS: "2.0"}
+	step, err := w.Selection(context.Background(), p, "skip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(step.Selector.Options) != 3 {
+		t.Fatalf("expected 3 options when prior answer exists, got %d", len(step.Selector.Options))
+	}
+	sawOptIn := false
+	for _, o := range step.Selector.Options {
+		if o.Value == AskPriorAnswerOptIn {
+			sawOptIn = true
+		}
+	}
+	if !sawOptIn {
+		t.Error("opt-in button missing despite prior answer being available")
+	}
+	// Prior answer got cached in askState for BuildJob to pick up.
+	st := p.State.(*askState)
+	if st.PriorAnswer == nil || st.PriorAnswer.Text != slack.PriorBotAnswer.Text {
+		t.Errorf("PriorAnswer not cached on askState: %+v", st.PriorAnswer)
+	}
+}
+
+func TestAskWorkflow_DescriptionPrompt_FetchError_DegradesSilently(t *testing.T) {
+	// Slack API failure must NOT break the Ask flow — the opt-in is a
+	// convenience, not a core path. Falls back to 2-button UX.
+	w, slack := newTestAskWorkflow(t)
+	slack.PriorBotAnswerErr = errors.New("rate limit")
+	p := &Pending{Phase: "ask_repo_prompt", State: &askState{Question: "Q"},
+		ChannelID: "C1", ThreadTS: "1.0", TriggerTS: "2.0"}
+	step, err := w.Selection(context.Background(), p, "skip")
+	if err != nil {
+		t.Fatalf("ask flow must not surface fetch error, got: %v", err)
+	}
+	if len(step.Selector.Options) != 2 {
+		t.Errorf("expected 2 options on fetch error, got %d", len(step.Selector.Options))
+	}
+	st := p.State.(*askState)
+	if st.PriorAnswer != nil {
+		t.Errorf("PriorAnswer should remain nil on fetch error, got: %+v", st.PriorAnswer)
+	}
+	if !st.priorAnswerFetchAttempted {
+		t.Error("priorAnswerFetchAttempted should be set even on error, to avoid retry loops")
+	}
+}
+
+func TestAskWorkflow_Selection_OptInPriorAnswerSetsFlagAndSubmits(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	priorMsg := &queue.ThreadMessage{
+		User: "bot:x", Timestamp: "1500.0", Text: "prior answer content",
+	}
+	p := &Pending{
+		Phase: "ask_description_prompt",
+		State: &askState{Question: "Q", PriorAnswer: priorMsg, priorAnswerFetchAttempted: true},
+	}
+	step, err := w.Selection(context.Background(), p, AskPriorAnswerOptIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSubmit {
+		t.Errorf("expected NextStepSubmit after opt-in click, got %v", step.Kind)
+	}
+	st := p.State.(*askState)
+	if !st.IncludePriorAnswer {
+		t.Error("IncludePriorAnswer flag should be true after opt-in click")
+	}
+}
+
+func TestAskWorkflow_BuildJob_IncludePriorAnswer_PopulatesPromptContext(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	priorMsg := &queue.ThreadMessage{
+		User: "bot:ai_trigger_issue_bot", Timestamp: "1500.0",
+		Text: "X runs the migration — see migrate.go:42",
+	}
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		RequestID: "req-prior",
+		State: &askState{
+			Question:           "Q",
+			PriorAnswer:        priorMsg,
+			IncludePriorAnswer: true,
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.PromptContext == nil {
+		t.Fatal("PromptContext nil")
+	}
+	if len(job.PromptContext.PriorAnswer) != 1 {
+		t.Fatalf("expected 1 PriorAnswer, got %d", len(job.PromptContext.PriorAnswer))
+	}
+	if job.PromptContext.PriorAnswer[0].Text != priorMsg.Text {
+		t.Errorf("PriorAnswer.Text = %q, want %q",
+			job.PromptContext.PriorAnswer[0].Text, priorMsg.Text)
+	}
+}
+
+func TestAskWorkflow_BuildJob_NoOptIn_PriorAnswerEmpty(t *testing.T) {
+	// Even when a prior answer was cached, BuildJob must not leak it into
+	// PromptContext unless the user explicitly opted in. Otherwise the
+	// opt-in UX is meaningless.
+	w, _ := newTestAskWorkflow(t)
+	priorMsg := &queue.ThreadMessage{
+		User: "bot:x", Timestamp: "1500.0", Text: "prior answer content",
+	}
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		RequestID: "req-no-opt",
+		State: &askState{
+			Question:           "Q",
+			PriorAnswer:        priorMsg,
+			IncludePriorAnswer: false,
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.PromptContext.PriorAnswer) != 0 {
+		t.Errorf("expected empty PriorAnswer without opt-in, got %d entries",
+			len(job.PromptContext.PriorAnswer))
 	}
 }

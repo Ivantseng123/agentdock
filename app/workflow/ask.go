@@ -13,6 +13,12 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
+// AskPriorAnswerOptIn is the button value for the "include previous
+// answer" opt-in on the description prompt. Exported so app/bot's
+// HandleDescriptionAction can recognise it as a submit-path (no modal
+// follows, so the selector message must be deleted on click).
+const AskPriorAnswerOptIn = "帶上次回覆"
+
 // AskWorkflow handles @bot ask queries. Optional attached repo with branch
 // selection (mirrors Issue when channel has branch_select enabled), plus an
 // optional description modal. Result is an agent-produced answer posted as a
@@ -29,6 +35,19 @@ type askState struct {
 	AttachRepo     bool
 	SelectedRepo   string
 	SelectedBranch string
+	// PriorAnswer caches the bot's most recent substantive reply in this
+	// thread (if any), fetched once at descriptionPromptStep time. nil means
+	// either none exists, no fetch yet, or the fetch failed — which we
+	// collapse into "no opt-in affordance".
+	PriorAnswer *queue.ThreadMessage
+	// IncludePriorAnswer is set by the user clicking the opt-in button on
+	// the description prompt. BuildJob honours this to attach PriorAnswer
+	// to the worker's PromptContext.
+	IncludePriorAnswer bool
+	// priorAnswerFetchAttempted guards against double-fetching if
+	// descriptionPromptStep runs twice for the same ask (shouldn't happen
+	// in current flow, but cheap defense against future back-nav changes).
+	priorAnswerFetchAttempted bool
 }
 
 // NewAskWorkflow constructs a workflow instance.
@@ -172,6 +191,12 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 		switch value {
 		case "跳過":
 			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
+		case AskPriorAnswerOptIn:
+			// User wants the bot's last substantive reply fed into this turn.
+			// The cached PriorAnswer was populated at descriptionPromptStep time,
+			// so we only need to flip the opt-in flag and submit.
+			st.IncludePriorAnswer = true
+			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
 		case "補充說明":
 			// Phase must flip before OpenModal so the modal submit routes to
 			// ask_description_modal (HandleDescriptionSubmit no longer rewrites
@@ -264,20 +289,49 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 	}
 }
 
-// descriptionPromptStep returns the 補充說明 / 跳過 selector. ActionID
-// mirrors IssueWorkflow's so app.go's description_action route (which owns
-// the modal-trigger-id forwarding) handles the click without Ask needing
-// its own special case.
+// descriptionPromptStep returns the 補充說明 / 跳過 selector, plus an
+// optional 帶上次回覆 opt-in button when the thread already has a
+// substantive bot reply we could hand back to the worker for multi-turn
+// continuity (issue #151). ActionID mirrors IssueWorkflow's so app.go's
+// description_action route (which owns the modal-trigger-id forwarding)
+// handles the click without Ask needing its own special case.
+//
+// The prior-answer fetch happens at most once per ask (priorAnswerFetchAttempted
+// guard) and failures degrade silently to the 2-button UX — the feature
+// is opt-in, so missing it is a non-event.
 func (w *AskWorkflow) descriptionPromptStep(p *Pending) NextStep {
+	st, _ := p.State.(*askState)
+	if st != nil && !st.priorAnswerFetchAttempted {
+		st.priorAnswerFetchAttempted = true
+		if raw, err := w.slack.FetchPriorBotAnswer(p.ChannelID, p.ThreadTS, p.TriggerTS, w.cfg.MaxThreadMessages); err != nil {
+			w.logger.Warn("prior bot answer fetch failed, continuing without opt-in",
+				"phase", "處理中", "error", err)
+		} else if raw != nil {
+			st.PriorAnswer = &queue.ThreadMessage{
+				User:      raw.User,
+				Timestamp: raw.Timestamp,
+				Text:      raw.Text,
+			}
+		}
+	}
+
+	options := []SelectorOption{
+		{Label: "補充說明", Value: "補充說明"},
+		{Label: "跳過", Value: "跳過"},
+	}
+	if st != nil && st.PriorAnswer != nil {
+		options = append(options, SelectorOption{
+			Label: "帶上次回覆一起問",
+			Value: AskPriorAnswerOptIn,
+		})
+	}
+
 	return NextStep{
 		Kind: NextStepSelector,
 		Selector: &SelectorSpec{
 			Prompt:   ":pencil2: 要補充說明想讓 agent 做什麼嗎？",
 			ActionID: "description_action",
-			Options: []SelectorOption{
-				{Label: "補充說明", Value: "補充說明"},
-				{Label: "跳過", Value: "跳過"},
-			},
+			Options:  options,
 		},
 		Pending: p,
 	}
@@ -301,6 +355,11 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 		cloneURL = cleanCloneURL(st.SelectedRepo)
 	}
 
+	var priorAnswer []queue.ThreadMessage
+	if st.IncludePriorAnswer && st.PriorAnswer != nil {
+		priorAnswer = []queue.ThreadMessage{*st.PriorAnswer}
+	}
+
 	job := &queue.Job{
 		ID:          reqID,
 		RequestID:   reqID,
@@ -322,6 +381,7 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 			Channel:          p.ChannelName,
 			Reporter:         p.Reporter,
 			AllowWorkerRules: w.cfg.Prompt.IsWorkerRulesAllowed(),
+			PriorAnswer:      priorAnswer,
 			// ThreadMessages, Attachments filled by downstream submit-helper.
 		},
 		// Skills is populated by submitJob via loadSkills(); leaving it unset

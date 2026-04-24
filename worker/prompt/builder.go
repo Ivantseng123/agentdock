@@ -41,6 +41,22 @@ func BuildPrompt(ctx queue.PromptContext, extraRules []string, attachments []Att
 		fmt.Fprintf(&b, "<extra_description>%s</extra_description>\n\n", xmlEscape(ctx.ExtraDescription))
 	}
 
+	// <prior_answer> — Ask multi-turn continuity. Carries the bot's own
+	// previous substantive replies in this thread so the agent can build on
+	// rather than repeat them. Rendered only when PriorAnswer is non-empty;
+	// issue / pr_review workflows leave it empty, so those prompts are
+	// unchanged.
+	if len(ctx.PriorAnswer) > 0 {
+		b.WriteString("<prior_answer>\n")
+		for _, m := range ctx.PriorAnswer {
+			fmt.Fprintf(&b,
+				"  <message user=\"%s\" ts=\"%s\">%s</message>\n",
+				xmlEscape(m.User), xmlEscape(m.Timestamp), xmlEscape(m.Text),
+			)
+		}
+		b.WriteString("</prior_answer>\n\n")
+	}
+
 	// <issue_context> — channel, reporter, optional bot identity, optional branch.
 	b.WriteString("<issue_context>\n")
 	fmt.Fprintf(&b, "  <channel>%s</channel>\n", xmlEscape(ctx.Channel))
