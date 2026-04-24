@@ -25,6 +25,15 @@ func RunPreflight(cfg *Config) (map[string]any, error) {
 
 	fmt.Fprintln(prompt.Stderr)
 
+	// Gate on git binary version up front: every other check can pass and
+	// the worker still hit a silent HTTP 401 at first fetch if the local git
+	// predates GIT_CONFIG_COUNT (introduced 2.31). Fail fast with a pointer
+	// instead of watching jobs fail later with no explanation (#179).
+	if err := preflightGit(); err != nil {
+		prompt.Fail("%v", err)
+		return prompted, err
+	}
+
 	if cfg.Queue.Transport == "redis" {
 		if err := preflightRedis(cfg, interactive, prompted); err != nil {
 			return prompted, err
@@ -54,6 +63,14 @@ func needsInput(cfg *Config) bool {
 		return cfg.Redis.Addr == "" || cfg.SecretKey == "" || len(cfg.Providers) == 0
 	}
 	return cfg.GitHub.Token == "" || len(cfg.Providers) == 0
+}
+
+func preflightGit() error {
+	if err := connectivity.CheckGitVersion(); err != nil {
+		return err
+	}
+	prompt.OK("Git binary supports env-based auth")
+	return nil
 }
 
 func preflightGitHub(cfg *Config, interactive bool, prompted map[string]any) error {

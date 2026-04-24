@@ -106,6 +106,8 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis                    # 擴充點；目前僅支援 redis
+  store: redis                        # JobStore backend：redis（預設）/ mem
+  store_ttl: 1h                       # store=redis 時每筆紀錄的 TTL（store=mem 忽略）
   job_timeout: 20m                    # watchdog：job 生命週期上限
   agent_idle_timeout: 5m              # stream-json 無事件多久視為卡住
   prepare_timeout: 3m
@@ -130,6 +132,23 @@ secrets:
   GH_TOKEN: ghp_xxx                   # key = 環境變數名，value = 明文；會加密傳給 worker
   K8S_TOKEN: your-k8s-token
 ```
+
+## JobStore backend（`queue.store`）
+
+App 用 `JobStore` 追蹤每個 Job 的 lifecycle（Pending → Running → Completed/Failed/Cancelled）。`queue.store` 決定狀態放哪裡：
+
+| 值 | 說明 | 建議場景 |
+|---|---|---|
+| `redis`（預設） | 持久化到 Redis（`jobstore:*` key）。app 重啟仍可 resume in-flight job。 | 生產環境、多數部署 |
+| `mem` | 在 app process 記憶體。app 重啟就全掉。 | Unit test、單 pod local dev（無 Redis 持久化需求時） |
+
+`queue.store_ttl`（預設 `1h`）是 `redis` 模式每筆紀錄的 TTL，每次 Put / UpdateStatus / SetWorker / SetAgentStatus 會 refresh。Terminal-state 的 job 不主動刪除，讓 TTL 自己 evict。TTL 要設得比**最長預期 job 執行時間**明顯還大，否則長時間 job 可能在執行中被 TTL 砍掉 state。`mem` 模式忽略這個欄位（MemJobStore 自己跑 1h cleanup）。
+
+重啟時若走 `redis`，app 會 `ListAll()` 一次並 log `rehydrated in-flight jobs from previous instance`（數量 = 非 terminal 狀態筆數）。不會把 state 塞回任何 in-memory index——`ResultListener` 查 `store.Get` 直接打 Redis。
+
+**Redis 負載預期**：切到 `store=redis` 後，每次 worker StatusReport（預設 `worker.status_interval: 5s`）會觸發 ~2 次 `store.Get` + 視狀態轉換觸發 1 次 `UpdateStatus`（WATCH/MULTI/EXEC 往返）。N 個 active worker × 3 ops / 5s ≈ `0.6N` QPS 的額外 Redis 流量。Sizing 時納入考量，但對一般 Redis 規模可忽略。
+
+背景 / incident：[#123](https://github.com/Ivantseng123/agentdock/issues/123)（app 重啟後 Slack 端 in-flight job orphan）、[#146](https://github.com/Ivantseng123/agentdock/issues/146)（wire-up PR）。
 
 ## Workflow-specific prompts
 

@@ -41,6 +41,18 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Queue.Transport == "" {
 		cfg.Queue.Transport = "redis"
 	}
+	// Default JobStore backend is "redis" because production is the common
+	// deployment shape and #123 is a production-hurt bug (orphaned Slack
+	// threads on app restart). Making the fix opt-in would leave production
+	// defaulting to broken. Local dev / single-pod test deployments without
+	// Redis persistence set "mem" explicitly. See docs/MIGRATION-v2.md for
+	// the v2.5 → v2.6 upgrade note.
+	if cfg.Queue.Store == "" {
+		cfg.Queue.Store = "redis"
+	}
+	if cfg.Queue.StoreTTL <= 0 {
+		cfg.Queue.StoreTTL = 1 * time.Hour
+	}
 	if cfg.ChannelPriority == nil {
 		cfg.ChannelPriority = map[string]int{"default": 50}
 	}
@@ -175,6 +187,16 @@ BODY STRUCTURE (load-bearing): When status is CREATED, the "body" JSON string MU
 The app strips those sections in degraded runs (low files_found / high open_questions). Without them, low-confidence analysis leaks into the published GitHub issue.`
 )
 
+// cwdOnlySandboxRule is shared across all three workflows. It guards against
+// the silent-failure class where the LLM (or a SKILL example) writes to
+// /tmp/* or other cwd-external paths in a worktree-cwd job. opencode's
+// sandbox treats those as external_directory asks; headless `opencode run`
+// auto-rejects them and the reject cascade-fails the whole session, so the
+// task exits 0 with no result marker. Two pr_review failures on 2026-04-24
+// matched this exact pattern. See worker/agent/runner.go for the post-mortem
+// detection log added at the same time.
+const cwdOnlySandboxRule = "All temporary files and shell redirections MUST be written inside the current working directory (e.g. `./fp.json`, `./screenshot.png`). Never write to `/tmp/`, `/var/`, `$HOME`, `~`, or any other path outside cwd — opencode's sandbox treats those as external_directory and headless `opencode run` auto-rejects the write, silently failing the task with no result marker."
+
 var (
 	defaultAskOutputRules = []string{
 		"Format the answer in Slack mrkdwn — NOT GitHub markdown. Use *text* (single asterisk) for bold, _text_ for italic, ~text~ for strikethrough, <url|label> for links. Do not use # / ## / ### headings; use *bold* as section labels. Triple-backtick fenced code blocks and single-backtick inline code both render correctly.",
@@ -186,10 +208,21 @@ var (
 		// explicitly bless inline *bold* labels so skill structure survives.
 		"Do not open with an H1/H2/H3 heading or standalone title line — start directly with the answer content. *bold* section labels inside the body (e.g. *簡答*, *依據*, *延伸*) are encouraged per the ask-assistant skill. Keep the total answer ≤30000 chars.",
 		"When referring to yourself, use the exact Slack handle from the <bot> tag in <issue_context> (e.g. 'ai_trigger_issue_bot') verbatim. Do NOT invent shorthand like '@bot ask', 'Ask 助理', 'AI 助理', '程式碼助手'. If a sentence doesn't need self-reference, just answer without name-dropping.",
+		cwdOnlySandboxRule,
 	}
 	defaultPRReviewOutputRules = []string{
 		"Focus on correctness, security, style",
 		"Summary ≤ 2000 chars",
+		cwdOnlySandboxRule,
+	}
+	// Issue.OutputRules used to be intentionally empty — formatting rules live
+	// in the triage-issue skill's SKILL.md body template, machine schema lives
+	// in Issue.ResponseSchema. The cwd-only rule is the one exception: it's a
+	// sandbox guard that applies regardless of the skill in use, so it's
+	// promoted from skill text to a hard output_rule per the project convention
+	// "硬規則直接升格到 output_rules".
+	defaultIssueOutputRules = []string{
+		cwdOnlySandboxRule,
 	}
 )
 
@@ -227,11 +260,13 @@ func applyPromptDefaults(p *PromptConfig) {
 	if len(p.PRReview.OutputRules) == 0 {
 		p.PRReview.OutputRules = defaultPRReviewOutputRules
 	}
-	// Issue.OutputRules is intentionally left empty — formatting rules for
-	// triage output live in the triage-issue skill's SKILL.md body template,
-	// not here. The machine-readable contract (CREATED/REJECTED/ERROR
-	// shapes) now lives in Issue.ResponseSchema instead of being implicit
-	// in the skill.
+	if len(p.Issue.OutputRules) == 0 {
+		p.Issue.OutputRules = defaultIssueOutputRules
+	}
+	// Issue.OutputRules formerly stayed empty — formatting lives in the
+	// triage-issue SKILL.md, machine schema lives in Issue.ResponseSchema.
+	// It now carries exactly one entry: the cwdOnlySandboxRule sandbox
+	// guard, promoted from skill text per "硬規則直接升格到 output_rules".
 
 	// Preserve prior AllowWorkerRules default (pointer to true).
 	if p.AllowWorkerRules == nil {

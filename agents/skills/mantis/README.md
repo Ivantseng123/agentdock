@@ -66,9 +66,10 @@ node ${your-skills-path}/skills/mantis/scripts/mantis.js get-issue 1234
 # 列出問題
 node ${your-skills-path}/skills/mantis/scripts/mantis.js list-issues --project 5 --filter 50
 
-# 下載附件
+# 下載附件（預設寫到當前 cwd；在 AgentDock worker 下請保持 cwd-relative）
 node ${your-skills-path}/skills/mantis/scripts/mantis.js list-attachments 1234
-node ${your-skills-path}/skills/mantis/scripts/mantis.js download-attachment 1234 <file_id> --output /tmp/screenshot.png
+node ${your-skills-path}/skills/mantis/scripts/mantis.js download-attachment 1234 <file_id>
+node ${your-skills-path}/skills/mantis/scripts/mantis.js download-attachment 1234 <file_id> --output ./screenshot.png
 ```
 
 完整指令說明與 status taxonomy 請參考 [SKILL.md](SKILL.md)；本檔僅保留快速上手與常見流程。
