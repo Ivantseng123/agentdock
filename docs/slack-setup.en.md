@@ -8,6 +8,7 @@ Bot Token Scopes:
 - `chat:write`, `channels:read`, `channels:history`, `users:read`, `commands`
 - Private channels: `groups:history`, `groups:read`
 - Attachment downloads: `files:read`
+- Attachment uploads: `files:write` (long `@bot ask` answers are posted as an `answer.md` file)
 
 Event Subscriptions:
 - `app_mention`
@@ -66,6 +67,7 @@ oauth_config:
       - chat:write
       - commands
       - files:read
+      - files:write
       - users:read
 
 settings:

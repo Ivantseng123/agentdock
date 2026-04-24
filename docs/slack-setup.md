@@ -8,6 +8,7 @@ Bot Token Scopes：
 - `chat:write`, `channels:read`, `channels:history`, `users:read`, `commands`
 - 私人頻道：`groups:history`, `groups:read`
 - 附件下載：`files:read`
+- 附件上傳：`files:write`（`@bot ask` 長答案以 `answer.md` 附檔回覆）
 
 Event Subscriptions：
 - `app_mention`
@@ -66,6 +67,7 @@ oauth_config:
       - chat:write
       - commands
       - files:read
+      - files:write
       - users:read
 
 settings:
