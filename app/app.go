@@ -143,7 +143,6 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 				for _, st := range states {
 					switch st.Status {
 					case queue.JobCompleted, queue.JobFailed, queue.JobCancelled:
-						// terminal — let TTL evict
 					default:
 						inflight++
 					}
