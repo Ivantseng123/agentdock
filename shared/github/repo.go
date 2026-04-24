@@ -2,6 +2,7 @@ package github
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,62 @@ import (
 	"sync"
 	"time"
 )
+
+// tokenFreeGitHubURL returns a clean https://github.com/owner/repo.git URL for
+// a bare `owner/repo` slug or a full github.com HTTPS URL. Non-github refs
+// (git@, file://, https://other-host/...) pass through unchanged so test
+// fixtures and custom remotes keep working. The returned URL never embeds
+// credentials; callers that need auth must supply it via gitAuthEnv.
+func tokenFreeGitHubURL(repoRef string) string {
+	if strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
+		return repoRef
+	}
+	// Strip any embedded userinfo from an HTTPS URL so callers who pre-tokenise
+	// their refs still get a clean URL written to .git/config post-clone.
+	if strings.HasPrefix(repoRef, "http") {
+		if at := strings.Index(repoRef, "@"); at > 0 {
+			if schemeEnd := strings.Index(repoRef, "://"); schemeEnd > 0 && schemeEnd < at {
+				return repoRef[:schemeEnd+3] + repoRef[at+1:]
+			}
+		}
+		return repoRef
+	}
+	return fmt.Sprintf("https://github.com/%s.git", repoRef)
+}
+
+// gitAuthEnv returns env vars that inject an HTTP Authorization header for
+// github.com requests without persisting the token to the repo's .git/config.
+// Uses GIT_CONFIG_COUNT / GIT_CONFIG_KEY_N / GIT_CONFIG_VALUE_N so the token
+// never appears on the command line (which would leak via `ps`). Returns nil
+// when no token is available; callers should append to os.Environ().
+//
+// Scheme is Basic with `x-access-token:<PAT>` base64-encoded — the same shape
+// GitHub Actions' actions/checkout uses. Bearer is rejected by GitHub's Smart
+// HTTP backend with "invalid credentials" even for valid PATs (GitHub's REST
+// API accepts Bearer, the git-over-HTTPS backend does not).
+func gitAuthEnv(token string) []string {
+	if token == "" {
+		return nil
+	}
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	return []string{
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic " + basic,
+	}
+}
+
+// runGitWithAuth runs a git subcommand with the auth env injected. The token
+// is supplied per-operation rather than persisted in .git/config, so an agent
+// spawned in a worktree that does `git remote -v` or `git config --list` does
+// not see the PAT.
+func runGitWithAuth(token string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	if extra := gitAuthEnv(token); extra != nil {
+		cmd.Env = append(os.Environ(), extra...)
+	}
+	return cmd.CombinedOutput()
+}
 
 type RepoCache struct {
 	dir       string
@@ -71,12 +128,34 @@ func (rc *RepoCache) getRemoteURL(repoPath string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// effectiveToken picks the per-call token over rc.githubPAT when both exist.
+// Kept tiny and local so call sites stay linear.
+func (rc *RepoCache) effectiveToken(perCall string) string {
+	if perCall != "" {
+		return perCall
+	}
+	return rc.githubPAT
+}
+
+// clonePath bare-clones cleanURL into localPath. Auth flows through gitAuthEnv
+// so the PAT never sits in argv (which would leak via `ps` / /proc/PID/cmdline)
+// and the URL written into .git/config stays credential-free from the first
+// write — no post-clone rewrite required (#179).
+func (rc *RepoCache) clonePath(authToken, cleanURL, localPath string) error {
+	// Bare clone so multiple worktrees can share the same cache safely.
+	if _, err := runGitWithAuth(authToken, "clone", "--bare", cleanURL, localPath); err != nil {
+		return fmt.Errorf("git clone failed: %w", err)
+	}
+	return nil
+}
+
 func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
 	start := time.Now()
-	cloneURL := rc.resolveURLWithToken(repoRef, token)
+	cleanURL := tokenFreeGitHubURL(repoRef)
+	authToken := rc.effectiveToken(token)
 	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
 
 	if _, err := os.Stat(filepath.Join(localPath, "HEAD")); os.IsNotExist(err) {
@@ -84,10 +163,8 @@ func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 			return "", fmt.Errorf("mkdir: %w", err)
 		}
-		// Bare clone so multiple worktrees can share the same cache safely
-		cmd := exec.Command("git", "clone", "--bare", cloneURL, localPath)
-		if _, err := cmd.CombinedOutput(); err != nil {
-			return "", fmt.Errorf("git clone failed: %w", err)
+		if err := rc.clonePath(authToken, cleanURL, localPath); err != nil {
+			return "", err
 		}
 		rc.lastPull[repoRef] = time.Now()
 		rc.logger.Info("Repo 同步完成", "phase", "完成", "repo", SanitizeURL(repoRef), "duration_ms", time.Since(start).Milliseconds())
@@ -98,16 +175,21 @@ func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 		return localPath, nil
 	}
 
-	// Update remote URL if token changed
-	currentURL := rc.getRemoteURL(localPath)
-	if cloneURL != currentURL && cloneURL != "" {
-		setCmd := exec.Command("git", "-C", localPath, "remote", "set-url", "origin", cloneURL)
-		setCmd.Run() // best-effort
+	// Heal a legacy cache whose remote.origin.url still has a token baked in
+	// (pre-#179 deployments). Rewrite to the clean URL unconditionally; auth
+	// for fetch is supplied out-of-band via gitAuthEnv, so we never need the
+	// URL to carry credentials.
+	if cleanURL != "" {
+		currentURL := rc.getRemoteURL(localPath)
+		if currentURL != cleanURL {
+			setCmd := exec.Command("git", "-C", localPath, "remote", "set-url", "origin", cleanURL)
+			_, _ = setCmd.CombinedOutput() // best-effort; non-fatal
+		}
 	}
 
 	rc.logger.Info("開始 fetch repo", "phase", "處理中", "repo", SanitizeURL(repoRef))
-	cmd := exec.Command("git", "-C", localPath, "fetch", "--all", "--prune")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := runGitWithAuth(authToken, "-C", localPath, "fetch", "--all", "--prune")
+	if err != nil {
 		rc.logger.Warn("Git fetch 失敗", "phase", "失敗", "error", err)
 		// Broken repo (e.g. interrupted clone) — remove and re-clone
 		if strings.Contains(string(out), "not a git repository") {
@@ -116,8 +198,7 @@ func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 			if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 				return "", fmt.Errorf("mkdir: %w", err)
 			}
-			cmd = exec.Command("git", "clone", "--bare", cloneURL, localPath)
-			if _, err := cmd.CombinedOutput(); err != nil {
+			if err := rc.clonePath(authToken, cleanURL, localPath); err != nil {
 				return "", fmt.Errorf("git clone (retry) failed: %w", err)
 			}
 			rc.lastPull[repoRef] = time.Now()
@@ -183,9 +264,9 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 		_ = out
 	}
 
-	// Pull latest for this branch
-	cmd = exec.Command("git", "-C", repoPath, "pull", "--ff-only")
-	cmd.CombinedOutput() // best-effort
+	// Pull latest for this branch. Token flows through env (#179) so the
+	// remote URL stored in this worktree's config stays credential-free.
+	_, _ = runGitWithAuth(rc.githubPAT, "-C", repoPath, "pull", "--ff-only") // best-effort
 	return nil
 }
 
@@ -214,8 +295,11 @@ func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
 		return nil
 	}
 
-	fetchCmd := exec.Command("git", "-C", barePath, "fetch", "origin", ref)
-	fetchOut, fetchErr := fetchCmd.CombinedOutput()
+	// Auth is supplied per-op via env so the token never sits in .git/config
+	// (#179). Uses rc.githubPAT because AddWorktree doesn't carry a per-call
+	// token today; that's acceptable since the bare clone was already prepared
+	// with the correct credential by EnsureRepo.
+	fetchOut, fetchErr := runGitWithAuth(rc.githubPAT, "-C", barePath, "fetch", "origin", ref)
 	if fetchErr != nil {
 		return fmt.Errorf("git worktree add failed: %w; git fetch origin %s also failed: %v\n%s",
 			addErr, ref, fetchErr, fetchOut)
