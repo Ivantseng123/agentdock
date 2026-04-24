@@ -154,7 +154,8 @@ func marshalAppYAML(cfg *appconfig.Config, path string) ([]byte, error) {
 	// queue.store picks the JobStore backend. "mem" is fine for unit tests
 	// and small single-instance deployments; "redis" is recommended for
 	// production so in-flight job state survives app restarts (#123).
-	// Anchor on "store: mem" so we don't collide with attachments.store.
+	// Anchor on "store: mem" (not bare "store:") — attachments also has a
+	// "store" field in the same yaml and a bare anchor would match it first.
 	text = insertBefore(text, "    store: mem",
 		"    # JobStore backend. mem: in-process, lost on restart (test / small deployments).\n"+
 			"    # redis: persisted via RedisJobStore, survives app restart (recommended for production).")
