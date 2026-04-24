@@ -178,7 +178,13 @@ The app strips those sections in degraded runs (low files_found / high open_ques
 var (
 	defaultAskOutputRules = []string{
 		"Format the answer in Slack mrkdwn — NOT GitHub markdown. Use *text* (single asterisk) for bold, _text_ for italic, ~text~ for strikethrough, <url|label> for links. Do not use # / ## / ### headings; use *bold* as section labels. Triple-backtick fenced code blocks and single-backtick inline code both render correctly.",
-		"No title, no labels — output the answer content only. Keep it ≤30000 chars.",
+		// Old rule was "No title, no labels — output the answer content only."
+		// That directly contradicted Rule 1 above and SKILL.md §4a, which both
+		// expect *bold* section labels (e.g. *簡答* / *依據*). Agents (correctly)
+		// prioritised this hard-sounding rule and dropped skill structure.
+		// Now: only ban opening heading/title lines, keep the length cap, and
+		// explicitly bless inline *bold* labels so skill structure survives.
+		"Do not open with an H1/H2/H3 heading or standalone title line — start directly with the answer content. *bold* section labels inside the body (e.g. *簡答*, *依據*, *延伸*) are encouraged per the ask-assistant skill. Keep the total answer ≤30000 chars.",
 		"When referring to yourself, use the exact Slack handle from the <bot> tag in <issue_context> (e.g. 'ai_trigger_issue_bot') verbatim. Do NOT invent shorthand like '@bot ask', 'Ask 助理', 'AI 助理', '程式碼助手'. If a sentence doesn't need self-reference, just answer without name-dropping.",
 	}
 	defaultPRReviewOutputRules = []string{
