@@ -20,23 +20,13 @@ logging:
 github:
   token: ghp-...                      # REQUIRED：agent clone / push 時使用
 
-agents:
-  claude:
-    command: claude
-    args: ["--print", "--output-format", "stream-json", "-p", "{prompt}"]
-    timeout: 15m
-    skill_dir: .claude/skills
-    stream: true                      # 啟用即時事件追蹤
-  codex:
-    command: codex
-    args: ["exec", "--skip-git-repo-check", "--color", "never", "{prompt}"]
-    timeout: 15m
-    skill_dir: .agents/skills         # Codex 讀 .agents/skills，不是 .codex/skills
-  opencode:
-    command: opencode
-    args: ["run", "--pure", "{prompt}"]  # --pure 跳過 external plugins（例如 oh-my-openagent）避免 async 背景 agent
-    timeout: 15m
-    skill_dir: .opencode/skills
+# agents: block 可省略。省略時 worker 啟動自動以當下 binary 的 BuiltinAgents
+# 填入 claude / codex / opencode 預設值。只有要覆寫特定欄位時才需要寫。
+# 升級 binary 後，刪掉（或不寫）agents: block 即可取得最新內建預設值。
+#
+# agents:
+#   opencode:
+#     timeout: 30m    # 範例：只覆寫 timeout，其餘欄位沿用內建預設
 
 providers: [claude, codex, opencode]  # fallback chain（依序嘗試）；單一 agent 模式：providers: [claude]
 

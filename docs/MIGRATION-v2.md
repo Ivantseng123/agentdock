@@ -30,7 +30,7 @@ agentdock init app -c ~/.config/agentdock/app.yaml -i
 agentdock init worker -c ~/.config/agentdock/worker.yaml -i
 ```
 
-互動式會問 GitHub token、Redis addr、secret_key（必須與 app 一致）、providers。Built-in agents（claude / codex / opencode）會自動寫進 `agents:` 區塊。
+互動式會問 GitHub token、Redis addr、secret_key（必須與 app 一致）、providers。Built-in agents（claude / codex / opencode）由 worker 啟動時自動補入，不再寫進 `agents:` 區塊（詳見 〈v2.6 → v2.7〉 段落）。
 
 ## 欄位對照表
 
@@ -176,3 +176,26 @@ v2.0 還支援 `queue.transport: inmem`（app 和 worker 跑在同一個 process
 3. **Slack `/triage` slash command 變成 fallback**：實際觸發改成 `@bot <verb>`（`issue` / `ask` / `review`）。舊的 `/triage` 仍註冊，被呼叫會回一條提示叫使用者改用 `@bot`。不需要改 Manifest 就能繼續運作，但建議把 slash command 的 `description` 更新成 legacy 說明。
 
 欄位完整說明：[configuration-app.md](configuration-app.md#workflow-specific-prompts)、[configuration-app.md](configuration-app.md#pr-review-啟用)。
+
+### v2.6 → v2.7：`init worker` 不再凍結 BuiltinAgents 快照
+
+**行為變化**：`agentdock init worker` 產出的 `worker.yaml` 不再包含 `agents:` 區塊。Worker 啟動時改由 `mergeBuiltinAgents` 從當下 binary 補齊所有內建值（claude / codex / opencode）。
+
+**已有 `agents:` 區塊的 user（非 breaking）**：現有 yaml 仍正常運作。`mergeBuiltinAgents` 只補缺少的 entry，不覆寫已存在的。如果你的 yaml 裡有舊版的 opencode 設定（例如缺少 `--pure`），worker 仍會沿用舊設定。
+
+**取得最新內建設定的步驟**：
+
+```bash
+# 刪掉 agents: block（或整個 agents: 段落），重啟即可
+# 若只想更新特定 agent，刪掉該 agent 的 entry 就好
+```
+
+具體例子：PR #108 為 opencode 加入 `--pure` 旗標。沒有刪 `agents.opencode` 的 user 在升級後仍不會拿到 `--pure`；刪了就能自動生效。
+
+**想覆寫特定欄位**：只寫需要改的部分即可；未寫的欄位由 BuiltinAgents 補齊：
+
+```yaml
+agents:
+  opencode:
+    timeout: 30m  # 只改 timeout，command/args/skill_dir 沿用內建
+```

@@ -20,23 +20,15 @@ logging:
 github:
   token: ghp-...                      # REQUIRED: used by agent clone / push
 
-agents:
-  claude:
-    command: claude
-    args: ["--print", "--output-format", "stream-json", "-p", "{prompt}"]
-    timeout: 15m
-    skill_dir: .claude/skills
-    stream: true                      # enable real-time event tracking
-  codex:
-    command: codex
-    args: ["exec", "--skip-git-repo-check", "--color", "never", "{prompt}"]
-    timeout: 15m
-    skill_dir: .agents/skills         # Codex discovers skills in .agents/skills, not .codex/skills
-  opencode:
-    command: opencode
-    args: ["run", "--pure", "{prompt}"]  # --pure skips external plugins (e.g. oh-my-openagent) that spawn async background agents
-    timeout: 15m
-    skill_dir: .opencode/skills
+# agents: block is optional. When omitted, the worker fills claude / codex /
+# opencode from BuiltinAgents at startup — always using the current binary's
+# defaults. Add entries here only to override specific fields.
+# To pick up updated built-in defaults after a binary upgrade, delete (or omit)
+# your agents: block and restart.
+#
+# agents:
+#   opencode:
+#     timeout: 30m    # example: extend timeout for one agent only
 
 providers: [claude, codex, opencode]  # ordered fallback chain; single-agent mode: providers: [claude]
 
