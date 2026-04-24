@@ -530,7 +530,12 @@ func TestAskWorkflow_DescriptionPrompt_NoPriorAnswer_ShowsTwoButtons(t *testing.
 	}
 }
 
-func TestAskWorkflow_DescriptionPrompt_WithPriorAnswer_AddsThirdButton(t *testing.T) {
+func TestAskWorkflow_PriorAnswerPrompt_ShowsDedicatedSelector(t *testing.T) {
+	// When the thread already has a substantive bot reply, Ask surfaces a
+	// standalone yes/no selector BEFORE the description prompt. The two
+	// questions are orthogonal ("carry prior answer?" vs "add more context?")
+	// so merging them into one 3-button selector would force users to pick
+	// XOR even though "both" is a valid intent.
 	w, slack := newTestAskWorkflow(t)
 	slack.PriorBotAnswer = &slackclient.ThreadRawMessage{
 		User:      "bot:ai_trigger_issue_bot",
@@ -543,8 +548,15 @@ func TestAskWorkflow_DescriptionPrompt_WithPriorAnswer_AddsThirdButton(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(step.Selector.Options) != 3 {
-		t.Fatalf("expected 3 options when prior answer exists, got %d", len(step.Selector.Options))
+	if p.Phase != "ask_prior_answer_prompt" {
+		t.Errorf("Phase = %q, want ask_prior_answer_prompt", p.Phase)
+	}
+	if step.Selector.ActionID != "ask_prior_answer" {
+		t.Errorf("ActionID = %q, want ask_prior_answer (must not reuse description_action — the click goes through HandleSelection, not HandleDescriptionAction)",
+			step.Selector.ActionID)
+	}
+	if len(step.Selector.Options) != 2 {
+		t.Fatalf("expected 2 options (帶/不用), got %d", len(step.Selector.Options))
 	}
 	sawOptIn := false
 	for _, o := range step.Selector.Options {
@@ -553,7 +565,7 @@ func TestAskWorkflow_DescriptionPrompt_WithPriorAnswer_AddsThirdButton(t *testin
 		}
 	}
 	if !sawOptIn {
-		t.Error("opt-in button missing despite prior answer being available")
+		t.Error("opt-in button missing in prior-answer prompt")
 	}
 	// Prior answer got cached in askState for BuildJob to pick up.
 	st := p.State.(*askState)
@@ -585,25 +597,62 @@ func TestAskWorkflow_DescriptionPrompt_FetchError_DegradesSilently(t *testing.T)
 	}
 }
 
-func TestAskWorkflow_Selection_OptInPriorAnswerSetsFlagAndSubmits(t *testing.T) {
+func TestAskWorkflow_Selection_OptInPriorAnswerChainsToDescriptionPrompt(t *testing.T) {
+	// Opt-in click no longer submits directly — it sets IncludePriorAnswer
+	// and then chains into the description prompt so the user can still
+	// choose 補充說明 / 跳過 independently.
 	w, _ := newTestAskWorkflow(t)
 	priorMsg := &queue.ThreadMessage{
 		User: "bot:x", Timestamp: "1500.0", Text: "prior answer content",
 	}
 	p := &Pending{
-		Phase: "ask_description_prompt",
+		Phase: "ask_prior_answer_prompt",
 		State: &askState{Question: "Q", PriorAnswer: priorMsg, priorAnswerFetchAttempted: true},
 	}
 	step, err := w.Selection(context.Background(), p, AskPriorAnswerOptIn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepSubmit {
-		t.Errorf("expected NextStepSubmit after opt-in click, got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Fatalf("expected NextStepSelector (description prompt), got %v", step.Kind)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+	if step.Selector.ActionID != "description_action" {
+		t.Errorf("ActionID = %q, want description_action", step.Selector.ActionID)
 	}
 	st := p.State.(*askState)
 	if !st.IncludePriorAnswer {
 		t.Error("IncludePriorAnswer flag should be true after opt-in click")
+	}
+}
+
+func TestAskWorkflow_Selection_DeclinePriorAnswerStillChainsToDescriptionPrompt(t *testing.T) {
+	// "不用" is the yes/no-style decline: it must NOT set IncludePriorAnswer
+	// but must still progress to the description prompt so the user can
+	// still add context via modal.
+	w, _ := newTestAskWorkflow(t)
+	priorMsg := &queue.ThreadMessage{
+		User: "bot:x", Timestamp: "1500.0", Text: "prior answer content",
+	}
+	p := &Pending{
+		Phase: "ask_prior_answer_prompt",
+		State: &askState{Question: "Q", PriorAnswer: priorMsg, priorAnswerFetchAttempted: true},
+	}
+	step, err := w.Selection(context.Background(), p, "不用")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSelector {
+		t.Fatalf("expected NextStepSelector (description prompt), got %v", step.Kind)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.IncludePriorAnswer {
+		t.Error("IncludePriorAnswer should stay false on decline")
 	}
 }
 

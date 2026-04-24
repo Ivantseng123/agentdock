@@ -102,18 +102,20 @@ func (w *AskWorkflow) attachPromptStep(p *Pending) NextStep {
 	}
 }
 
-// Selection handles follow-up button clicks for the ask wizard. Five
+// Selection handles follow-up button clicks for the ask wizard. Six
 // phases flow through here:
 //   - ask_repo_prompt: attach/skip decision.
 //   - ask_repo_select: user picked a specific repo, via button or external search.
 //   - ask_branch_select: user picked a branch (only when branch_select enabled and repo has >1 branch).
+//   - ask_prior_answer_prompt: yes/no on carrying the last bot answer (only when one exists).
 //   - ask_description_prompt: optionally supplement the question via modal.
 //   - ask_description_modal: modal submit; value is the text the user typed.
 //
-// Both skip-attach and repo-pick converge into ask_description_prompt so
-// every ask gets the chance to clarify what the agent should actually do.
-// The D-selector path (empty args) especially needs this — otherwise the
-// agent only sees the raw thread, which is often ambiguous.
+// Both skip-attach and repo-pick converge into priorAnswerOrDescriptionStep,
+// which routes to either ask_prior_answer_prompt or straight to
+// ask_description_prompt. Every ask therefore gets the chance to clarify
+// what the agent should do — the D-selector path (empty args) especially
+// needs this — otherwise the agent only sees the raw thread.
 func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (NextStep, error) {
 	st, ok := p.State.(*askState)
 	if !ok {
@@ -124,8 +126,7 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 	case "ask_repo_prompt":
 		if value == "skip" {
 			st.AttachRepo = false
-			p.Phase = "ask_description_prompt"
-			return w.descriptionPromptStep(p), nil
+			return w.priorAnswerOrDescriptionStep(p), nil
 		}
 		// "attach" → move to repo selection.
 		st.AttachRepo = true
@@ -184,18 +185,23 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 			return NextStep{Kind: NextStepCancel}, nil
 		}
 		st.SelectedBranch = value
+		return w.priorAnswerOrDescriptionStep(p), nil
+
+	case "ask_prior_answer_prompt":
+		// Standalone yes/no on whether to carry the bot's last substantive
+		// reply into this turn. The cached PriorAnswer was populated in
+		// priorAnswerOrDescriptionStep; we only need to flip the flag here.
+		// Both answers continue to the description prompt — the two questions
+		// are orthogonal, so neither subsumes the other.
+		if value == AskPriorAnswerOptIn {
+			st.IncludePriorAnswer = true
+		}
 		p.Phase = "ask_description_prompt"
 		return w.descriptionPromptStep(p), nil
 
 	case "ask_description_prompt":
 		switch value {
 		case "跳過":
-			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
-		case AskPriorAnswerOptIn:
-			// User wants the bot's last substantive reply fed into this turn.
-			// The cached PriorAnswer was populated at descriptionPromptStep time,
-			// so we only need to flip the opt-in flag and submit.
-			st.IncludePriorAnswer = true
 			return NextStep{Kind: NextStepSubmit, Pending: p}, nil
 		case "補充說明":
 			// Phase must flip before OpenModal so the modal submit routes to
@@ -245,8 +251,7 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 	}
 
 	if !channelCfg.IsBranchSelectEnabled() {
-		p.Phase = "ask_description_prompt"
-		return w.descriptionPromptStep(p)
+		return w.priorAnswerOrDescriptionStep(p)
 	}
 
 	var branches []string
@@ -268,8 +273,7 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 		if len(branches) == 1 {
 			st.SelectedBranch = branches[0]
 		}
-		p.Phase = "ask_description_prompt"
-		return w.descriptionPromptStep(p)
+		return w.priorAnswerOrDescriptionStep(p)
 	}
 
 	p.Phase = "ask_branch_select"
@@ -289,17 +293,17 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 	}
 }
 
-// descriptionPromptStep returns the 補充說明 / 跳過 selector, plus an
-// optional 帶上次回覆 opt-in button when the thread already has a
-// substantive bot reply we could hand back to the worker for multi-turn
-// continuity (issue #151). ActionID mirrors IssueWorkflow's so app.go's
-// description_action route (which owns the modal-trigger-id forwarding)
-// handles the click without Ask needing its own special case.
+// priorAnswerOrDescriptionStep is the single entry into the post-repo/branch
+// phases. It fetches the thread's most recent substantive bot reply once per
+// ask; when one exists, it shows a dedicated 帶上次回覆 / 不用 selector so the
+// opt-in is a standalone yes/no question. Otherwise it falls through to the
+// 補充說明 / 跳過 prompt untouched. Splitting these used to live in one
+// 3-button selector, but that forced users to pick opt-in XOR 補充說明 even
+// though the choices are orthogonal.
 //
-// The prior-answer fetch happens at most once per ask (priorAnswerFetchAttempted
-// guard) and failures degrade silently to the 2-button UX — the feature
-// is opt-in, so missing it is a non-event.
-func (w *AskWorkflow) descriptionPromptStep(p *Pending) NextStep {
+// Fetch failures degrade silently to the no-prior-answer path — the feature
+// is a convenience, not a core path (issue #151).
+func (w *AskWorkflow) priorAnswerOrDescriptionStep(p *Pending) NextStep {
 	st, _ := p.State.(*askState)
 	if st != nil && !st.priorAnswerFetchAttempted {
 		st.priorAnswerFetchAttempted = true
@@ -315,23 +319,42 @@ func (w *AskWorkflow) descriptionPromptStep(p *Pending) NextStep {
 		}
 	}
 
-	options := []SelectorOption{
-		{Label: "補充說明", Value: "補充說明"},
-		{Label: "跳過", Value: "跳過"},
-	}
 	if st != nil && st.PriorAnswer != nil {
-		options = append(options, SelectorOption{
-			Label: "帶上次回覆一起問",
-			Value: AskPriorAnswerOptIn,
-		})
+		p.Phase = "ask_prior_answer_prompt"
+		return NextStep{
+			Kind: NextStepSelector,
+			Selector: &SelectorSpec{
+				Prompt:   ":arrows_counterclockwise: 要帶上次回覆一起問嗎？",
+				ActionID: "ask_prior_answer",
+				Options: []SelectorOption{
+					{Label: "帶上次回覆", Value: AskPriorAnswerOptIn},
+					{Label: "不用", Value: "不用"},
+				},
+			},
+			Pending: p,
+		}
 	}
 
+	p.Phase = "ask_description_prompt"
+	return w.descriptionPromptStep(p)
+}
+
+// descriptionPromptStep returns the 補充說明 / 跳過 selector. The opt-in
+// 帶上次回覆 button used to live here but was promoted to its own phase —
+// see priorAnswerOrDescriptionStep for the routing wrapper. ActionID mirrors
+// IssueWorkflow's so app.go's description_action route (which owns the
+// modal-trigger-id forwarding) handles the click without Ask needing its
+// own special case.
+func (w *AskWorkflow) descriptionPromptStep(p *Pending) NextStep {
 	return NextStep{
 		Kind: NextStepSelector,
 		Selector: &SelectorSpec{
 			Prompt:   ":pencil2: 要補充說明想讓 agent 做什麼嗎？",
 			ActionID: "description_action",
-			Options:  options,
+			Options: []SelectorOption{
+				{Label: "補充說明", Value: "補充說明"},
+				{Label: "跳過", Value: "跳過"},
+			},
 		},
 		Pending: p,
 	}

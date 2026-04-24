@@ -274,7 +274,7 @@ func (w *Workflow) HandleDescriptionAction(channelID, value, selectorMsgTS, trig
 	// "補充說明", which falls through to OpenModal (modal cleanup owns that
 	// path). Keep this list in sync with the description-prompt options in
 	// the workflows that use description_action.
-	if value == "跳過" || value == workflow.AskPriorAnswerOptIn {
+	if value == "跳過" {
 		delete(w.pending, selectorMsgTS)
 		w.mu.Unlock()
 		// Drop the prompt rather than leaving an ack — the status message
