@@ -128,7 +128,6 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	cmd.WaitDelay = 10 * time.Second
 
 	// Inject secrets as environment variables.
-	// Filter by the agent's RequiredSecrets whitelist before injection.
 	// Nil RequiredSecrets (absent from yaml) falls back to ["GH_TOKEN"] for
 	// back-compat; an explicit empty list means zero secrets forwarded.
 	secrets := filterSecrets(opts.Secrets, agent.RequiredSecrets)
