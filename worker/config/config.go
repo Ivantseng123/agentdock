@@ -25,11 +25,12 @@ type Config struct {
 
 // AgentConfig is the worker's agent CLI description.
 type AgentConfig struct {
-	Command  string        `yaml:"command"`
-	Args     []string      `yaml:"args"`
-	Timeout  time.Duration `yaml:"timeout"`
-	SkillDir string        `yaml:"skill_dir"`
-	Stream   bool          `yaml:"stream"`
+	Command   string        `yaml:"command"`
+	Args      []string      `yaml:"args"`
+	ExtraArgs []string      `yaml:"extra_args"`
+	Timeout   time.Duration `yaml:"timeout"`
+	SkillDir  string        `yaml:"skill_dir"`
+	Stream    bool          `yaml:"stream"`
 }
 
 // PromptConfig is the worker-owned prompt extension (the extra_rules segment
