@@ -23,13 +23,26 @@ type Config struct {
 	Secrets      map[string]string      `yaml:"secrets"`
 }
 
+// ExtraArgsToken is the placeholder element in AgentConfig.Args that gets
+// expanded into AgentConfig.ExtraArgs at runtime. Substring matches don't
+// count — the token must stand alone as its own arg slot.
+const ExtraArgsToken = "{extra_args}"
+
 // AgentConfig is the worker's agent CLI description.
+//
+// ExtraArgs is a user-supplied flag list that's spliced into Args in place of
+// the `{extra_args}` placeholder at runtime. It lets operators layer per-site
+// flags (e.g. `-m opencode/claude-opus-4-7`) on top of the built-in Args
+// without copying the whole Args slice. If a user also overrides Args (whose
+// override does NOT contain `{extra_args}`), ExtraArgs is silently dropped —
+// `mergeBuiltinAgents` emits a startup warn when that combo is detected.
 type AgentConfig struct {
-	Command  string        `yaml:"command"`
-	Args     []string      `yaml:"args"`
-	Timeout  time.Duration `yaml:"timeout"`
-	SkillDir string        `yaml:"skill_dir"`
-	Stream   bool          `yaml:"stream"`
+	Command   string        `yaml:"command"`
+	Args      []string      `yaml:"args"`
+	ExtraArgs []string      `yaml:"extra_args"`
+	Timeout   time.Duration `yaml:"timeout"`
+	SkillDir  string        `yaml:"skill_dir"`
+	Stream    bool          `yaml:"stream"`
 }
 
 // PromptConfig is the worker-owned prompt extension (the extra_rules segment

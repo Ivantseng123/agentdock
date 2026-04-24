@@ -88,10 +88,11 @@ Slack 狀態訊息會從冷冰冰的 `:gear: 準備中 · worker-0` 改為擬人
 | 欄位 | 型別 | 說明 |
 |---|---|---|
 | `command` | string | 執行檔名稱或路徑 |
-| `args` | []string | CLI 引數；`{prompt}` 會被替換為 job 的 prompt 內容 |
+| `args` | []string | CLI 引數；`{prompt}` 會被替換為 job 的 prompt 內容；`{extra_args}` 會被下方 `extra_args` 展開 |
+| `extra_args` | []string | 注入到 `args` 中 `{extra_args}` 位置的額外 flag（見下節） |
 | `timeout` | duration | 單一 job 的 wall-clock 上限（例如 `30m`） |
 | `skill_dir` | string | Repo 內寫入 skill 檔的相對目錄 |
-| `stream` | bool | 啟用即時 JSON 事件解析（僅 claude 支援） |
+| `stream` | bool | 啟用即時 JSON 事件解析（僅 claude 支援）。**注意**：bool 無法區分「沒寫」vs「寫 false」，所以只寫 `stream: false` 在內建 agent 的 partial override 區塊裡**不會生效**；要關掉內建的 stream，請同時覆寫 `command` + `args`（整段 block 重寫）。 |
 
 只需寫要覆寫的欄位；其他欄位沿用 `BuiltinAgents`。範例：
 
@@ -102,6 +103,40 @@ agents:
   claude:
     skill_dir: .claude/custom-skills
 ```
+
+### `extra_args`（每個 agent 追加 flag）
+
+想給內建 agent 塞一兩個 flag（例如幫 opencode 鎖定 model）不必整段 `args` 複製一份。內建 `args` 都預留了 `{extra_args}` placeholder，`extra_args` 會在 runtime 展開成 0~N 個引數：
+
+```yaml
+agents:
+  opencode:
+    extra_args: ["-m", "opencode/claude-opus-4-7"]
+  codex:
+    extra_args: ["--sandbox", "read-only"]
+```
+
+對應到實際啟動命令：
+
+- `opencode run --pure -m opencode/claude-opus-4-7 "{prompt}"`
+- `codex exec --skip-git-repo-check --color never --sandbox read-only "{prompt}"`
+- `claude --print --output-format stream-json <extra_args...> -p "{prompt}"`
+
+**為什麼要這個：** 原本唯一加 flag 的方法是整段覆寫 `agents.opencode`，一旦 binary 升級、內建 `args` 變了（例如 `--pure` 是 v2.2 才加的），你的 snapshot 就落後。`extra_args` 讓你繼續吃內建預設值，只疊自己的 flag。
+
+**Placeholder 位置（已由 binary 固定，operator 不用管）：**
+
+- `claude`: `{extra_args}` 在 `stream-json` 之後、`-p` 之前（claude 要求 flags 都要在 `-p` 前）
+- `codex`: 在 `--color never` 之後、`{prompt}` 之前
+- `opencode`: 在 `--pure` 之後、`{prompt}` 之前（`-m`、`--agent`、`--variant` 等都走這個位置）
+
+**Precedence（優先順序）：**
+
+1. 純寫 `extra_args`（不動 `command` / `args`）→ 維持內建 `args`、疊上你的 flag。推薦做法。
+2. 同時寫完整 `args` 覆寫 + `extra_args`：**完整覆寫勝出**，`extra_args` 被丟掉；啟動時會 emit 一行 `extra_args 被忽略` 的 warn log。想同時保留兩者，就在你自己的 `args` 裡手動加 `"{extra_args}"` token。
+3. `extra_args` 為空（nil 或 `[]`）→ `{extra_args}` 槽位直接消失，不會在 CLI 引數裡留下空字串。
+
+**留意：** `extra_args` 是 operator 自己選的 flag，worker 不會預設幫你加任何東西。如果你寫了 `--dangerously-skip-permissions` 之類的開關，那是你的選擇，也是你的風險（worker 可能跑在你的筆電上，而不是 pod 裡）。
 
 ## Agent Stream
 

@@ -8,17 +8,33 @@ import "time"
 //
 // Adding a new built-in agent: just add an entry here. Existing users get it
 // automatically on next startup; no `agentdock init` rerun needed.
+//
+// Placement study for `{extra_args}` — per CLI flag-order rules:
+//
+//   - claude: flags MUST precede `-p`. `--print`/`--output-format stream-json`
+//     are flags; `-p "{prompt}"` is the positional-ish pair. `{extra_args}`
+//     goes after `stream-json` and BEFORE `-p`.
+//   - codex: `codex exec <flags> <prompt>`. `--skip-git-repo-check`/`--color
+//     never` are flags; prompt is positional. `{extra_args}` goes right before
+//     `{prompt}`.
+//   - opencode: `opencode run <flags> <prompt>`. `--pure` is a flag; `-m`,
+//     `--agent`, `--variant`, `-c`, `--session`, `-f` all live in this
+//     same pre-prompt flag slot. `{extra_args}` goes between `--pure` and
+//     `{prompt}`.
+//
+// Runtime: nil/empty `extra_args` → the `{extra_args}` slot is dropped
+// entirely (NO empty string element). See runner.go expandExtraArgs.
 var BuiltinAgents = map[string]AgentConfig{
 	"claude": {
 		Command:  "claude",
-		Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
+		Args:     []string{"--print", "--output-format", "stream-json", "{extra_args}", "-p", "{prompt}"},
 		Timeout:  15 * time.Minute,
 		SkillDir: ".claude/skills",
 		Stream:   true,
 	},
 	"codex": {
 		Command: "codex",
-		Args:    []string{"exec", "--skip-git-repo-check", "--color", "never", "{prompt}"},
+		Args:    []string{"exec", "--skip-git-repo-check", "--color", "never", "{extra_args}", "{prompt}"},
 		Timeout: 15 * time.Minute,
 		// Codex CLI discovers skills from .agents/skills (repo/CWD scope),
 		// NOT .codex/skills. See https://developers.openai.com/codex/skills.
@@ -31,7 +47,7 @@ var BuiltinAgents = map[string]AgentConfig{
 		// BackgroundManager cause `opencode run` to exit on the main agent's
 		// first "I dispatched" text — before the sub-agents return a parseable
 		// TRIAGE_RESULT. Internal auth plugins still load, so credentials stay intact.
-		Args:     []string{"run", "--pure", "{prompt}"},
+		Args:     []string{"run", "--pure", "{extra_args}", "{prompt}"},
 		Timeout:  15 * time.Minute,
 		SkillDir: ".opencode/skills",
 	},

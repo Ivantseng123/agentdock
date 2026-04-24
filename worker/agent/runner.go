@@ -103,10 +103,18 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	}
 
 	useStdin := !hasPromptPlaceholder || len(prompt) >= maxArgLen
+
+	// Single splice site for {extra_args}. Both branches below operate on the
+	// already-expanded slice, so future placeholders / bug fixes only need to
+	// touch one place.
+	expanded := expandExtraArgs(agent.Args, agent.ExtraArgs)
+
 	var args []string
 	if useStdin && hasPromptPlaceholder {
 		// Prompt too large for args — drop the prompt arg, use stdin instead.
-		for _, a := range agent.Args {
+		// {output_file} still substitutes in place; {prompt}-bearing args are
+		// skipped entirely.
+		for _, a := range expanded {
 			if strings.Contains(a, "{prompt}") {
 				continue
 			}
@@ -114,7 +122,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 		}
 		logger.Info("Prompt 過大，改用 stdin", "phase", "處理中", "prompt_len", len(prompt))
 	} else {
-		args = substitutePlaceholders(agent.Args, map[string]string{
+		args = substituteStringPlaceholders(expanded, map[string]string{
 			"{prompt}":      prompt,
 			"{output_file}": outputFile,
 		})
@@ -241,7 +249,29 @@ func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queu
 	return result
 }
 
-func substitutePlaceholders(args []string, values map[string]string) []string {
+// expandExtraArgs replaces every standalone "{extra_args}" element with zero
+// or more entries from extraArgs. nil/empty extraArgs drops the slot entirely
+// (no empty-string element leaks into the resulting argv). Substring matches
+// inside a larger string are NOT expanded — the token must stand alone as its
+// own arg. This is the single splice site for extra_args across both the
+// arg-prompt and stdin-prompt paths.
+func expandExtraArgs(args []string, extraArgs []string) []string {
+	result := make([]string, 0, len(args)+len(extraArgs))
+	for _, a := range args {
+		if a == config.ExtraArgsToken {
+			result = append(result, extraArgs...)
+			continue
+		}
+		result = append(result, a)
+	}
+	return result
+}
+
+// substituteStringPlaceholders applies strings.ReplaceAll for each (key, val)
+// pair to every element of args. Used only for string-valued placeholders
+// ({prompt}, {output_file}); list-valued {extra_args} must be expanded via
+// expandExtraArgs beforehand.
+func substituteStringPlaceholders(args []string, values map[string]string) []string {
 	result := make([]string, 0, len(args))
 	for _, a := range args {
 		for k, v := range values {

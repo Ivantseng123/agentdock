@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -240,6 +241,109 @@ func TestNewRunnerFromConfig_SingleProvider(t *testing.T) {
 	}
 	if !strings.Contains(output, "single provider") {
 		t.Errorf("unexpected output: %q", output)
+	}
+}
+
+func TestExpandExtraArgs_Nil(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := expandExtraArgs(args, nil)
+	want := []string{"run", "--pure", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	// No empty string leftovers.
+	for _, a := range got {
+		if a == "" {
+			t.Errorf("empty-string arg leaked into result: %q", got)
+		}
+	}
+}
+
+func TestExpandExtraArgs_Empty(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := expandExtraArgs(args, []string{})
+	want := []string{"run", "--pure", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandExtraArgs_Single(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := expandExtraArgs(args, []string{"--foo"})
+	want := []string{"run", "--pure", "--foo", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandExtraArgs_Multi(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := expandExtraArgs(args, []string{"-m", "opencode/claude-opus-4-7"})
+	want := []string{"run", "--pure", "-m", "opencode/claude-opus-4-7", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestExpandExtraArgs_ThenStringSubstitute verifies the two-step pipeline used
+// by runOne: expandExtraArgs first, then substituteStringPlaceholders. After
+// both steps the argv must contain the extra args in the right slot AND the
+// substituted prompt.
+func TestExpandExtraArgs_ThenStringSubstitute(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	expanded := expandExtraArgs(args, []string{"-m", "x"})
+	got := substituteStringPlaceholders(expanded, map[string]string{"{prompt}": "hi"})
+	want := []string{"run", "--pure", "-m", "x", "hi"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestRunner_ExtraArgsSpliced is the integration-ish check: spawn a real
+// process with a built-in-shaped Args ({prompt} at the end, {extra_args}
+// right before it) and verify the shell sees the extra flags between --pure
+// and the prompt positional.
+func TestRunner_ExtraArgsSpliced(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "argv-agent")
+	// Echo each positional on its own line so we can assert the exact ordering.
+	os.WriteFile(script, []byte(`#!/bin/sh
+for a in "$@"; do echo "ARG=$a"; done
+echo "padding padding padding padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{
+		{
+			Command:   script,
+			Args:      []string{"run", "--pure", "{extra_args}", "{prompt}"},
+			ExtraArgs: []string{"-m", "opencode/claude-opus-4-7"},
+			Timeout:   5 * time.Second,
+		},
+	})
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "hello", RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	// Verify order: run, --pure, -m, opencode/claude-opus-4-7, hello
+	wantOrder := []string{
+		"ARG=run",
+		"ARG=--pure",
+		"ARG=-m",
+		"ARG=opencode/claude-opus-4-7",
+		"ARG=hello",
+	}
+	idx := 0
+	for _, line := range strings.Split(output, "\n") {
+		if line == wantOrder[idx] {
+			idx++
+			if idx == len(wantOrder) {
+				break
+			}
+		}
+	}
+	if idx != len(wantOrder) {
+		t.Errorf("argv order wrong. got output:\n%s\nstuck at wantOrder[%d]=%q", output, idx, wantOrder[idx])
 	}
 }
 

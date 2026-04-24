@@ -80,6 +80,19 @@ agents:
 	}
 }
 
+func TestLoadConfig_ExtraArgsUnmarshals(t *testing.T) {
+	cfg := loadFromString(t, `
+agents:
+  opencode:
+    extra_args: ["-m", "opencode/claude-opus-4-7"]
+`)
+	got := cfg.Agents["opencode"].ExtraArgs
+	want := []string{"-m", "opencode/claude-opus-4-7"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("ExtraArgs = %v, want %v", got, want)
+	}
+}
+
 func TestResolveSecrets_MergesGitHubToken(t *testing.T) {
 	cfg := loadFromString(t, `
 github:
