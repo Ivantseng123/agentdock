@@ -102,12 +102,16 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}
 	}
 
-	jobStore := queue.NewMemJobStore()
-	jobStore.StartCleanup(1 * time.Hour)
-
-	// Transport selection. New backends (e.g. github-runner) add a case here;
-	// flag + config validator already allow any value that reaches this switch.
-	var bundle *queue.Bundle
+	// Transport + JobStore selection. The two switches are intentionally
+	// adjacent and symmetric — both exist to let operators pick backends
+	// without code changes. Today "redis" is the only supported transport,
+	// but the switch stays so adding a new backend (e.g. github-runner) is
+	// additive. JobStore defaults to "mem" for back-compat; set
+	// queue.store: redis to persist state across app restarts (#123, #146).
+	var (
+		bundle   *queue.Bundle
+		jobStore queue.JobStore
+	)
 	switch cfg.Queue.Transport {
 	case "redis":
 		rdb, err := queue.NewRedisClient(queue.RedisConfig{
@@ -119,9 +123,43 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 		}
+
+		switch cfg.Queue.Store {
+		case "mem":
+			ms := queue.NewMemJobStore()
+			ms.StartCleanup(1 * time.Hour)
+			jobStore = ms
+		case "redis":
+			rs := queue.NewRedisJobStore(rdb, "jobstore", cfg.Queue.StoreTTL)
+			// Rehydrate: log the count of jobs that were still live in the
+			// previous instance (TTL hadn't evicted them). ResultListener
+			// resolves jobs via store.Get directly against Redis, so no
+			// in-memory index needs rebuilding. Terminal-state jobs are
+			// left to TTL — we do not proactively delete them.
+			if states, listErr := rs.ListAll(); listErr != nil {
+				appLogger.Warn("JobStore 重新水合失敗（ListAll）", "phase", "失敗", "error", listErr)
+			} else {
+				inflight := 0
+				for _, st := range states {
+					switch st.Status {
+					case queue.JobCompleted, queue.JobFailed, queue.JobCancelled:
+						// terminal — let TTL evict
+					default:
+						inflight++
+					}
+				}
+				appLogger.Info("rehydrated in-flight jobs from previous instance",
+					"phase", "完成", "in_flight", inflight, "total_records", len(states))
+			}
+			jobStore = rs
+		default:
+			return nil, fmt.Errorf("unsupported queue.store %q (supported: mem, redis)", cfg.Queue.Store)
+		}
+
 		bundle = queue.NewRedisBundle(rdb, jobStore, "triage",
 			queue.WithRedisJobQueueLogger(queueLogger))
-		appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
+		appLogger.Info("已連線至 Redis", "phase", "處理中",
+			"addr", cfg.Redis.Addr, "jobstore", cfg.Queue.Store)
 
 		sk, err := crypto.DecodeSecretKey(cfg.SecretKey)
 		if err != nil {
