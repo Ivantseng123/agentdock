@@ -17,7 +17,7 @@ func TestWatcher_ReloadsOnFileChange(t *testing.T) {
 skills:
   triage:
     type: local
-    path: agents/skills/triage
+    path: app/agents/skills/triage
 cache:
   ttl: 5m
 `
@@ -45,7 +45,7 @@ cache:
 skills:
   triage:
     type: local
-    path: agents/skills/triage
+    path: app/agents/skills/triage
   review:
     type: remote
     package: "@team/review"

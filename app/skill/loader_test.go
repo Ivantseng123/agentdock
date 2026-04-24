@@ -57,7 +57,7 @@ func TestLoader_LoadAll_LocalSkill(t *testing.T) {
 	}
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"triage": {Type: "local", Path: "agents/skills/triage"},
+			"triage": {Type: "local", Path: "app/agents/skills/triage"},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},
 	}
@@ -253,7 +253,7 @@ func TestLoader_LoadAll_ConflictFailFast(t *testing.T) {
 	}
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"local-review": {Type: "local", Path: "agents/skills/code-review"},
+			"local-review": {Type: "local", Path: "app/agents/skills/code-review"},
 			"remote-review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},

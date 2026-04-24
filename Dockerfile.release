@@ -25,7 +25,7 @@ RUN curl -sL https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH
     tar xz -C /usr/local/bin --strip-components=2 gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh
 
 # Skills and static assets (rarely change — placed above binary for better layer caching)
-COPY agents/skills/ /opt/agents/skills/
+COPY app/agents/skills/ /opt/agents/skills/
 RUN mkdir -p /home/node/.claude/skills && \
     for d in /opt/agents/skills/*/; do \
       ln -s "$d" /home/node/.claude/skills/$(basename "$d"); \

@@ -2,7 +2,7 @@
 # Setup agent skill symlinks for local development.
 # In production (k8s), these are baked into the Docker image via Dockerfile.
 #
-# Usage: ./agents/setup.sh
+# Usage: ./app/agents/setup.sh
 
 set -e
 

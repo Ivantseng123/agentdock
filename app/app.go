@@ -86,7 +86,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}()
 	}
 
-	bakedInDir := "agents/skills"
+	bakedInDir := "app/agents/skills"
 	if _, err := os.Stat("/opt/agents/skills"); err == nil {
 		bakedInDir = "/opt/agents/skills"
 	}

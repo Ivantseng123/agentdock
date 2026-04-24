@@ -1,7 +1,7 @@
 .git/
 docs/
 *.md
-!agents/skills/**/*.md
+!app/agents/skills/**/*.md
 config.yaml
 config.local.yaml
 agentdock

@@ -2,7 +2,7 @@
 cd "$(dirname "$0")"
 
 # Setup agent skills (idempotent, uses symlinks)
-./agents/setup.sh
+./app/agents/setup.sh
 
 echo "Building..."
 go build -o agentdock ./cmd/agentdock/ || exit 1

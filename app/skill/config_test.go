@@ -11,7 +11,7 @@ func TestLoadSkillsConfig_Full(t *testing.T) {
 skills:
   triage-issue:
     type: local
-    path: agents/skills/triage-issue
+    path: app/agents/skills/triage-issue
   code-review:
     type: remote
     package: "@someone/skill-code-review"
@@ -42,7 +42,7 @@ cache:
 	if local.Type != "local" {
 		t.Errorf("triage-issue type = %q", local.Type)
 	}
-	if local.Path != "agents/skills/triage-issue" {
+	if local.Path != "app/agents/skills/triage-issue" {
 		t.Errorf("triage-issue path = %q", local.Path)
 	}
 
