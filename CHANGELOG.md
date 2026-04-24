@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.2](https://github.com/Ivantseng123/agentdock/compare/v2.6.1...v2.6.2) (2026-04-24)
+
+
+### Bug Fixes
+
+* **ask:** resolve output_rules contradiction that killed skill structure ([#172](https://github.com/Ivantseng123/agentdock/issues/172)) ([7bb548a](https://github.com/Ivantseng123/agentdock/commit/7bb548a1aa2fd57580ce450d36599cccf3cc0147))
+* **ask:** split prior-answer opt-in into its own prompt ([#175](https://github.com/Ivantseng123/agentdock/issues/175)) ([fc66fc7](https://github.com/Ivantseng123/agentdock/commit/fc66fc78a25a12679bf7a7b8f82679b2eb691f94))
+
 ## [2.6.1](https://github.com/Ivantseng123/agentdock/compare/v2.6.0...v2.6.1) (2026-04-24)
 
 
