@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.3](https://github.com/Ivantseng123/agentdock/compare/v2.6.2...v2.6.3) (2026-04-24)
+
+
+### Bug Fixes
+
+* stop agent silent-fail on cwd-external writes ([#187](https://github.com/Ivantseng123/agentdock/issues/187)) ([e2c6adf](https://github.com/Ivantseng123/agentdock/commit/e2c6adf6e36787fd357bb5a1247427692b204e07))
+
 ## [2.6.2](https://github.com/Ivantseng123/agentdock/compare/v2.6.1...v2.6.2) (2026-04-24)
 
 
