@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.1](https://github.com/Ivantseng123/agentdock/compare/v2.6.0...v2.6.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* **ask:** drop prior-answer threshold + debug-log raw agent output ([#169](https://github.com/Ivantseng123/agentdock/issues/169)) ([e8be8e6](https://github.com/Ivantseng123/agentdock/commit/e8be8e61b2933ad2406d905ef24f1a21a5746b2f))
+* **image:** upgrade opencode 1.4.3 → 1.4.11 to fix skill loading ([#170](https://github.com/Ivantseng123/agentdock/issues/170)) ([93109b5](https://github.com/Ivantseng123/agentdock/commit/93109b5c9eb558f4be445bcb5e183cfb41197e64))
+
 ## [2.6.0](https://github.com/Ivantseng123/agentdock/compare/v2.5.1...v2.6.0) (2026-04-24)
 
 
