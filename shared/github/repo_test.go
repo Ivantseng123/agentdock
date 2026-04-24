@@ -1,6 +1,7 @@
 package github
 
 import (
+	"encoding/base64"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -638,8 +639,18 @@ func TestGitAuthEnv(t *testing.T) {
 	if !strings.Contains(joined, "http.https://github.com/.extraheader") {
 		t.Errorf("missing extraheader key: %v", got)
 	}
-	if !strings.Contains(joined, "AUTHORIZATION: bearer ghp_secret") {
-		t.Errorf("missing bearer value: %v", got)
+	// GitHub's Smart HTTP backend requires Basic auth with
+	// `x-access-token:<PAT>` base64-encoded (same as actions/checkout).
+	// Bearer is rejected by the git backend even for valid PATs.
+	want := "AUTHORIZATION: basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:ghp_secret"))
+	if !strings.Contains(joined, want) {
+		t.Errorf("missing basic value %q in %v", want, got)
+	}
+	if strings.Contains(joined, "bearer") {
+		t.Errorf("bearer scheme leaked into auth env (GitHub git backend rejects it): %v", got)
+	}
+	if strings.Contains(joined, "ghp_secret") {
+		t.Errorf("raw token must not appear in env value (should be base64-encoded): %v", got)
 	}
 }
 

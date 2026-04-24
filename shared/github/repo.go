@@ -2,6 +2,7 @@ package github
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,14 +40,20 @@ func tokenFreeGitHubURL(repoRef string) string {
 // Uses GIT_CONFIG_COUNT / GIT_CONFIG_KEY_N / GIT_CONFIG_VALUE_N so the token
 // never appears on the command line (which would leak via `ps`). Returns nil
 // when no token is available; callers should append to os.Environ().
+//
+// Scheme is Basic with `x-access-token:<PAT>` base64-encoded — the same shape
+// GitHub Actions' actions/checkout uses. Bearer is rejected by GitHub's Smart
+// HTTP backend with "invalid credentials" even for valid PATs (GitHub's REST
+// API accepts Bearer, the git-over-HTTPS backend does not).
 func gitAuthEnv(token string) []string {
 	if token == "" {
 		return nil
 	}
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 	return []string{
 		"GIT_CONFIG_COUNT=1",
 		"GIT_CONFIG_KEY_0=http.https://github.com/.extraheader",
-		"GIT_CONFIG_VALUE_0=AUTHORIZATION: bearer " + token,
+		"GIT_CONFIG_VALUE_0=AUTHORIZATION: basic " + basic,
 	}
 }
 
