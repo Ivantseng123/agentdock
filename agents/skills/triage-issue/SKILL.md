@@ -36,8 +36,14 @@ node <skill-path>/mantis/scripts/mantis.js get-issue <N> --full
 
 # 3. Optionally grab screenshots / attachments for visual bugs
 node <skill-path>/mantis/scripts/mantis.js list-attachments <N>
-node <skill-path>/mantis/scripts/mantis.js download-attachment <N> <file_id> --output /tmp/<name>
+node <skill-path>/mantis/scripts/mantis.js download-attachment <N> <file_id>
 ```
+
+`download-attachment` defaults to writing under the current working
+directory (`./mantis_<file_id>_<filename>`). If you pass `--output`, keep
+the path inside cwd (e.g. `--output ./screenshot.png`). Never target
+`/tmp/`, `$HOME`, or other cwd-external paths — opencode's sandbox
+auto-rejects those writes in headless mode.
 
 Incorporate the issue's description, severity, handler, and any
 relevant attachment content (use Read on downloaded images) into

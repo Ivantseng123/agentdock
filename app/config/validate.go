@@ -26,6 +26,14 @@ func Validate(cfg *Config) error {
 	if cfg.Queue.StatusInterval <= 0 {
 		errs = append(errs, "queue.status_interval must be > 0")
 	}
+	switch cfg.Queue.Store {
+	case "mem", "redis":
+	default:
+		errs = append(errs, fmt.Sprintf("queue.store must be \"mem\" or \"redis\", got %q", cfg.Queue.Store))
+	}
+	if cfg.Queue.Store == "redis" && cfg.Queue.StoreTTL <= 0 {
+		errs = append(errs, "queue.store_ttl must be > 0 when queue.store=redis")
+	}
 	if cfg.RateLimit.PerUser < 0 {
 		errs = append(errs, "rate_limit.per_user must be >= 0")
 	}

@@ -315,8 +315,13 @@ async function cmdDownloadAttachment(args) {
 
   const file = files[0];
   const filename = file.filename || '';
+  // Default to cwd, not os.tmpdir(). In AgentDock worker the cwd is a cloned
+  // git worktree and /tmp is external_directory in the opencode sandbox —
+  // writing there triggers a permission ask that headless `opencode run`
+  // auto-rejects, cascade-failing the whole session. cwd-relative is always
+  // inside the sandbox. Callers can still override via --output.
   const outputPath = parsed.options.output || path.join(
-      os.tmpdir(),
+      process.cwd(),
       filename ? `mantis_${validatedFileId}_${filename}` : `mantis_attachment_${validatedFileId}`,
     );
 
