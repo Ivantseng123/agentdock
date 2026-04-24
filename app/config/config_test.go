@@ -60,6 +60,42 @@ func TestApplyDefaults_Timeouts(t *testing.T) {
 	}
 }
 
+func TestApplyDefaults_QueueStore(t *testing.T) {
+	// Empty yaml → default "mem" + 1h TTL (back-compat, #146).
+	cfg := loadFromString(t, ``)
+	if cfg.Queue.Store != "mem" {
+		t.Errorf("default queue.store = %q, want mem", cfg.Queue.Store)
+	}
+	if cfg.Queue.StoreTTL != time.Hour {
+		t.Errorf("default queue.store_ttl = %v, want 1h", cfg.Queue.StoreTTL)
+	}
+}
+
+func TestLoadConfig_QueueStoreRedis(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  store: redis
+  store_ttl: 2h
+`)
+	if cfg.Queue.Store != "redis" {
+		t.Errorf("queue.store = %q, want redis", cfg.Queue.Store)
+	}
+	if cfg.Queue.StoreTTL != 2*time.Hour {
+		t.Errorf("queue.store_ttl = %v, want 2h", cfg.Queue.StoreTTL)
+	}
+}
+
+func TestValidate_QueueStoreUnknown(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  store: postgres
+`)
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "queue.store") {
+		t.Errorf("expected validation error for unknown store, got %v", err)
+	}
+}
+
 func TestApplyDefaults_PromptGoal(t *testing.T) {
 	cfg := loadFromString(t, ``)
 	if cfg.Prompt.Issue.Goal != defaultIssueGoal {

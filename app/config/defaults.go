@@ -41,6 +41,16 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Queue.Transport == "" {
 		cfg.Queue.Transport = "redis"
 	}
+	// Default JobStore backend is "mem" for back-compat: pre-#146 releases
+	// only shipped MemJobStore, and existing operators should not be forced
+	// to reason about Redis persistence on upgrade. Production deployments
+	// that care about surviving app restarts opt in to "redis" (see #123).
+	if cfg.Queue.Store == "" {
+		cfg.Queue.Store = "mem"
+	}
+	if cfg.Queue.StoreTTL <= 0 {
+		cfg.Queue.StoreTTL = 1 * time.Hour
+	}
 	if cfg.ChannelPriority == nil {
 		cfg.ChannelPriority = map[string]int{"default": 50}
 	}
