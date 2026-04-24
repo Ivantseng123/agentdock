@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/Ivantseng123/agentdock/compare/v2.5.1...v2.6.0) (2026-04-24)
+
+
+### Features
+
+* **ask:** include prior bot answer for multi-turn continuity ([#167](https://github.com/Ivantseng123/agentdock/issues/167)) ([c443cbe](https://github.com/Ivantseng123/agentdock/commit/c443cbeb627bb1afba186057811afa4518952a49))
+
 ## [2.5.1](https://github.com/Ivantseng123/agentdock/compare/v2.5.0...v2.5.1) (2026-04-24)
 
 
