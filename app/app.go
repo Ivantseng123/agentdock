@@ -217,7 +217,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}),
 	)
 
-	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger, availability)
+	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, repoCache, appLogger, availability)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		DedupTTL:        5 * time.Minute,
@@ -567,18 +567,29 @@ func handleSocketEvent(
 		}
 		if cb.Type == slack.InteractionTypeBlockSuggestion {
 			appLogger.Info("收到搜尋建議", "phase", "接收", "action_id", cb.ActionID, "value", cb.Value)
-			// Any external-selector action that expects repo suggestions goes
-			// through HandleRepoSuggestion. Issue uses "repo_search"; Ask uses
-			// "ask_repo" (fallback when the channel has no repos configured).
-			if cb.ActionID == "repo_search" || cb.ActionID == "ask_repo" {
-				options := wf.HandleRepoSuggestion(cb.Value)
-				appLogger.Info("Repo 搜尋結果", "phase", "處理中", "query", cb.Value, "count", len(options))
-				var opts []*slack.OptionBlockObject
-				for _, r := range options {
-					opts = append(opts, slack.NewOptionBlockObject(r, slack.NewTextBlockObject("plain_text", r, false, false), nil))
+			// ackSuggestions builds an OptionsResponse from a list of strings
+			// and ACKs the BlockSuggestion request. Shared by every
+			// external_select handler below.
+			ackSuggestions := func(label string, options []string) {
+				appLogger.Info(label, "phase", "處理中", "query", cb.Value, "count", len(options))
+				opts := make([]*slack.OptionBlockObject, 0, len(options))
+				for _, v := range options {
+					opts = append(opts, slack.NewOptionBlockObject(v, slack.NewTextBlockObject("plain_text", v, false, false), nil))
 				}
 				sm.Ack(*evt.Request, slack.OptionsResponse{Options: opts})
-			} else {
+			}
+			switch cb.ActionID {
+			case "repo_search", "ask_repo":
+				// Issue uses "repo_search"; Ask uses "ask_repo" (fallback
+				// when the channel has no repos configured).
+				ackSuggestions("Repo 搜尋結果", wf.HandleRepoSuggestion(cb.Value))
+			case "branch_select", "ask_branch":
+				// The branch selector auto-upgrades to external_select when
+				// a repo has >100 branches (issue #153). The suggestion
+				// handler resolves the pending by the selector's own
+				// message TS and filters that repo's branches.
+				ackSuggestions("Branch 搜尋結果", wf.HandleBranchSuggestion(cb.Container.MessageTs, cb.Value))
+			default:
 				sm.Ack(*evt.Request)
 			}
 			return

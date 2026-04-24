@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type Workflow struct {
 	slack         workflow.SlackPort
 	handler       *slackclient.Handler
 	repoDiscovery *ghclient.RepoDiscovery
+	repoCache     *ghclient.RepoCache
 	logger        *slog.Logger
 	availability  queue.WorkerAvailability
 
@@ -45,12 +47,15 @@ type Workflow struct {
 }
 
 // NewWorkflow constructs the thin shim. cfg is used for channel-binding
-// checks; repoDiscovery is kept for HandleRepoSuggestion.
+// checks; repoDiscovery is kept for HandleRepoSuggestion; repoCache is kept
+// for HandleBranchSuggestion (the type-ahead that fires when a repo has
+// more than selectorStaticSelectMax branches — see issue #153).
 func NewWorkflow(
 	cfg *config.Config,
 	dispatcher *workflow.Dispatcher,
 	slack workflow.SlackPort,
 	repoDiscovery *ghclient.RepoDiscovery,
+	repoCache *ghclient.RepoCache,
 	logger *slog.Logger,
 	availability queue.WorkerAvailability,
 ) *Workflow {
@@ -59,6 +64,7 @@ func NewWorkflow(
 		dispatcher:     dispatcher,
 		slack:          slack,
 		repoDiscovery:  repoDiscovery,
+		repoCache:      repoCache,
 		logger:         logger,
 		availability:   availability,
 		pending:        make(map[string]*workflow.Pending),
@@ -147,6 +153,83 @@ func (w *Workflow) HandleRepoSuggestion(query string) []string {
 		return nil
 	}
 	return repos
+}
+
+// maxBranchSuggestions caps the type-ahead result list. External_select is
+// also bounded at 100 options per Slack's own API limit.
+const maxBranchSuggestions = 100
+
+// HandleBranchSuggestion returns type-ahead branch options for the branch
+// selector, which auto-upgrades to external_select when a repo has more
+// than selectorStaticSelectMax branches (issue #153).
+//
+// selectorMsgTS is used to look up the pending Issue/Ask state; the
+// SelectedRepo on that state determines which repo's branches to filter.
+// The filter is a case-insensitive substring match; an empty query returns
+// the first maxBranchSuggestions branches.
+func (w *Workflow) HandleBranchSuggestion(selectorMsgTS, query string) []string {
+	if w.repoCache == nil {
+		return nil
+	}
+	w.mu.Lock()
+	pending, ok := w.pending[selectorMsgTS]
+	w.mu.Unlock()
+	if !ok || pending == nil {
+		return nil
+	}
+	repo := selectedRepoFromState(pending.State)
+	if repo == "" {
+		w.logger.Warn("HandleBranchSuggestion: no SelectedRepo on pending", "phase", "跳過", "request_id", pending.RequestID)
+		return nil
+	}
+	// Use LocalPath (not EnsureRepo) on this hot path. EnsureRepo takes
+	// rc.mu and — past the maxAge window — runs `git fetch --all --prune`
+	// synchronously; both blow Slack's ~3s BlockSuggestion deadline and
+	// serialise concurrent flows. The branch selector only renders AFTER
+	// the workflow prep step already called EnsureRepo, so by the time
+	// type-ahead fires, a bare clone is on disk and fresh enough. The
+	// (rare) path-missing case is treated as a race: nil + warn.
+	repoPath, exists := w.repoCache.LocalPath(repo)
+	if !exists {
+		w.logger.Warn("Branch 搜尋: 本地 clone 不存在，跳過建議", "phase", "跳過", "repo", repo, "path", repoPath)
+		return nil
+	}
+	branches, err := w.repoCache.ListBranches(repoPath)
+	if err != nil {
+		w.logger.Warn("Branch 搜尋: ListBranches 失敗", "phase", "失敗", "error", err, "repo", repo)
+		return nil
+	}
+	return filterBranches(branches, query, maxBranchSuggestions)
+}
+
+// selectedRepoFromState extracts SelectedRepo from a Pending.State via the
+// workflow.BranchStateReader interface (implemented by *issueState and
+// *askState). Unrecognised states return "". Using the narrow interface
+// keeps app/bot free of per-state type assertions — adding a new branch-
+// bearing workflow just requires implementing BranchSelectedRepo().
+func selectedRepoFromState(state any) string {
+	if bs, ok := state.(workflow.BranchStateReader); ok {
+		return bs.BranchSelectedRepo()
+	}
+	return ""
+}
+
+// filterBranches returns up to limit branches whose names contain query
+// (case-insensitive substring). An empty query means "no filter" — the
+// first limit branches are returned in their existing order.
+func filterBranches(branches []string, query string, limit int) []string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	out := make([]string, 0, limit)
+	for _, b := range branches {
+		if q != "" && !strings.Contains(strings.ToLower(b), q) {
+			continue
+		}
+		out = append(out, b)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // dSelectorLabel maps task-type values to friendly display labels used when

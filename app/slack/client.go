@@ -301,10 +301,9 @@ const (
 type selectorRenderKind int
 
 const (
-	renderButton          selectorRenderKind = iota // actions block of buttons
-	renderStaticSelect                              // static_select dropdown
-	renderExternalSelect                            // external (type-ahead) select
-	renderStaticTruncated                           // static_select with options capped to selectorStaticSelectMax
+	renderButton         selectorRenderKind = iota // actions block of buttons
+	renderStaticSelect                             // static_select dropdown
+	renderExternalSelect                           // external (type-ahead) select
 )
 
 // selectorRenderMode decides which Slack rendering fits a spec based on the
@@ -326,7 +325,12 @@ func selectorRenderMode(spec SmartSelectorSpec) selectorRenderKind {
 		return renderButton
 	}
 	if len(spec.Options) > selectorStaticSelectMax {
-		return renderStaticTruncated
+		// static_select has a hard 100-option cap. Rather than truncate
+		// (issue #153 — users on a 150-branch repo couldn't see branches
+		// 100-149), auto-upgrade to a type-ahead external_select. Callers
+		// carry an action_id that app.go's BlockSuggestion router maps to
+		// a per-flow suggestion handler (e.g. HandleBranchSuggestion).
+		return renderExternalSelect
 	}
 	return renderStaticSelect
 }
@@ -340,18 +344,19 @@ func (c *Client) PostSmartSelector(channelID, threadTS string, spec SmartSelecto
 	}
 	switch selectorRenderMode(spec) {
 	case renderExternalSelect:
+		if !spec.Searchable && len(spec.Options) > selectorStaticSelectMax {
+			// Capability promotion, not a failure/degradation — phase stays
+			// on the normal-path "處理中" tag so ops dashboards don't alert
+			// on this.
+			c.logger.Info("selector options 超過 static_select 上限，升級為 type-ahead",
+				"phase", "處理中",
+				"action_id", spec.ActionID,
+				"options", len(spec.Options),
+			)
+		}
 		return c.postExternalSelectBlock(channelID, threadTS, spec)
 	case renderButton:
 		return c.postButtonSelectorBlock(channelID, threadTS, spec)
-	case renderStaticTruncated:
-		c.logger.Warn("selector options 超過上限，已截斷至前 100 項",
-			"phase", "降級",
-			"action_id", spec.ActionID,
-			"original", len(spec.Options),
-			"capped", selectorStaticSelectMax,
-		)
-		spec.Options = spec.Options[:selectorStaticSelectMax]
-		return c.postStaticSelectBlock(channelID, threadTS, spec)
 	default: // renderStaticSelect
 		return c.postStaticSelectBlock(channelID, threadTS, spec)
 	}

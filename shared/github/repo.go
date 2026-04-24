@@ -370,6 +370,21 @@ func (rc *RepoCache) dirName(repoRef string) string {
 	return fmt.Sprintf("%x", h[:8])
 }
 
+// LocalPath returns the expected on-disk bare-clone path for repoRef and
+// whether it already exists. Unlike EnsureRepo, it takes no lock and does
+// no I/O beyond an os.Stat — safe for latency-sensitive callers like
+// Slack BlockSuggestion handlers (issue #153) that must answer within
+// Slack's ~3s deadline and can't afford the fetch --all --prune path.
+// Returns (path, true) when a bare clone exists, (path, false) otherwise;
+// callers that need a guaranteed-fresh clone should still use EnsureRepo.
+func (rc *RepoCache) LocalPath(repoRef string) (string, bool) {
+	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
+	if _, err := os.Stat(filepath.Join(localPath, "HEAD")); err != nil {
+		return localPath, false
+	}
+	return localPath, true
+}
+
 // SanitizeURL strips embedded credentials from a URL for safe logging.
 func SanitizeURL(raw string) string {
 	// Matches https://TOKEN@github.com/... or https://user:pass@host/...

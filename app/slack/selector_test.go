@@ -96,16 +96,16 @@ func TestSelectorRenderMode_Thresholds(t *testing.T) {
 			reason: "100 options fits static_select",
 		},
 		{
-			name:   "101 options -> static_truncated",
+			name:   "101 options -> external_select",
 			spec:   SmartSelectorSpec{Options: buildOptions(101)},
-			want:   renderStaticTruncated,
-			reason: "beyond static_select cap; callee will slice to 100",
+			want:   renderExternalSelect,
+			reason: "beyond static_select cap; auto-upgrade to type-ahead (issue #153)",
 		},
 		{
-			name:   "500 options -> static_truncated",
+			name:   "500 options -> external_select",
 			spec:   SmartSelectorSpec{Options: buildOptions(500)},
-			want:   renderStaticTruncated,
-			reason: "any very-large list degrades gracefully",
+			want:   renderExternalSelect,
+			reason: "large lists degrade to type-ahead rather than silent truncation",
 		},
 	}
 

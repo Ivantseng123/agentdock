@@ -39,6 +39,19 @@ type IssueCreator interface {
 	CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (string, error)
 }
 
+// BranchStateReader is implemented by workflow states that carry a
+// SelectedRepo. app/bot uses it in HandleBranchSuggestion to read the repo
+// off a *Pending.State without pulling the concrete state structs across
+// the package boundary (issue #153).
+//
+// Implementations must make BranchSelectedRepo() safe to call without the
+// workflow lock — SelectedRepo is write-once (set when the user picks a
+// repo) and stable thereafter, so the BlockSuggestion hot path can read
+// it concurrently with the normal HandleSelection flow.
+type BranchStateReader interface {
+	BranchSelectedRepo() string
+}
+
 // GitHubPR abstracts the PR endpoints PR Review needs for URL validation.
 // PRReviewWorkflow uses this to verify a URL references a real, accessible PR
 // before submitting work. The concrete type (shared/github.Client) lives in

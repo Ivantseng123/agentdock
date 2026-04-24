@@ -96,7 +96,7 @@ func TestHandleTrigger_NoThread_PostsWarning(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
 
-	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil, nil)
 
 	wf.HandleTrigger(slackclient.TriggerEvent{
 		ChannelID: "C1",
@@ -131,7 +131,7 @@ func TestHandleTrigger_UnboundChannel_Silent(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
 
-	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil, nil)
 
 	wf.HandleTrigger(slackclient.TriggerEvent{
 		ChannelID: "C_UNBOUND",
@@ -152,7 +152,7 @@ func TestExecuteStep_Submit_CallsHook(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
-	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil, nil)
 
 	called := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -175,7 +175,7 @@ func TestExecuteStep_Error_PostsMessage(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
-	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil, nil)
 
 	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1"}
 	step := workflow.NextStep{Kind: workflow.NextStepError, ErrorText: "boom"}
@@ -205,7 +205,7 @@ func TestHandleSelection_DSelector_DispatchesWorkflow(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, nil, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, nil, nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -251,7 +251,7 @@ func TestExecuteStep_OpenModal_FirstStepStoresPending(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	p := &workflow.Pending{
 		ChannelID: "C1", ThreadTS: "T1",
@@ -292,7 +292,7 @@ func TestHandleDescriptionAction_ModalFail_ConsumesPending(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
 	logger := slog.Default()
-	wf := NewWorkflow(cfg, disp, sl, nil, logger, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, logger, nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -390,7 +390,7 @@ func TestSubmit_NoWorkers_HardRejects(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), avail)
 
 	onSubmitCalled := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -431,7 +431,7 @@ func TestSubmit_BusyEnqueueOK_SetsBusyHint(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), avail)
 
 	var gotPending *workflow.Pending
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -462,7 +462,7 @@ func TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), avail)
 
 	onSubmitCalled := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -552,7 +552,7 @@ func TestHandleSelection_RapidDoubleClick_DispatchesOnce(t *testing.T) {
 	fake := &countingSelectionWorkflow{waitUntil: gate}
 	reg.Register(fake)
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
 
 	const selectorTS = "sel-double"
@@ -607,7 +607,7 @@ func TestHandleSelection_OpenModal_ReinsertsPending(t *testing.T) {
 	}
 	reg.Register(fake)
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	p := &workflow.Pending{
 		ChannelID: "C1", ThreadTS: "T1", TaskType: "issue",
@@ -639,7 +639,7 @@ func TestExecuteStep_InvalidatedPending_DoesNotPostSelector(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1"}
 	p.Invalidate()
@@ -671,7 +671,7 @@ func TestExecuteStep_InvalidatedPending_DoesNotSubmit(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) { submitted = true })
@@ -713,7 +713,7 @@ func TestHandleBackToRepo_InvalidatesOldPending(t *testing.T) {
 	}
 	reg.Register(fake)
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	const selectorTS = "sel-back"
 	oldPending := &workflow.Pending{
@@ -786,7 +786,7 @@ func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), avail)
 
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
 
@@ -812,7 +812,7 @@ func TestStorePending_Timeout_CondensesThreadKeepingDSelectorAck(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 	// Per-instance timeout override — no package-level state touched so
 	// parallel tests can't race on it.
 	wf.pendingTimeout = 40 * time.Millisecond
@@ -885,7 +885,7 @@ func TestHandleBackToRepo_DeletesStaleRepoAck(t *testing.T) {
 	}
 	reg.Register(fake)
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	const branchTS = "branch-sel-1"
 	const repoAckTS = "repo-ack-1"
@@ -926,7 +926,7 @@ func TestHandleModalClosed_DescriptionPhase_RewindsWithoutSubmit(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) { submitted = true })
@@ -1010,7 +1010,7 @@ func TestHandleDescriptionAction_PhaseStuckInModal_RewindsBeforeDispatch(t *test
 	}
 	reg.Register(fake)
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) { submitted = true })
@@ -1057,7 +1057,7 @@ func TestHandleDescriptionAction_SkipWhileStuckInModal_RewindsBeforeDispatch(t *
 	}
 	reg.Register(fake)
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
 
 	const selectorTS = "desc-sel-skip-stuck"
@@ -1092,7 +1092,7 @@ func TestHandleModalClosed_PRReviewModal_PostsCancelAndClearsDedup(t *testing.T)
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
 		t.Error("cancelled PR Review modal must not trigger submit")
 	})
@@ -1144,7 +1144,7 @@ func TestHandleModalClosed_IrreversiblePhase_FallsThroughToSubmit(t *testing.T) 
 	}
 	reg.Register(fake)
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, slog.Default(), nil)
 
 	const selectorTS = "unknown-modal-1"
 	p := &workflow.Pending{

@@ -50,6 +50,15 @@ type askState struct {
 	priorAnswerFetchAttempted bool
 }
 
+// BranchSelectedRepo satisfies workflow.BranchStateReader so app/bot can
+// read the repo off a Pending.State without depending on askState.
+func (s *askState) BranchSelectedRepo() string {
+	if s == nil {
+		return ""
+	}
+	return s.SelectedRepo
+}
+
 // NewAskWorkflow constructs a workflow instance.
 func NewAskWorkflow(cfg *config.Config, slack SlackPort, repoCache *ghclient.RepoCache, logger *slog.Logger) *AskWorkflow {
 	if cfg == nil || slack == nil || logger == nil {

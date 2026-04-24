@@ -34,6 +34,15 @@ type issueState struct {
 	RepoWasPicked  bool
 }
 
+// BranchSelectedRepo satisfies workflow.BranchStateReader so app/bot can
+// read the repo off a Pending.State without depending on issueState.
+func (s *issueState) BranchSelectedRepo() string {
+	if s == nil {
+		return ""
+	}
+	return s.SelectedRepo
+}
+
 // NewIssueWorkflow constructs a workflow instance. All dependencies are
 // required. Panics on nil pointers to fail fast at startup.
 func NewIssueWorkflow(
