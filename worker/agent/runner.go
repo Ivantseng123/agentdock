@@ -188,7 +188,19 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 		}
 		return strings.TrimSpace(string(data)), nil
 	}
-	return strings.TrimSpace(output), nil
+	// Exit 0 + empty stdout is silent failure (e.g. opencode run auto-rejecting
+	// a permission ask and cascade-collapsing the session). Surface stderr tail
+	// so the next time this happens, log alone is enough to diagnose without
+	// kubectl exec'ing into the worker.
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		stderrTail := strings.TrimSpace(stderr.String())
+		if len(stderrTail) > 2000 {
+			stderrTail = "…" + stderrTail[len(stderrTail)-2000:]
+		}
+		logger.Warn("Agent exit 0 但 stdout 空", "phase", "失敗", "command", agent.Command, "stderr_tail", stderrTail)
+	}
+	return trimmed, nil
 }
 
 // readOutput routes stdout through the appropriate reader based on stream config.

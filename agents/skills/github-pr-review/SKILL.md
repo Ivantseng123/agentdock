@@ -26,11 +26,18 @@ The helper `agentdock pr-review-helper` is on PATH (it is this worker's binary).
 ### 1. Fingerprint the repo
 
 ```bash
-agentdock pr-review-helper fingerprint --pr-url "$PR_URL" > /tmp/fp.json
+agentdock pr-review-helper fingerprint --pr-url "$PR_URL"
 ```
 
-Read `/tmp/fp.json`. It contains `language`, `confidence`, `style_sources`,
-`test_runner`, `framework`, `pr_touched_languages`, `pr_subprojects`.
+The helper prints the fingerprint JSON directly to stdout; parse it from
+there. It contains `language`, `confidence`, `style_sources`, `test_runner`,
+`framework`, `pr_touched_languages`, `pr_subprojects`.
+
+Do NOT redirect to `/tmp/fp.json` or any path outside the current working
+directory — opencode's sandbox treats cwd-external writes as
+`external_directory` asks, and headless `opencode run` auto-rejects them,
+cascade-failing the whole session. If you need the output in a file, write
+it inside cwd (e.g. `./fp.json`).
 
 Why: reviewing generic code without knowing the project's conventions produces
 boilerplate feedback. The fingerprint tells you what rules to apply.

@@ -16,6 +16,7 @@ Overview, architecture, build/run, tests, and release flow live in `README.md` a
 - **Slack `invalid_blocks`:** do not combine `MsgOptionMetadata` with `MsgOptionBlocks` in the same post — they reject silently together.
 - **Full clone required for branch listing.** Shallow clones can't enumerate branches. `shared/github/repo.go` uses `fetch --all --prune`; keep it that way.
 - **Reporter tag is plain text.** Slack display name ≠ GitHub handle. Never render `@username` into issue bodies.
+- **Worker may run on a user's real machine, not an isolated pod.** Do NOT propose flags / settings that disable agent sandboxing on the host (e.g. `opencode --dangerously-skip-permissions`, `claude --dangerously-skip-permissions`, granting blanket write access). Such flags would let the agent touch `$HOME`, `/etc`, SSH keys, etc. on the operator's box. Solutions for permission/sandbox issues must work in BOTH worker-in-pod and worker-on-laptop deployments — prefer fixing skill/prompt instructions or scoping cwd-relative writes over loosening the agent's host permissions.
 
 ## Product Positioning
 
