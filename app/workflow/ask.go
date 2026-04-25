@@ -416,6 +416,10 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 
 const askMaxChars = 38000
 
+// askFallbackBanner is the transparency banner prepended to answers
+// produced by the missing-marker fallback path. Spec §Slack Rendering.
+const askFallbackBanner = ":warning: 請驗證輸出答案,AGENT 並未遵守輸出格式\n\n"
+
 // askInlineThreshold is the char length above which the answer goes into
 // an uploaded .md file instead of the Slack message body. 2000 keeps most
 // replies inline while packaging long-form answers so the channel isn't
@@ -451,11 +455,17 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 	}
 
 	answer := parsed.Answer
+	status := "success"
+	if parsed.ResultSource == ResultSourceRawFallback {
+		answer = askFallbackBanner + answer
+		status = "fallback_raw"
+	}
+
 	if len(answer) > askMaxChars {
 		answer = answer[:askMaxChars] + "\n…(已截斷)"
 	}
 
-	metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "success").Inc()
+	metrics.WorkflowCompletionsTotal.WithLabelValues("ask", status).Inc()
 	return w.post(job, answer)
 }
 
