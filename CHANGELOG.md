@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.7.0](https://github.com/Ivantseng123/agentdock/compare/v2.6.3...v2.7.0) (2026-04-25)
+
+
+### Features
+
+* **app:** wire RedisJobStore via config + rehydrate ([#176](https://github.com/Ivantseng123/agentdock/issues/176)) ([6eebd8b](https://github.com/Ivantseng123/agentdock/commit/6eebd8b74a21a514dd4b6142155b7e49502f2983))
+* **github:** strip PAT from bare clone's .git/config ([edfa068](https://github.com/Ivantseng123/agentdock/commit/edfa068132c4ae61d01978847c62c9d9d1e7bcde))
+* **logging,workflow:** redact secrets from parse-failure logs ([f2da90f](https://github.com/Ivantseng123/agentdock/commit/f2da90fcf8bf072fd59ada1919f6712e6b1686c2))
+* **prompt:** add security guardrail block to system prompt ([2cb9515](https://github.com/Ivantseng123/agentdock/commit/2cb951590e29fe72c4ac038c66f0ccb273fbbbc9))
+* **skills:** add company-context skill for org + product-name lookup ([2365a36](https://github.com/Ivantseng123/agentdock/commit/2365a36275369622cd731c9ab2db9f1abee667d2))
+* **worker,preflight:** gate startup on git &gt;= 2.31 for env-based auth ([c66a5c6](https://github.com/Ivantseng123/agentdock/commit/c66a5c663f5f47e4432672c3645b3038441bd6e7))
+* **workflow:** add Ask missing-marker fallback to parser ([9499577](https://github.com/Ivantseng123/agentdock/commit/949957743952341b39d6b4cf5dc11366d92fe02b))
+* **workflow:** Ask missing-marker fallback with transparency banner ([9ef00c5](https://github.com/Ivantseng123/agentdock/commit/9ef00c5cdbaae0acc9f0d31439d21f628c0a9dd8))
+* **workflow:** wire Ask fallback banner and metric in HandleResult ([4f68a9c](https://github.com/Ivantseng123/agentdock/commit/4f68a9cb6605c7ee21989e8508543fde5f6a6a22))
+
+
+### Bug Fixes
+
+* **github:** close clone-time argv leak by routing clone through gitAuthEnv ([0b85532](https://github.com/Ivantseng123/agentdock/commit/0b855329543c329c330e354b010a8d3a2904a787))
+* **github:** use Basic x-access-token scheme; Bearer rejected by git backend ([d26a522](https://github.com/Ivantseng123/agentdock/commit/d26a522deabd3c6aaa804397c3d1744528158bd0))
+* **prompt:** cover x-access-token URL form in guardrail example ([55add2e](https://github.com/Ivantseng123/agentdock/commit/55add2e893ebff630624e7b91c03d3f96bb6d1cf))
+
 ## [2.6.3](https://github.com/Ivantseng123/agentdock/compare/v2.6.2...v2.6.3) (2026-04-24)
 
 
