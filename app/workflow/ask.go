@@ -448,17 +448,19 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 		}
 		w.logger.Warn("ask parse failed", "phase", "失敗", "output", truncated, "err", err)
 		metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "parse_failed").Inc()
-		// Intentionally keep r.Status="completed" — Ask is best-effort with no
-		// retry lane, so letting the listener clear dedup on this path is
-		// correct. IssueWorkflow flips to "failed" to gate its retry button.
-		return w.post(job, fmt.Sprintf(":x: 解析失敗：%v", err))
+		// err != nil only when stdout fails the syntactic gate (truly empty
+		// or below askFallbackMinLength). Every other parse-failure shape now
+		// routes through fallback with a fallback_* ResultSource. Ask remains
+		// best-effort with no retry lane; r.Status stays "completed" so the
+		// listener clears dedup. Spec 2026-04-26-ask-fallback-extension §HandleResult.
+		return w.post(job, ":x: Agent 沒有產生任何答案")
 	}
 
 	answer := parsed.Answer
 	status := "success"
-	if parsed.ResultSource == ResultSourceRawFallback {
+	if parsed.ResultSource != ResultSourceSchema {
 		answer = askFallbackBanner + answer
-		status = "fallback_raw"
+		status = parsed.ResultSource
 	}
 
 	if len(answer) > askMaxChars {

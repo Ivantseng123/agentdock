@@ -3,6 +3,7 @@
 **Date:** 2026-04-25
 **Status:** Draft (revised after design grill)
 **Issue:** TBD
+**Reversed in part by:** [`2026-04-26-ask-fallback-extension-design.md`](./2026-04-26-ask-fallback-extension-design.md) — §Ask Fallback Policy → Trigger Condition #2, §Acceptance Criteria #3, and §Design Decisions Resolved #2 are no longer in force. Ask fallback now covers all parse-failure shapes, with categorised metric labels for observability.
 
 ## Problem
 

@@ -77,18 +77,21 @@ func TestIssueHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 // ── AskWorkflow ───────────────────────────────────────────────────────────────
 
 func TestAskHandleResult_ParseFail_RedactsSecret(t *testing.T) {
-	const fakeSecret = "supersecret-ask-xyz789"
+	// Under the 2026-04-26 fallback extension, ask's parse-fail log only
+	// fires for stdout that fails the syntactic gate (truly empty / below
+	// askFallbackMinLength = 10 runes). Driver therefore uses a short raw
+	// output that equals the secret. The secret length must be >= the
+	// shared/logging minRedactLength (6 bytes) AND the whole stdout must
+	// remain under 10 runes; "ASKXYZ" (6 bytes) satisfies both.
+	const fakeSecret = "ASKXYZ"
 	cfg := cfgWithSecret(fakeSecret)
 	var buf bytes.Buffer
 	w := NewAskWorkflow(cfg, newFakeSlackPort(), nil, captureLogger(&buf))
 
 	state := &queue.JobState{Job: &queue.Job{TaskType: "ask"}}
 	result := &queue.JobResult{
-		Status: "completed",
-		// Marker present + malformed JSON triggers the strict parse-fail path
-		// (the missing-marker fallback intentionally does not cover this case;
-		// spec §Design Decisions Resolved #2).
-		RawOutput: "===ASK_RESULT===\nbad json with token " + fakeSecret + " inside",
+		Status:    "completed",
+		RawOutput: fakeSecret,
 	}
 	_ = w.HandleResult(context.Background(), state, result)
 
@@ -102,13 +105,13 @@ func TestAskHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 }
 
 func TestAskHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
-	cfg := cfgWithSecret("supersecret-ask-xyz789")
+	cfg := cfgWithSecret("ASKXYZ")
 	var buf bytes.Buffer
 	w := NewAskWorkflow(cfg, newFakeSlackPort(), nil, captureLogger(&buf))
 
-	// No newline so the slog text handler does not escape it; the assertion
-	// uses substring containment on the rendered log line.
-	const harmlessOutput = "===ASK_RESULT=== not valid json at all"
+	// Short stdout with no secret. Same gate constraint as the redaction test
+	// above: the parse-fail path is now reserved for sub-min-length stdout.
+	const harmlessOutput = "harmless"
 	state := &queue.JobState{Job: &queue.Job{TaskType: "ask"}}
 	result := &queue.JobResult{
 		Status:    "completed",
