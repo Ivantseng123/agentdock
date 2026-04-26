@@ -257,6 +257,41 @@ func TestValidateAndPost_StaleCommit422(t *testing.T) {
 	}
 }
 
+func TestValidateAndPost_Generic422_NotStaleCommit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/files") {
+			_, _ = io.WriteString(w, `[{"filename":"a.go","status":"modified","patch":"@@ -1 +1,2 @@\n a\n+b\n"}]`)
+			return
+		}
+		w.WriteHeader(422)
+		_, _ = io.WriteString(w, `{"message":"Body is required"}`)
+	}))
+	defer srv.Close()
+
+	r := ReviewJSON{
+		Summary: "ok", SeveritySummary: SummaryMinor,
+		Comments: []CommentJSON{
+			{Path: "a.go", Line: 2, Side: SideRight, Body: "nit", Severity: SeverityNit},
+		},
+	}
+	_, err := ValidateAndPost(context.Background(), ValidateAndPostInput{
+		Review:   &r,
+		PRURL:    "https://github.com/x/y/pull/42",
+		CommitID: "abc",
+		Token:    "tok",
+		APIBase:  srv.URL,
+	})
+	if err == nil {
+		t.Fatal("want error on 422")
+	}
+	if strings.Contains(err.Error(), ErrGitHubStaleCommit) {
+		t.Errorf("non-stale 422 should not be reported as stale commit, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Body is required") {
+		t.Errorf("expected GitHub message in error, got %v", err)
+	}
+}
+
 func TestValidateAndPost_Unauth401(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
