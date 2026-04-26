@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.1.0](https://github.com/Ivantseng123/agentdock/compare/v3.0.0...v3.1.0) (2026-04-26)
+
+
+### Features
+
+* **config:** 把 agent 預設 timeout 拉到 30m，watchdog 配套 35m ([26fd672](https://github.com/Ivantseng123/agentdock/commit/26fd67266e39fb3960de394e4fcbe6b3af97a710))
+* **config:** 把 agent 預設 timeout 拉到 30m，watchdog 配套 35m ([498bc1f](https://github.com/Ivantseng123/agentdock/commit/498bc1f2e1ff498d4da7ddf2cd15827df966283f))
+
 ## [3.0.0](https://github.com/Ivantseng123/agentdock/compare/v2.7.0...v3.0.0) (2026-04-26)
 
 
