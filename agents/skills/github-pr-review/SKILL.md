@@ -67,15 +67,24 @@ better than fake feedback.
 
 ### 3. Analyze the diff
 
-Fetch the diff:
+Fetch the diff via GitHub (authoritative — uses GitHub's own merge-base):
 
 ```bash
-# The helper also fetches this internally; you can inspect it directly for planning.
-gh_api_url="https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files"
+# Whole-PR unified diff:
+gh pr diff "$PR_NUMBER"
+
+# Per-file with patches (the helper also calls this internally):
+gh api "repos/{owner}/{repo}/pulls/{number}/files"
 ```
 
-Or just read files on disk (they're already checked out at PR head). Use
-`git diff origin/<base>..HEAD` if you need to see the exact hunk shape.
+Or read files on disk — they're checked out at PR head.
+
+**Do NOT use `git diff origin/<base>..HEAD`.** The worker's bare repo is a
+long-lived shared cache: `origin/main` (and other base refs) get fetched
+and updated to GitHub's *current* tip on every job. If the PR was opened a
+while ago and `<base>` has advanced since, `origin/<base>..HEAD` reverses
+in those new commits and you'll comment on lines that aren't in the PR's
+real diff. Always anchor the diff to the PR API, not local refs.
 
 For each concerning change, prepare a comment candidate:
 - `path`: repo-relative file path
