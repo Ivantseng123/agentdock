@@ -57,7 +57,7 @@ func ApplyDefaults(cfg *Config) {
 		cfg.ChannelPriority = map[string]int{"default": 50}
 	}
 	if cfg.Queue.JobTimeout <= 0 {
-		cfg.Queue.JobTimeout = 20 * time.Minute
+		cfg.Queue.JobTimeout = 35 * time.Minute
 	}
 	if cfg.Queue.AgentIdleTimeout <= 0 {
 		cfg.Queue.AgentIdleTimeout = 5 * time.Minute

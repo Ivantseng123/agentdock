@@ -108,7 +108,7 @@ queue:
   transport: redis                    # 擴充點；目前僅支援 redis
   store: redis                        # JobStore backend：redis（預設）/ mem
   store_ttl: 1h                       # store=redis 時每筆紀錄的 TTL（store=mem 忽略）
-  job_timeout: 20m                    # watchdog：job 生命週期上限
+  job_timeout: 35m                    # watchdog：job 生命週期上限
   agent_idle_timeout: 5m              # stream-json 無事件多久視為卡住
   prepare_timeout: 3m
   cancel_timeout: 60s

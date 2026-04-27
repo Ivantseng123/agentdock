@@ -41,7 +41,7 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Queue.Transport = "redis"
 	}
 	if cfg.Queue.JobTimeout <= 0 {
-		cfg.Queue.JobTimeout = 20 * time.Minute
+		cfg.Queue.JobTimeout = 35 * time.Minute
 	}
 	if cfg.Queue.AgentIdleTimeout <= 0 {
 		cfg.Queue.AgentIdleTimeout = 5 * time.Minute
