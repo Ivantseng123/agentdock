@@ -108,7 +108,7 @@ queue:
   transport: redis                    # extension point; only redis is supported today
   store: redis                        # JobStore backend: redis (default) / mem
   store_ttl: 1h                       # per-record TTL when store=redis (ignored when store=mem)
-  job_timeout: 20m                    # watchdog: max job lifecycle
+  job_timeout: 35m                    # watchdog: max job lifecycle
   agent_idle_timeout: 5m              # stream-json: no-event timeout
   prepare_timeout: 3m
   cancel_timeout: 60s
