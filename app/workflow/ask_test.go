@@ -9,7 +9,9 @@ import (
 
 	"github.com/Ivantseng123/agentdock/app/config"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestAskWorkflow_Type(t *testing.T) {
@@ -711,5 +713,118 @@ func TestAskWorkflow_BuildJob_NoOptIn_PriorAnswerEmpty(t *testing.T) {
 	if len(job.PromptContext.PriorAnswer) != 0 {
 		t.Errorf("expected empty PriorAnswer without opt-in, got %d entries",
 			len(job.PromptContext.PriorAnswer))
+	}
+}
+
+// TestAskWorkflow_HandleResult_FallbackPrependsBannerAndIncMetric exercises
+// the four fallback paths (marker missing / segments without JSON /
+// unmarshal failure / empty answer): each must prepend the transparency
+// banner and increment the matching fallback_* metric label. Spec
+// 2026-04-26-ask-fallback-extension §HandleResult, §Metrics.
+func TestAskWorkflow_HandleResult_FallbackPrependsBannerAndIncMetric(t *testing.T) {
+	cases := []struct {
+		name      string
+		rawOutput string
+		wantLabel string
+	}{
+		{
+			name:      "marker_missing",
+			rawOutput: "Plain answer with enough length to clear the syntactic gate.",
+			wantLabel: "fallback_marker_missing",
+		},
+		{
+			name:      "segments_no_json",
+			rawOutput: "===ASK_RESULT===\nThis body never produced a JSON object even though the marker appeared.",
+			wantLabel: "fallback_segments_no_json",
+		},
+		{
+			name:      "unmarshal",
+			rawOutput: "===ASK_RESULT===\n{not valid json at all}",
+			wantLabel: "fallback_unmarshal",
+		},
+		{
+			name:      "empty_answer",
+			rawOutput: "===ASK_RESULT===\n{\"answer\":\"\"}",
+			wantLabel: "fallback_empty_answer",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := testutil.ToFloat64(metrics.WorkflowCompletionsTotal.WithLabelValues("ask", tc.wantLabel))
+
+			w, slack := newTestAskWorkflow(t)
+			job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "ask"}
+			state := &queue.JobState{Job: job}
+			result := &queue.JobResult{JobID: "j1", Status: "completed", RawOutput: tc.rawOutput}
+			if err := w.HandleResult(context.Background(), state, result); err != nil {
+				t.Fatal(err)
+			}
+
+			if len(slack.Posted) == 0 {
+				t.Fatal("nothing posted")
+			}
+			last := slack.Posted[len(slack.Posted)-1]
+			if !strings.HasPrefix(last, ":warning: 請驗證輸出答案,AGENT 並未遵守輸出格式") {
+				t.Errorf("fallback path must prepend warning banner; posted: %q", last)
+			}
+
+			after := testutil.ToFloat64(metrics.WorkflowCompletionsTotal.WithLabelValues("ask", tc.wantLabel))
+			if after-before != 1 {
+				t.Errorf("%s counter delta = %v, want 1", tc.wantLabel, after-before)
+			}
+		})
+	}
+}
+
+// TestAskWorkflow_HandleResult_TrueEmpty_PostsAgentNoAnswer pins the new
+// error-branch wording. Stdout that fails the syntactic gate (truly empty
+// or below askFallbackMinLength) is the only path that still posts an
+// :x: failure; everything else falls through to fallback. Spec
+// 2026-04-26-ask-fallback-extension §HandleResult.
+func TestAskWorkflow_HandleResult_TrueEmpty_PostsAgentNoAnswer(t *testing.T) {
+	before := testutil.ToFloat64(metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "parse_failed"))
+
+	w, slack := newTestAskWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "ask"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{JobID: "j1", Status: "completed", RawOutput: "  \n  "}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(slack.Posted) == 0 {
+		t.Fatal("nothing posted")
+	}
+	last := slack.Posted[len(slack.Posted)-1]
+	if last != ":x: Agent 沒有產生任何答案" {
+		t.Errorf("true-empty stdout must post the new wording; posted: %q", last)
+	}
+
+	after := testutil.ToFloat64(metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "parse_failed"))
+	if after-before != 1 {
+		t.Errorf("parse_failed counter delta = %v, want 1", after-before)
+	}
+}
+
+// TestAskWorkflow_HandleResult_SchemaPathHasNoBanner pins the negative
+// invariant: schema-compliant answers must NOT carry the banner. Without
+// this the fallback marker could leak into the schema path silently.
+func TestAskWorkflow_HandleResult_SchemaPathHasNoBanner(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "ask"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "===ASK_RESULT===\n{\"answer\":\"the answer is 42\"}",
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	last := slack.Posted[len(slack.Posted)-1]
+	if strings.Contains(last, ":warning: 請驗證輸出答案") {
+		t.Errorf("schema path must not carry the fallback banner; posted: %q", last)
+	}
+	if !strings.Contains(last, "the answer is 42") {
+		t.Errorf("schema path must post the parsed answer; posted: %q", last)
 	}
 }

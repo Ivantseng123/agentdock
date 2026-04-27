@@ -74,7 +74,7 @@ func TestApplyDefaults_Timeouts(t *testing.T) {
 	if cfg.SemaphoreTimeout != 30*time.Second {
 		t.Errorf("semaphore = %v", cfg.SemaphoreTimeout)
 	}
-	if cfg.Queue.JobTimeout != 20*time.Minute {
+	if cfg.Queue.JobTimeout != 35*time.Minute {
 		t.Errorf("job_timeout = %v", cfg.Queue.JobTimeout)
 	}
 }

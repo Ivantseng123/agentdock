@@ -1,5 +1,53 @@
 # Changelog
 
+## [3.1.0](https://github.com/Ivantseng123/agentdock/compare/v3.0.0...v3.1.0) (2026-04-26)
+
+
+### Features
+
+* **config:** 把 agent 預設 timeout 拉到 30m，watchdog 配套 35m ([26fd672](https://github.com/Ivantseng123/agentdock/commit/26fd67266e39fb3960de394e4fcbe6b3af97a710))
+* **config:** 把 agent 預設 timeout 拉到 30m，watchdog 配套 35m ([498bc1f](https://github.com/Ivantseng123/agentdock/commit/498bc1f2e1ff498d4da7ddf2cd15827df966283f))
+
+## [3.0.0](https://github.com/Ivantseng123/agentdock/compare/v2.7.0...v3.0.0) (2026-04-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** metric label WorkflowCompletionsTotal{workflow="ask",status="fallback_raw"} is removed and replaced by four fallback_* labels enumerated above. Dashboards keying on fallback_raw need to switch to a fallback_* regex or enumerate the new labels.
+
+### Features
+
+* **workflow:** extend Ask fallback to all parse failures with categorised metrics ([7580e1a](https://github.com/Ivantseng123/agentdock/commit/7580e1a8b76f1553fc0f2469e7023a52cb0e275b))
+* **workflow:** extend Ask fallback to cover all parse failures ([d9a4886](https://github.com/Ivantseng123/agentdock/commit/d9a48867a3e9e51c4d3fc69cb46b6e115c51eeaa))
+
+
+### Bug Fixes
+
+* **pr-review:** 修正 diff 來源與 422 錯誤訊息誤譯 ([8c0f0d0](https://github.com/Ivantseng123/agentdock/commit/8c0f0d09854ae7a0612cfcc242462f54f6f2d6b9))
+* **pr-review:** 將 diff 來源改為 PR API，並讓 422 錯誤帶出真正原因 ([d841108](https://github.com/Ivantseng123/agentdock/commit/d8411089873c3e8726b166919aecf0106ff45a42))
+
+## [2.7.0](https://github.com/Ivantseng123/agentdock/compare/v2.6.3...v2.7.0) (2026-04-25)
+
+
+### Features
+
+* **app:** wire RedisJobStore via config + rehydrate ([#176](https://github.com/Ivantseng123/agentdock/issues/176)) ([6eebd8b](https://github.com/Ivantseng123/agentdock/commit/6eebd8b74a21a514dd4b6142155b7e49502f2983))
+* **github:** strip PAT from bare clone's .git/config ([edfa068](https://github.com/Ivantseng123/agentdock/commit/edfa068132c4ae61d01978847c62c9d9d1e7bcde))
+* **logging,workflow:** redact secrets from parse-failure logs ([f2da90f](https://github.com/Ivantseng123/agentdock/commit/f2da90fcf8bf072fd59ada1919f6712e6b1686c2))
+* **prompt:** add security guardrail block to system prompt ([2cb9515](https://github.com/Ivantseng123/agentdock/commit/2cb951590e29fe72c4ac038c66f0ccb273fbbbc9))
+* **skills:** add company-context skill for org + product-name lookup ([2365a36](https://github.com/Ivantseng123/agentdock/commit/2365a36275369622cd731c9ab2db9f1abee667d2))
+* **worker,preflight:** gate startup on git &gt;= 2.31 for env-based auth ([c66a5c6](https://github.com/Ivantseng123/agentdock/commit/c66a5c663f5f47e4432672c3645b3038441bd6e7))
+* **workflow:** add Ask missing-marker fallback to parser ([9499577](https://github.com/Ivantseng123/agentdock/commit/949957743952341b39d6b4cf5dc11366d92fe02b))
+* **workflow:** Ask missing-marker fallback with transparency banner ([9ef00c5](https://github.com/Ivantseng123/agentdock/commit/9ef00c5cdbaae0acc9f0d31439d21f628c0a9dd8))
+* **workflow:** wire Ask fallback banner and metric in HandleResult ([4f68a9c](https://github.com/Ivantseng123/agentdock/commit/4f68a9cb6605c7ee21989e8508543fde5f6a6a22))
+
+
+### Bug Fixes
+
+* **github:** close clone-time argv leak by routing clone through gitAuthEnv ([0b85532](https://github.com/Ivantseng123/agentdock/commit/0b855329543c329c330e354b010a8d3a2904a787))
+* **github:** use Basic x-access-token scheme; Bearer rejected by git backend ([d26a522](https://github.com/Ivantseng123/agentdock/commit/d26a522deabd3c6aaa804397c3d1744528158bd0))
+* **prompt:** cover x-access-token URL form in guardrail example ([55add2e](https://github.com/Ivantseng123/agentdock/commit/55add2e893ebff630624e7b91c03d3f96bb6d1cf))
+
 ## [2.6.3](https://github.com/Ivantseng123/agentdock/compare/v2.6.2...v2.6.3) (2026-04-24)
 
 
