@@ -416,6 +416,10 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 
 const askMaxChars = 38000
 
+// askFallbackBanner is the transparency banner prepended to answers
+// produced by the missing-marker fallback path. Spec §Slack Rendering.
+const askFallbackBanner = ":warning: 請驗證輸出答案,AGENT 並未遵守輸出格式\n\n"
+
 // askInlineThreshold is the char length above which the answer goes into
 // an uploaded .md file instead of the Slack message body. 2000 keeps most
 // replies inline while packaging long-form answers so the channel isn't
@@ -444,18 +448,26 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 		}
 		w.logger.Warn("ask parse failed", "phase", "失敗", "output", truncated, "err", err)
 		metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "parse_failed").Inc()
-		// Intentionally keep r.Status="completed" — Ask is best-effort with no
-		// retry lane, so letting the listener clear dedup on this path is
-		// correct. IssueWorkflow flips to "failed" to gate its retry button.
-		return w.post(job, fmt.Sprintf(":x: 解析失敗：%v", err))
+		// err != nil only when stdout fails the syntactic gate (truly empty
+		// or below askFallbackMinLength). Every other parse-failure shape now
+		// routes through fallback with a fallback_* ResultSource. Ask remains
+		// best-effort with no retry lane; r.Status stays "completed" so the
+		// listener clears dedup. Spec 2026-04-26-ask-fallback-extension §HandleResult.
+		return w.post(job, ":x: Agent 沒有產生任何答案")
 	}
 
 	answer := parsed.Answer
+	status := "success"
+	if parsed.ResultSource != ResultSourceSchema {
+		answer = askFallbackBanner + answer
+		status = parsed.ResultSource
+	}
+
 	if len(answer) > askMaxChars {
 		answer = answer[:askMaxChars] + "\n…(已截斷)"
 	}
 
-	metrics.WorkflowCompletionsTotal.WithLabelValues("ask", "success").Inc()
+	metrics.WorkflowCompletionsTotal.WithLabelValues("ask", status).Inc()
 	return w.post(job, answer)
 }
 

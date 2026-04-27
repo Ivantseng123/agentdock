@@ -16,7 +16,7 @@ var BuiltinAgents = map[string]AgentConfig{
 		// -p/--print positional. Any extra flags (e.g. --model, --effort,
 		// --dangerously-skip-permissions) must therefore land here.
 		Args:     []string{"--print", "--output-format", "stream-json", "{extra_args}", "-p", "{prompt}"},
-		Timeout:  15 * time.Minute,
+		Timeout:  30 * time.Minute,
 		SkillDir: ".claude/skills",
 		Stream:   true,
 	},
@@ -26,7 +26,7 @@ var BuiltinAgents = map[string]AgentConfig{
 		// argument. The codex exec sub-command accepts option flags anywhere
 		// before the positional, so extra flags (e.g. --sandbox) go here.
 		Args:    []string{"exec", "--skip-git-repo-check", "--color", "never", "{extra_args}", "{prompt}"},
-		Timeout: 15 * time.Minute,
+		Timeout: 30 * time.Minute,
 		// Codex CLI discovers skills from .agents/skills (repo/CWD scope),
 		// NOT .codex/skills. See https://developers.openai.com/codex/skills.
 		SkillDir: ".agents/skills",
@@ -43,7 +43,7 @@ var BuiltinAgents = map[string]AgentConfig{
 		// as -m/--model, --agent, --variant, -c/--config, and --session are all
 		// accepted before the positional, making this the safe injection point.
 		Args:     []string{"run", "--pure", "{extra_args}", "{prompt}"},
-		Timeout:  15 * time.Minute,
+		Timeout:  30 * time.Minute,
 		SkillDir: ".opencode/skills",
 	},
 }

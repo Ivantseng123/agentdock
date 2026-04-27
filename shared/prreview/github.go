@@ -301,7 +301,19 @@ func createReview(ctx context.Context, apiBase, prURL, token string, payload *Cr
 	case 404:
 		return 0, fmt.Errorf("%s", ErrGitHubNotFound)
 	case 422:
-		return 0, fmt.Errorf("%s", ErrGitHubStaleCommit)
+		body, _ := io.ReadAll(resp.Body)
+		detail := strings.TrimSpace(string(body))
+		// GitHub 422 covers many validation failures. Only the commit_id /
+		// head-sha mismatch maps to "PR head moved"; surface other 422s with
+		// their raw GitHub message so operators can diagnose (e.g. body
+		// missing, comment line outside diff, malformed payload).
+		low := strings.ToLower(detail)
+		if strings.Contains(low, "commit_id") ||
+			strings.Contains(low, "head sha") ||
+			strings.Contains(low, "no commit found") {
+			return 0, fmt.Errorf("%s: %s", ErrGitHubStaleCommit, detail)
+		}
+		return 0, fmt.Errorf("create review 422: %s", detail)
 	}
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)

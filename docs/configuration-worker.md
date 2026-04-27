@@ -48,7 +48,7 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis
-  job_timeout: 20m
+  job_timeout: 35m
   agent_idle_timeout: 5m
   prepare_timeout: 3m
   cancel_timeout: 60s
