@@ -456,7 +456,8 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 		return w.post(job, ":x: Agent 沒有產生任何答案")
 	}
 
-	answer := parsed.Answer
+	// Redact configured secrets before posting to Slack (#180).
+	answer := logging.Redact(parsed.Answer, w.cfg.Secrets)
 	status := "success"
 	if parsed.ResultSource != ResultSourceSchema {
 		answer = askFallbackBanner + answer
