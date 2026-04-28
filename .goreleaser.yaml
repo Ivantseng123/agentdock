@@ -55,7 +55,7 @@ dockers:
       - --label=org.opencontainers.image.version={{ .Version }}
       - --label=org.opencontainers.image.created={{ .Date }}
     extra_files:
-      - agents/skills
+      - app/agents/skills
 
   - image_templates:
       - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
@@ -71,7 +71,7 @@ dockers:
       - --label=org.opencontainers.image.version={{ .Version }}
       - --label=org.opencontainers.image.created={{ .Date }}
     extra_files:
-      - agents/skills
+      - app/agents/skills
 
 docker_manifests:
   - name_template: 'ghcr.io/ivantseng123/agentdock:{{ .Version }}'
