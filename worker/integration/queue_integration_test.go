@@ -43,6 +43,7 @@ func (f *fakeRepo) CleanAll() error                  { return nil }
 func (f *fakeRepo) PurgeStale() error                { return nil }
 
 func TestFullFlow_SubmitToResult(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -104,11 +105,11 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 }
 
 func TestFullFlow_PriorityOrdering(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
-	ctx := context.Background()
 	bundle.Attachments.Prepare(ctx, "low", nil)
 	bundle.Attachments.Prepare(ctx, "high", nil)
 	bundle.Attachments.Prepare(ctx, "mid", nil)

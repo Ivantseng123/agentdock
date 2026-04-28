@@ -200,6 +200,52 @@ func TestPRReviewWorkflow_HandleResult_ErrorStatus(t *testing.T) {
 	}
 }
 
+// TestPRReviewWorkflow_HandleResult_RedactsSecretsInSummary pins #180: secrets
+// echoed into summary/reason/error on any terminal branch must be scrubbed
+// before the Slack post.
+func TestPRReviewWorkflow_HandleResult_RedactsSecretsInSummary(t *testing.T) {
+	const secret = "tokenABC1234567890"
+	for _, tc := range []struct {
+		name    string
+		rawJSON string
+	}{
+		{
+			name:    "posted_summary",
+			rawJSON: `{"status":"POSTED","summary":"token ` + secret + ` leaked","comments_posted":1,"severity_summary":"clean"}`,
+		},
+		{
+			name:    "posted_severity",
+			rawJSON: `{"status":"POSTED","summary":"all good","comments_posted":1,"severity_summary":"sev-` + secret + `"}`,
+		},
+		{
+			name:    "skipped_reason_and_summary",
+			rawJSON: `{"status":"SKIPPED","reason":"skip because ` + secret + `","summary":"summary with ` + secret + `"}`,
+		},
+		{
+			name:    "error_text",
+			rawJSON: `{"status":"ERROR","error":"leaked ` + secret + ` inside"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, slack := newTestPRReviewWorkflow(t)
+			w.cfg.Secrets = map[string]string{"GH_TOKEN": secret}
+			job := &queue.Job{
+				ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "pr_review",
+				WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7"},
+			}
+			state := &queue.JobState{Job: job}
+			result := &queue.JobResult{JobID: "j1", Status: "completed", RawOutput: "===REVIEW_RESULT===\n" + tc.rawJSON}
+			if err := w.HandleResult(context.Background(), state, result); err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(slack.Posted, " | ")
+			if strings.Contains(joined, secret) {
+				t.Errorf("posted text leaked secret: %v", slack.Posted)
+			}
+		})
+	}
+}
+
 func TestPRReviewWorkflow_BuildJob_UsesHeadSHAAsJobBranch(t *testing.T) {
 	w, _ := newTestPRReviewWorkflow(t)
 	pending := &Pending{

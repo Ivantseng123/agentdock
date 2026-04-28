@@ -98,12 +98,21 @@ func (f *fakeSlackPort) UploadFile(channelID, threadTS, filename, title, content
 type fakeIssueCreator struct {
 	URL     string
 	LastArg string
+	// Captured fields from the most recent CreateIssue call. Tests that need
+	// to assert on exact title/body/label content after redaction inspect
+	// these directly instead of parsing LastArg.
+	LastTitle  string
+	LastBody   string
+	LastLabels []string
 	// err, when non-nil, is returned by CreateIssue instead of a URL.
 	err error
 }
 
 func (f *fakeIssueCreator) CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (string, error) {
 	f.LastArg = fmt.Sprintf("%s/%s %s", owner, repo, title)
+	f.LastTitle = title
+	f.LastBody = body
+	f.LastLabels = append([]string(nil), labels...)
 	if f.err != nil {
 		return "", f.err
 	}

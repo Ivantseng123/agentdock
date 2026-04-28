@@ -467,6 +467,31 @@ func TestAskWorkflow_HandleResult_SuccessPostsAnswer(t *testing.T) {
 	}
 }
 
+// TestAskWorkflow_HandleResult_RedactsSecretsInAnswer pins #180: configured
+// secrets echoed into parsed.Answer must be scrubbed before the Slack post.
+func TestAskWorkflow_HandleResult_RedactsSecretsInAnswer(t *testing.T) {
+	const secret = "tokenABC1234567890"
+	w, slack := newTestAskWorkflow(t)
+	w.cfg.Secrets = map[string]string{"GH_TOKEN": secret}
+
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "ask"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "===ASK_RESULT===\n{\"answer\":\"the token is " + secret + " please redact\"}",
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if strings.Contains(joined, secret) {
+		t.Errorf("posted answer leaked secret: %v", slack.Posted)
+	}
+	if !strings.Contains(joined, "***") {
+		t.Errorf("posted answer missing redaction marker: %v", slack.Posted)
+	}
+}
+
 func TestAskWorkflow_HandleResult_Truncates38K(t *testing.T) {
 	w, slack := newTestAskWorkflow(t)
 	long := strings.Repeat("a", 50000)

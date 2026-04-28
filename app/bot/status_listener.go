@@ -55,9 +55,9 @@ func (l *StatusListener) Listen(ctx context.Context) {
 			if !ok {
 				return
 			}
-			l.applyJobStatus(report)
-			l.store.SetAgentStatus(report.JobID, report)
-			l.maybeUpdateSlack(report)
+			l.applyJobStatus(ctx, report)
+			l.store.SetAgentStatus(ctx, report.JobID, report)
+			l.maybeUpdateSlack(ctx, report)
 		case <-ctx.Done():
 			return
 		}
@@ -68,28 +68,28 @@ func (l *StatusListener) Listen(ctx context.Context) {
 // JobStore. Guards against empty reports from older workers, missing state
 // entries, and regressions from terminal states (a stray late report must
 // never downgrade a completed/failed/cancelled job back to running).
-func (l *StatusListener) applyJobStatus(report queue.StatusReport) {
+func (l *StatusListener) applyJobStatus(ctx context.Context, report queue.StatusReport) {
 	if report.JobStatus == "" {
 		return
 	}
-	state, err := l.store.Get(report.JobID)
+	state, err := l.store.Get(ctx, report.JobID)
 	if err != nil || state == nil {
 		return
 	}
 	if isTerminal(state.Status) || state.Status == report.JobStatus {
 		return
 	}
-	if err := l.store.UpdateStatus(report.JobID, report.JobStatus); err != nil {
+	if err := l.store.UpdateStatus(ctx, report.JobID, report.JobStatus); err != nil {
 		l.logger.Warn("status listener: 套用 job 狀態失敗",
 			"phase", "失敗", "job_id", report.JobID, "status", report.JobStatus, "error", err)
 	}
 }
 
-func (l *StatusListener) maybeUpdateSlack(r queue.StatusReport) {
+func (l *StatusListener) maybeUpdateSlack(ctx context.Context, r queue.StatusReport) {
 	if l.slack == nil {
 		return // defensive; tests may wire nil
 	}
-	state, err := l.store.Get(r.JobID)
+	state, err := l.store.Get(ctx, r.JobID)
 	if err != nil || state == nil {
 		l.logger.Warn("status listener: job state missing",
 			"phase", "失敗", "job_id", r.JobID, "error", err)
@@ -131,7 +131,7 @@ func (l *StatusListener) maybeUpdateSlack(r queue.StatusReport) {
 	}
 
 	// Second terminal check right before the API call narrows race with ResultListener.
-	if latest, err := l.store.Get(r.JobID); err == nil && latest != nil && isTerminal(latest.Status) {
+	if latest, err := l.store.Get(ctx, r.JobID); err == nil && latest != nil && isTerminal(latest.Status) {
 		l.mu.Lock()
 		delete(l.lastUpdate, r.JobID)
 		delete(l.lastPhase, r.JobID)

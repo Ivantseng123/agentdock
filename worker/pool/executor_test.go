@@ -15,9 +15,10 @@ import (
 )
 
 func TestClassifyResult_UserCancel(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1"})
-	store.UpdateStatus("j1", queue.JobCancelled)
+	store.Put(ctx, &queue.Job{ID: "j1"})
+	store.UpdateStatus(ctx, "j1", queue.JobCancelled)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -37,9 +38,10 @@ func TestClassifyResult_UserCancel(t *testing.T) {
 }
 
 func TestClassifyResult_WatchdogKillFallsThroughToFailed(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1"})
-	store.UpdateStatus("j1", queue.JobFailed)
+	store.Put(ctx, &queue.Job{ID: "j1"})
+	store.UpdateStatus(ctx, "j1", queue.JobFailed)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -56,9 +58,10 @@ func TestClassifyResult_WatchdogKillFallsThroughToFailed(t *testing.T) {
 }
 
 func TestClassifyResult_RunningStoreIsFailed(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1"})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -72,9 +75,10 @@ func TestClassifyResult_RunningStoreIsFailed(t *testing.T) {
 }
 
 func TestClassifyResult_DeadlineExceededIsFailed(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1"})
-	store.UpdateStatus("j1", queue.JobCancelled) // even with cancelled store…
+	store.Put(ctx, &queue.Job{ID: "j1"})
+	store.UpdateStatus(ctx, "j1", queue.JobCancelled) // even with cancelled store…
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
@@ -88,10 +92,10 @@ func TestClassifyResult_DeadlineExceededIsFailed(t *testing.T) {
 }
 
 func TestClassifyResult_NoErrorRoutesToFailed(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1"})
-
 	ctx := context.Background()
+	store := queue.NewMemJobStore()
+	store.Put(ctx, &queue.Job{ID: "j1"})
+
 	result := classifyResult(&queue.Job{ID: "j1"}, time.Now(),
 		errors.New("parse failed"), "/tmp/repo", ctx, store)
 
@@ -111,9 +115,10 @@ func TestClassifyResult_NoErrorRoutesToFailed(t *testing.T) {
 // not silently render an empty prompt. Drain-and-cut makes this path
 // unreachable in production, but the defense is worth verifying.
 func TestExecuteJob_NilPromptContextFailsMalformed(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	job := &queue.Job{ID: "jnil", Repo: "o/r"} // no PromptContext
-	store.Put(job)
+	store.Put(ctx, job)
 
 	deps := executionDeps{
 		attachments: queuetest.NewAttachmentStore(),
@@ -180,13 +185,14 @@ func TestIsEmptyRepoReference(t *testing.T) {
 // CloneURL == "https://github.com/.git" (the cleanCloneURL("") artefact),
 // and that Prepare is never called.
 func TestExecuteJob_EmptyRepoReferenceFailsBeforeClone(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	job := &queue.Job{
 		ID:       "j-empty-repo",
 		CloneURL: "https://github.com/.git",
 		Repo:     "",
 	}
-	store.Put(job)
+	store.Put(ctx, job)
 
 	prepareCalled := false
 	deps := executionDeps{
@@ -215,10 +221,11 @@ func TestExecuteJob_EmptyRepoReferenceFailsBeforeClone(t *testing.T) {
 // Scenario B-race — Pre-Prepare ctx guard: store set to JobCancelled before Prepare runs
 // → Prepare is not invoked and the result is cancelled.
 func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	job := &queue.Job{ID: "jguard", Repo: "o/r"}
-	store.Put(job)
-	store.UpdateStatus("jguard", queue.JobCancelled)
+	store.Put(ctx, job)
+	store.UpdateStatus(ctx, "jguard", queue.JobCancelled)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

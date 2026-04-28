@@ -195,6 +195,92 @@ func TestIssueWorkflow_HandleResult_Created_PostsIssueURL(t *testing.T) {
 	}
 }
 
+// TestIssueWorkflow_HandleResult_RedactsSecrets pins #180: any configured
+// secret value echoed by the agent into parsed title/body/labels must be
+// scrubbed before the GitHub issue is created. Uses a padding-padded value so
+// the minRedactLength guard in shared/logging is clearly satisfied.
+func TestIssueWorkflow_HandleResult_RedactsSecrets(t *testing.T) {
+	const secret = "tokenABC1234567890"
+	w, _, ic := newTestIssueWorkflow(t, withSecrets(map[string]string{"GH_TOKEN": secret}))
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{Job: job}
+	// Title/body/labels all contain the secret; agent output is deliberately
+	// hostile — we're not testing parser, we're testing the redact hook.
+	raw := `===TRIAGE_RESULT===
+{"status":"CREATED","title":"leaks ` + secret + ` here","body":"body with ` + secret + ` inside","labels":["bug","leak-` + secret + `"],"confidence":"high","files_found":3,"open_questions":0}`
+	result := &queue.JobResult{JobID: "j1", Status: "completed", RawOutput: raw}
+
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	if strings.Contains(ic.LastTitle, secret) {
+		t.Errorf("Title leaked secret: %q", ic.LastTitle)
+	}
+	if strings.Contains(ic.LastBody, secret) {
+		t.Errorf("Body leaked secret: %q", ic.LastBody)
+	}
+	for _, l := range ic.LastLabels {
+		if strings.Contains(l, secret) {
+			t.Errorf("Label leaked secret: %q", l)
+		}
+	}
+	if !strings.Contains(ic.LastTitle, "***") {
+		t.Errorf("Title should show redaction marker, got %q", ic.LastTitle)
+	}
+}
+
+// TestIssueWorkflow_HandleResult_NoSecrets_Unchanged ensures the redact hook
+// is a pure no-op when Secrets is empty — normal output must pass through
+// byte-for-byte.
+func TestIssueWorkflow_HandleResult_NoSecrets_Unchanged(t *testing.T) {
+	w, _, ic := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID:  "j1",
+		Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"CREATED","title":"normal title","body":"normal body","labels":["bug"],"confidence":"high","files_found":3,"open_questions":0}`,
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	if ic.LastTitle != "normal title" {
+		t.Errorf("Title mutated: %q", ic.LastTitle)
+	}
+	if ic.LastBody != "normal body" {
+		t.Errorf("Body mutated: %q", ic.LastBody)
+	}
+	if len(ic.LastLabels) != 1 || ic.LastLabels[0] != "bug" {
+		t.Errorf("Labels mutated: %v", ic.LastLabels)
+	}
+}
+
+// TestIssueWorkflow_HandleResult_RejectedMessage_RedactsSecrets pins #180:
+// secrets echoed by the agent into a REJECTED parsed.Message must be scrubbed
+// before postLowConfidence forwards it to Slack.
+func TestIssueWorkflow_HandleResult_RejectedMessage_RedactsSecrets(t *testing.T) {
+	const secret = "tokenABC1234567890"
+	w, slack, _ := newTestIssueWorkflow(t, withSecrets(map[string]string{"GH_TOKEN": secret}))
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"REJECTED","message":"not our repo, leaked ` + secret + ` here"}`,
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if strings.Contains(joined, secret) {
+		t.Errorf("posted REJECTED message leaked secret: %v", slack.Posted)
+	}
+	if !strings.Contains(joined, "***") {
+		t.Errorf("posted message missing redaction marker: %v", slack.Posted)
+	}
+}
+
 func TestIssueWorkflow_HandleResult_Rejected_PostsLowConfidence(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "issue"}
@@ -479,6 +565,12 @@ type issueOpt func(*config.Config)
 func withChannelRepos(repos []string) issueOpt {
 	return func(c *config.Config) {
 		c.ChannelDefaults.Repos = repos
+	}
+}
+
+func withSecrets(secrets map[string]string) issueOpt {
+	return func(c *config.Config) {
+		c.Secrets = secrets
 	}
 }
 

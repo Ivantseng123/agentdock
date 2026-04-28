@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -200,14 +201,15 @@ func slogDiscardLogger() *slog.Logger {
 }
 
 func TestMaybeUpdateSlack_PreparingPhase(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
-	store.UpdateStatus("j1", queue.JobPreparing)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus(ctx, "j1", queue.JobPreparing)
 
 	slack := &stubSlackStatusPoster{}
 	l := newTestListener(store, slack, time.Now())
 
-	l.maybeUpdateSlack(queue.StatusReport{
+	l.maybeUpdateSlack(ctx, queue.StatusReport{
 		JobID: "j1", WorkerID: "host/worker-0", PID: 0, Alive: true,
 	})
 
@@ -227,14 +229,15 @@ func TestMaybeUpdateSlack_PreparingPhase(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_RunningWithToolCalls(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	slack := &stubSlackStatusPoster{}
 	l := newTestListener(store, slack, time.Now())
 
-	l.maybeUpdateSlack(queue.StatusReport{
+	l.maybeUpdateSlack(ctx, queue.StatusReport{
 		JobID: "j1", WorkerID: "host/worker-0", PID: 1234,
 		AgentCmd: "claude", ToolCalls: 15, FilesRead: 8,
 	})
@@ -248,14 +251,15 @@ func TestMaybeUpdateSlack_RunningWithToolCalls(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_RunningNoToolCalls(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	slack := &stubSlackStatusPoster{}
 	l := newTestListener(store, slack, time.Now())
 
-	l.maybeUpdateSlack(queue.StatusReport{
+	l.maybeUpdateSlack(ctx, queue.StatusReport{
 		JobID: "j1", WorkerID: "host/worker-0", PID: 1234, AgentCmd: "codex",
 	})
 
@@ -268,18 +272,19 @@ func TestMaybeUpdateSlack_RunningNoToolCalls(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_DebounceSkips(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	slack := &stubSlackStatusPoster{}
 	t0 := time.Now()
 	l := newTestListener(store, slack, t0)
 
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
 	// 5 seconds later — still within 15s debounce, same phase
 	l.clock = func() time.Time { return t0.Add(5 * time.Second) }
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
 
 	if len(slack.calls) != 1 {
 		t.Errorf("debounce failed: got %d calls", len(slack.calls))
@@ -287,21 +292,22 @@ func TestMaybeUpdateSlack_DebounceSkips(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_PhaseChangeForcesUpdate(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
-	store.UpdateStatus("j1", queue.JobPreparing)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus(ctx, "j1", queue.JobPreparing)
 
 	slack := &stubSlackStatusPoster{}
 	t0 := time.Now()
 	l := newTestListener(store, slack, t0)
 
 	// First update in preparing.
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 0})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 0})
 
 	// 2 seconds later — within debounce but phase changed to running.
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 	l.clock = func() time.Time { return t0.Add(2 * time.Second) }
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1234, AgentCmd: "claude"})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1234, AgentCmd: "claude"})
 
 	if len(slack.calls) != 2 {
 		t.Errorf("phase change should force update; got %d calls", len(slack.calls))
@@ -309,9 +315,10 @@ func TestMaybeUpdateSlack_PhaseChangeForcesUpdate(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_TerminalSkips(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
-	store.UpdateStatus("j1", queue.JobCompleted)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus(ctx, "j1", queue.JobCompleted)
 
 	slack := &stubSlackStatusPoster{}
 	l := newTestListener(store, slack, time.Now())
@@ -320,7 +327,7 @@ func TestMaybeUpdateSlack_TerminalSkips(t *testing.T) {
 	l.lastUpdate["j1"] = time.Now()
 	l.lastPhase["j1"] = "running"
 
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1234})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1234})
 
 	if len(slack.calls) != 0 {
 		t.Errorf("terminal should skip; got %d calls", len(slack.calls))
@@ -331,12 +338,13 @@ func TestMaybeUpdateSlack_TerminalSkips(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_StoreMissing(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	// no Put — store.Get returns error
 	slack := &stubSlackStatusPoster{}
 	l := newTestListener(store, slack, time.Now())
 
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "missing"})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "missing"})
 
 	if len(slack.calls) != 0 {
 		t.Errorf("missing state should skip; got %d calls", len(slack.calls))
@@ -344,14 +352,15 @@ func TestMaybeUpdateSlack_StoreMissing(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_StatusMsgTSEmpty(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1"}) // no StatusMsgTS
-	store.UpdateStatus("j1", queue.JobPreparing)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1"}) // no StatusMsgTS
+	store.UpdateStatus(ctx, "j1", queue.JobPreparing)
 
 	slack := &stubSlackStatusPoster{}
 	l := newTestListener(store, slack, time.Now())
 
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 0})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 0})
 
 	if len(slack.calls) != 0 {
 		t.Errorf("empty StatusMsgTS should skip; got %d calls", len(slack.calls))
@@ -359,15 +368,16 @@ func TestMaybeUpdateSlack_StatusMsgTSEmpty(t *testing.T) {
 }
 
 func TestMaybeUpdateSlack_SlackErrorNonFatal(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", StatusMsgTS: "S1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	slack := &stubSlackStatusPoster{err: fmt.Errorf("slack boom")}
 	l := newTestListener(store, slack, time.Now())
 
 	// Should not panic.
-	l.maybeUpdateSlack(queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
+	l.maybeUpdateSlack(ctx, queue.StatusReport{JobID: "j1", WorkerID: "w", PID: 1, AgentCmd: "claude"})
 
 	if len(slack.calls) != 1 {
 		t.Errorf("expected one attempt; got %d", len(slack.calls))
@@ -377,43 +387,46 @@ func TestMaybeUpdateSlack_SlackErrorNonFatal(t *testing.T) {
 // ---- applyJobStatus: cross-pod lifecycle propagation via StatusBus ----
 
 func TestApplyJobStatus_AppliesWhenPending(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1"}) // Put initialises as JobPending
+	store.Put(ctx, &queue.Job{ID: "j1"}) // Put initialises as JobPending
 	l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
 
-	l.applyJobStatus(queue.StatusReport{JobID: "j1", JobStatus: queue.JobRunning})
+	l.applyJobStatus(ctx, queue.StatusReport{JobID: "j1", JobStatus: queue.JobRunning})
 
-	state, _ := store.Get("j1")
+	state, _ := store.Get(ctx, "j1")
 	if state.Status != queue.JobRunning {
 		t.Errorf("status = %q, want JobRunning", state.Status)
 	}
 }
 
 func TestApplyJobStatus_SkipsEmptyStatus(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1"})
+	store.Put(ctx, &queue.Job{ID: "j1"})
 	l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
 
-	l.applyJobStatus(queue.StatusReport{JobID: "j1" /* JobStatus zero */})
+	l.applyJobStatus(ctx, queue.StatusReport{JobID: "j1" /* JobStatus zero */})
 
-	state, _ := store.Get("j1")
+	state, _ := store.Get(ctx, "j1")
 	if state.Status != queue.JobPending {
 		t.Errorf("status = %q, want JobPending (unchanged)", state.Status)
 	}
 }
 
 func TestApplyJobStatus_DoesNotRegressFromTerminal(t *testing.T) {
+	ctx := context.Background()
 	cases := []queue.JobStatus{queue.JobCompleted, queue.JobFailed, queue.JobCancelled}
 	for _, terminal := range cases {
 		store := queue.NewMemJobStore()
-		store.Put(&queue.Job{ID: "j1"})
-		store.UpdateStatus("j1", terminal)
+		store.Put(ctx, &queue.Job{ID: "j1"})
+		store.UpdateStatus(ctx, "j1", terminal)
 
 		l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
 
-		l.applyJobStatus(queue.StatusReport{JobID: "j1", JobStatus: queue.JobRunning})
+		l.applyJobStatus(ctx, queue.StatusReport{JobID: "j1", JobStatus: queue.JobRunning})
 
-		state, _ := store.Get("j1")
+		state, _ := store.Get(ctx, "j1")
 		if state.Status != terminal {
 			t.Errorf("status = %q, want %q (no regression)", state.Status, terminal)
 		}
@@ -421,13 +434,14 @@ func TestApplyJobStatus_DoesNotRegressFromTerminal(t *testing.T) {
 }
 
 func TestApplyJobStatus_SkipsWhenStateMissing(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	l := newTestListener(store, &stubSlackStatusPoster{}, time.Now())
 
 	// Should be a no-op, not panic, and not create anything.
-	l.applyJobStatus(queue.StatusReport{JobID: "missing", JobStatus: queue.JobRunning})
+	l.applyJobStatus(ctx, queue.StatusReport{JobID: "missing", JobStatus: queue.JobRunning})
 
-	if _, err := store.Get("missing"); err == nil {
+	if _, err := store.Get(ctx, "missing"); err == nil {
 		t.Error("no entry should have been created")
 	}
 }

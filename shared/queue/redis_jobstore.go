@@ -75,8 +75,7 @@ const maxTxRetries = 128
 
 // Put stores a freshly-submitted job in Pending state and refreshes TTLs on
 // both the primary record and the thread secondary index.
-func (s *RedisJobStore) Put(job *Job) error {
-	ctx := context.Background()
+func (s *RedisJobStore) Put(ctx context.Context, job *Job) error {
 	state := &JobState{Job: job, Status: JobPending}
 
 	data, err := json.Marshal(state)
@@ -102,8 +101,7 @@ func (s *RedisJobStore) Put(job *Job) error {
 
 // Get loads a job by ID. Returns an error if the key is missing (expired or
 // never written).
-func (s *RedisJobStore) Get(jobID string) (*JobState, error) {
-	ctx := context.Background()
+func (s *RedisJobStore) Get(ctx context.Context, jobID string) (*JobState, error) {
 	data, err := s.rdb.Get(ctx, s.jobKey(jobID)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -121,8 +119,7 @@ func (s *RedisJobStore) Get(jobID string) (*JobState, error) {
 // GetByThread resolves the thread secondary index to a jobID and then loads
 // that job's state. Two round-trips in the steady-state happy path; a SCAN
 // fallback would be O(N) and drift under load, so the extra key is worth it.
-func (s *RedisJobStore) GetByThread(channelID, threadTS string) (*JobState, error) {
-	ctx := context.Background()
+func (s *RedisJobStore) GetByThread(ctx context.Context, channelID, threadTS string) (*JobState, error) {
 	jobID, err := s.rdb.Get(ctx, s.threadKey(channelID, threadTS)).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -130,14 +127,14 @@ func (s *RedisJobStore) GetByThread(channelID, threadTS string) (*JobState, erro
 		}
 		return nil, fmt.Errorf("redis get thread index: %w", err)
 	}
-	return s.Get(jobID)
+	return s.Get(ctx, jobID)
 }
 
 // ListPending scans primary keys and returns states whose Status is Pending.
 // SCAN (not KEYS) is used so the call is non-blocking against Redis even when
 // the keyspace grows.
-func (s *RedisJobStore) ListPending() ([]*JobState, error) {
-	states, err := s.listAllStates()
+func (s *RedisJobStore) ListPending(ctx context.Context) ([]*JobState, error) {
+	states, err := s.listAllStates(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -151,15 +148,14 @@ func (s *RedisJobStore) ListPending() ([]*JobState, error) {
 }
 
 // ListAll scans primary keys and returns every live job state.
-func (s *RedisJobStore) ListAll() ([]*JobState, error) {
-	return s.listAllStates()
+func (s *RedisJobStore) ListAll(ctx context.Context) ([]*JobState, error) {
+	return s.listAllStates(ctx)
 }
 
 // listAllStates is the shared SCAN body for ListPending / ListAll. Keys that
 // expired between SCAN and GET are skipped silently — that is the expected
 // race window for a TTL'd store.
-func (s *RedisJobStore) listAllStates() ([]*JobState, error) {
-	ctx := context.Background()
+func (s *RedisJobStore) listAllStates(ctx context.Context) ([]*JobState, error) {
 	// scanBatch: SCAN page size; mgetBatch: MGET chunk size. Chunking keeps
 	// MGET payload bounded on deep rehydrate (thousands of jobs). Using SCAN
 	// + MGET avoids the N+1 round-trip of per-key GETs.
@@ -214,8 +210,8 @@ func (s *RedisJobStore) listAllStates() ([]*JobState, error) {
 // UpdateStatus mutates a job's status with the same side-effects MemJobStore
 // applies (StartedAt/WaitTime on first Running, CancelledAt on first
 // Cancelled).
-func (s *RedisJobStore) UpdateStatus(jobID string, status JobStatus) error {
-	err := s.txUpdate(jobID, func(state *JobState) error {
+func (s *RedisJobStore) UpdateStatus(ctx context.Context, jobID string, status JobStatus) error {
+	err := s.txUpdate(ctx, jobID, func(state *JobState) error {
 		state.Status = status
 		if status == JobRunning && state.StartedAt.IsZero() {
 			state.StartedAt = time.Now()
@@ -235,8 +231,8 @@ func (s *RedisJobStore) UpdateStatus(jobID string, status JobStatus) error {
 }
 
 // SetWorker tags a job with the worker ID that claimed it.
-func (s *RedisJobStore) SetWorker(jobID, workerID string) error {
-	err := s.txUpdate(jobID, func(state *JobState) error {
+func (s *RedisJobStore) SetWorker(ctx context.Context, jobID, workerID string) error {
+	err := s.txUpdate(ctx, jobID, func(state *JobState) error {
 		state.WorkerID = workerID
 		return nil
 	})
@@ -249,8 +245,8 @@ func (s *RedisJobStore) SetWorker(jobID, workerID string) error {
 // SetAgentStatus stores the most recent StatusReport from the worker. Matches
 // MemJobStore semantics: missing job is a silent no-op (the job may have been
 // deleted while the report was in flight).
-func (s *RedisJobStore) SetAgentStatus(jobID string, report StatusReport) error {
-	err := s.txUpdate(jobID, func(state *JobState) error {
+func (s *RedisJobStore) SetAgentStatus(ctx context.Context, jobID string, report StatusReport) error {
+	err := s.txUpdate(ctx, jobID, func(state *JobState) error {
 		r := report
 		state.AgentStatus = &r
 		return nil
@@ -263,8 +259,7 @@ func (s *RedisJobStore) SetAgentStatus(jobID string, report StatusReport) error 
 
 // Delete removes both the primary record and its thread secondary index.
 // Missing keys are not an error — Delete is idempotent.
-func (s *RedisJobStore) Delete(jobID string) error {
-	ctx := context.Background()
+func (s *RedisJobStore) Delete(ctx context.Context, jobID string) error {
 	pk := s.jobKey(jobID)
 
 	// Read first so we know which thread index to clear. Missing primary is
@@ -308,11 +303,19 @@ var errJobMissing = errors.New("job not found")
 // so parsing it in Lua would mean duplicating layout knowledge in a second
 // language. WATCH lets us keep the entire state model in Go and only pay the
 // cost on contention (retry), which is rare for per-job writes.
-func (s *RedisJobStore) txUpdate(jobID string, mutate func(*JobState) error) error {
-	ctx := context.Background()
+func (s *RedisJobStore) txUpdate(ctx context.Context, jobID string, mutate func(*JobState) error) error {
 	pk := s.jobKey(jobID)
 
 	for attempt := 0; attempt < maxTxRetries; attempt++ {
+		// Cheap pre-check: if the caller already cancelled, bail before
+		// burning another round-trip on Watch. Without this, a cancelled ctx
+		// could still spend up to maxTxRetries network attempts to surface the
+		// error.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
 			data, err := tx.Get(ctx, pk).Bytes()
 			if err != nil {

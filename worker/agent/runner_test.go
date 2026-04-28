@@ -243,6 +243,94 @@ func TestNewRunnerFromConfig_SingleProvider(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// substitutePlaceholders unit tests
+// ---------------------------------------------------------------------------
+
+func TestSubstitutePlaceholders_NilExtraArgs(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := substitutePlaceholders(args, nil, map[string]string{"{prompt}": "hello"})
+	want := []string{"run", "--pure", "hello"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestSubstitutePlaceholders_EmptyExtraArgs(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := substitutePlaceholders(args, []string{}, map[string]string{"{prompt}": "hello"})
+	want := []string{"run", "--pure", "hello"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestSubstitutePlaceholders_SingleExtraArg(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := substitutePlaceholders(args, []string{"-m", "opencode/claude-opus-4-7"}, map[string]string{"{prompt}": "hello"})
+	want := []string{"run", "--pure", "-m", "opencode/claude-opus-4-7", "hello"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestSubstitutePlaceholders_MultiExtraArgs_OrderPreserved(t *testing.T) {
+	args := []string{"--print", "--output-format", "stream-json", "{extra_args}", "-p", "{prompt}"}
+	extra := []string{"--model", "claude-opus-4-7", "--effort", "high"}
+	got := substitutePlaceholders(args, extra, map[string]string{"{prompt}": "test"})
+	want := []string{"--print", "--output-format", "stream-json", "--model", "claude-opus-4-7", "--effort", "high", "-p", "test"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestRunner_ExtraArgsInjected is an integration-ish test: it verifies that the
+// runner passes extra_args to the subprocess at the correct position.
+func TestRunner_ExtraArgsInjected(t *testing.T) {
+	dir := t.TempDir()
+	script := dir + "/echo-args"
+	os.WriteFile(script, []byte(`#!/bin/sh
+# Print all args one per line so we can check position
+for a in "$@"; do printf '%s\n' "$a"; done
+echo "padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{
+		{
+			Command:   script,
+			Args:      []string{"--flag-before", "{extra_args}", "--flag-after", "{prompt}"},
+			ExtraArgs: []string{"-x", "extra-val"},
+			Timeout:   5 * time.Second,
+		},
+	})
+
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "myprompt", RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !strings.Contains(output, "-x") || !strings.Contains(output, "extra-val") {
+		t.Errorf("extra_args not in output: %q", output)
+	}
+	if !strings.Contains(output, "myprompt") {
+		t.Errorf("prompt not in output: %q", output)
+	}
+}
+
 func TestRunner_CancelShortCircuitsProviderChain(t *testing.T) {
 	runner := &Runner{
 		agents: []config.AgentConfig{

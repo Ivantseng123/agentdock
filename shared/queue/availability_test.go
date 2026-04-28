@@ -50,17 +50,17 @@ func TestAvailability_NoWorkers(t *testing.T) {
 }
 
 func TestAvailability_BusyEnqueueOK_FullySaturated(t *testing.T) {
-	q, store, a := newAvail(t)
 	ctx := context.Background()
+	q, store, a := newAvail(t)
 
 	q.Register(ctx, queue.WorkerInfo{WorkerID: "w1", Slots: 1})
 	q.Register(ctx, queue.WorkerInfo{WorkerID: "w2", Slots: 1})
 
 	// Two jobs in JobRunning consume both slots; queue depth = 0.
-	store.Put(&queue.Job{ID: "j1"})
-	store.UpdateStatus("j1", queue.JobRunning)
-	store.Put(&queue.Job{ID: "j2"})
-	store.UpdateStatus("j2", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j2"})
+	store.UpdateStatus(ctx, "j2", queue.JobRunning)
 
 	v := a.CheckHard(ctx)
 	if v.Kind != queue.VerdictBusyEnqueueOK {
@@ -76,6 +76,7 @@ func TestAvailability_BusyEnqueueOK_FullySaturated(t *testing.T) {
 }
 
 func TestAvailability_BusyEnqueueOK_WithQueueDepth(t *testing.T) {
+	ctx := context.Background()
 	// queuetest.JobQueue.Submit pushes onto a heap that a background dispatch
 	// goroutine drains into a channel; QueueDepth races against that drain
 	// and is unreliable for "I just submitted N, expect depth=N" assertions.
@@ -92,8 +93,8 @@ func TestAvailability_BusyEnqueueOK_WithQueueDepth(t *testing.T) {
 	})
 
 	// 1 running in store + 4 from queue depth = 5 active, slots = 1, overflow = 5
-	store.Put(&queue.Job{ID: "j1"})
-	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
 
 	v := a.CheckHard(context.Background())
 	if v.Kind != queue.VerdictBusyEnqueueOK {
@@ -106,15 +107,15 @@ func TestAvailability_BusyEnqueueOK_WithQueueDepth(t *testing.T) {
 }
 
 func TestAvailability_MultiSlotWorker(t *testing.T) {
-	q, store, a := newAvail(t)
 	ctx := context.Background()
+	q, store, a := newAvail(t)
 
 	// One worker with 3 slots, two running jobs → 1 spare slot → OK.
 	q.Register(ctx, queue.WorkerInfo{WorkerID: "w1", Slots: 3})
-	store.Put(&queue.Job{ID: "j1"})
-	store.UpdateStatus("j1", queue.JobRunning)
-	store.Put(&queue.Job{ID: "j2"})
-	store.UpdateStatus("j2", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j1"})
+	store.UpdateStatus(ctx, "j1", queue.JobRunning)
+	store.Put(ctx, &queue.Job{ID: "j2"})
+	store.UpdateStatus(ctx, "j2", queue.JobRunning)
 
 	v := a.CheckHard(ctx)
 	if v.Kind != queue.VerdictOK {
@@ -126,8 +127,8 @@ func TestAvailability_MultiSlotWorker(t *testing.T) {
 }
 
 func TestAvailability_ZeroSlotsNormalisedToOne(t *testing.T) {
-	q, _, a := newAvail(t)
 	ctx := context.Background()
+	q, _, a := newAvail(t)
 
 	// Slots=0 (e.g. older worker that didn't set the field) → treated as 1.
 	q.Register(ctx, queue.WorkerInfo{WorkerID: "old", Slots: 0})
