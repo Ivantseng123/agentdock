@@ -86,7 +86,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	r.processedJobs[result.JobID] = true
 	r.mu.Unlock()
 
-	state, err := r.store.Get(result.JobID)
+	state, err := r.store.Get(ctx, result.JobID)
 	if err != nil {
 		r.logger.Error("找不到工作結果對應的工作", "phase", "失敗", "job_id", result.JobID, "error", err)
 		return
@@ -98,14 +98,14 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 
 	// Design A: user cancellation dominates, regardless of result.Status.
 	if state.Status == queue.JobCancelled || result.Status == "cancelled" {
-		r.handleCancellation(state.Job, state, result)
+		r.handleCancellation(ctx, state.Job, state, result)
 		r.attachments.Cleanup(ctx, result.JobID)
 		return
 	}
 
 	// Failed path: listener owns retry-button logic and store transition.
 	if result.Status == "failed" {
-		r.handleFailure(job, state, result)
+		r.handleFailure(ctx, job, state, result)
 		r.attachments.Cleanup(ctx, result.JobID)
 		return
 	}
@@ -128,7 +128,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 		if err := wf.HandleResult(ctx, state, result); err != nil {
 			r.logger.Error("工作完成處理失敗", "phase", "失敗", "job_id", result.JobID, "error", err)
 			// Treat as failure — no retry button on internal errors.
-			r.store.UpdateStatus(job.ID, queue.JobFailed)
+			r.store.UpdateStatus(ctx, job.ID, queue.JobFailed)
 			r.clearDedup(job)
 			r.attachments.Cleanup(ctx, result.JobID)
 			return
@@ -138,14 +138,14 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	// Store status transition: workflow may have mutated result.Status to
 	// "failed" (e.g. ERROR or parse-fail paths inside HandleResult).
 	if result.Status == "failed" {
-		r.store.UpdateStatus(job.ID, queue.JobFailed)
+		r.store.UpdateStatus(ctx, job.ID, queue.JobFailed)
 		// Failed path inside completed: no dedup clear (retry button was posted
 		// by the workflow's handleFailure — keep dedup locked).
 		r.attachments.Cleanup(ctx, result.JobID)
 		return
 	}
 
-	r.store.UpdateStatus(job.ID, queue.JobCompleted)
+	r.store.UpdateStatus(ctx, job.ID, queue.JobCompleted)
 	r.clearDedup(job)
 
 	// Cleanup attachments.
@@ -228,8 +228,8 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 	}
 }
 
-func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, result *queue.JobResult) {
-	r.store.UpdateStatus(job.ID, queue.JobFailed)
+func (r *ResultListener) handleFailure(ctx context.Context, job *queue.Job, state *queue.JobState, result *queue.JobResult) {
+	r.store.UpdateStatus(ctx, job.ID, queue.JobFailed)
 
 	// Pre-workflow failure path. Worker-label derivation is duplicated in
 	// app/workflow/issue.go:workerLabel — keep the two in sync until a future
@@ -280,8 +280,8 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 	}
 }
 
-func (r *ResultListener) handleCancellation(job *queue.Job, state *queue.JobState, result *queue.JobResult) {
-	r.store.UpdateStatus(job.ID, queue.JobCancelled)
+func (r *ResultListener) handleCancellation(ctx context.Context, job *queue.Job, state *queue.JobState, result *queue.JobResult) {
+	r.store.UpdateStatus(ctx, job.ID, queue.JobCancelled)
 	r.updateStatus(job, ":white_check_mark: 已取消")
 	r.clearDedup(job)
 }

@@ -18,6 +18,7 @@ func (m *mockJobQueue) Submit(ctx context.Context, job *queue.Job) error {
 }
 
 func TestRetryHandler_CreatesNewJob(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	original := &queue.Job{
 		ID:        "j1",
@@ -36,8 +37,8 @@ func TestRetryHandler_CreatesNewJob(t *testing.T) {
 		Priority: 50,
 		Skills:   map[string]*queue.SkillPayload{"s1": {Files: map[string][]byte{"SKILL.md": []byte("content")}}},
 	}
-	store.Put(original)
-	store.UpdateStatus("j1", queue.JobFailed)
+	store.Put(ctx, original)
+	store.UpdateStatus(ctx, "j1", queue.JobFailed)
 
 	q := &mockJobQueue{}
 	slackMock := &mockSlackPoster{}
@@ -112,9 +113,10 @@ func TestRetryHandler_JobNotFound(t *testing.T) {
 }
 
 func TestRetryHandler_IgnoresNonFailedJob(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"})
-	store.UpdateStatus("j1", queue.JobCompleted)
+	store.Put(ctx, &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"})
+	store.UpdateStatus(ctx, "j1", queue.JobCompleted)
 
 	q := &mockJobQueue{}
 	slackMock := &mockSlackPoster{}

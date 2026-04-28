@@ -97,7 +97,7 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				return
 			}
 			// Check if cancelled while pending.
-			state, err := p.cfg.Store.Get(job.ID)
+			state, err := p.cfg.Store.Get(ctx, job.ID)
 			if err != nil {
 				p.cfg.Results.Publish(ctx, &queue.JobResult{
 					JobID: job.ID, Status: "failed", Error: "state lookup failed",
@@ -134,7 +134,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 
 	// Race mitigation: close the gap between queue-check and RegisterPending
 	// for both cancel and admin-failed states.
-	if s, _ := p.cfg.Store.Get(job.ID); s != nil &&
+	if s, _ := p.cfg.Store.Get(jobCtx, job.ID); s != nil &&
 		(s.Status == queue.JobCancelled || s.Status == queue.JobFailed) {
 		jobCancel()
 	}
@@ -185,7 +185,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		return
 	}
 
-	p.cfg.Store.SetWorker(job.ID, wID)
+	p.cfg.Store.SetWorker(jobCtx, job.ID, wID)
 
 	// Prep-phase status signal — PID=0, AgentCmd="" lets StatusListener render
 	// the "準備中" template before the agent process starts.
@@ -226,7 +226,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		}
 	}
 
-	p.cfg.Store.UpdateStatus(job.ID, queue.JobStatus(result.Status))
+	p.cfg.Store.UpdateStatus(ctx, job.ID, queue.JobStatus(result.Status))
 	if err := p.cfg.Results.Publish(ctx, result); err != nil {
 		logger.Error("failed to publish result", "error", err)
 	}
@@ -311,7 +311,7 @@ func (p *Pool) publishStatus(ctx context.Context, jobID string, status *statusAc
 	}
 	report := status.toReport()
 	if p.cfg.Store != nil {
-		if state, err := p.cfg.Store.Get(jobID); err == nil && state != nil {
+		if state, err := p.cfg.Store.Get(ctx, jobID); err == nil && state != nil {
 			report.JobStatus = state.Status
 		}
 	}

@@ -40,21 +40,25 @@ type erroringStore struct {
 	listAllErr error
 }
 
-func (s *erroringStore) Put(*queue.Job) error                { panic("unused") }
-func (s *erroringStore) Get(string) (*queue.JobState, error) { panic("unused") }
-func (s *erroringStore) GetByThread(string, string) (*queue.JobState, error) {
+func (s *erroringStore) Put(context.Context, *queue.Job) error { panic("unused") }
+func (s *erroringStore) Get(context.Context, string) (*queue.JobState, error) {
 	panic("unused")
 }
-func (s *erroringStore) ListPending() ([]*queue.JobState, error) { panic("unused") }
-func (s *erroringStore) UpdateStatus(string, queue.JobStatus) error {
+func (s *erroringStore) GetByThread(context.Context, string, string) (*queue.JobState, error) {
 	panic("unused")
 }
-func (s *erroringStore) SetWorker(string, string) error { panic("unused") }
-func (s *erroringStore) SetAgentStatus(string, queue.StatusReport) error {
+func (s *erroringStore) ListPending(context.Context) ([]*queue.JobState, error) {
 	panic("unused")
 }
-func (s *erroringStore) Delete(string) error { panic("unused") }
-func (s *erroringStore) ListAll() ([]*queue.JobState, error) {
+func (s *erroringStore) UpdateStatus(context.Context, string, queue.JobStatus) error {
+	panic("unused")
+}
+func (s *erroringStore) SetWorker(context.Context, string, string) error { panic("unused") }
+func (s *erroringStore) SetAgentStatus(context.Context, string, queue.StatusReport) error {
+	panic("unused")
+}
+func (s *erroringStore) Delete(context.Context, string) error { panic("unused") }
+func (s *erroringStore) ListAll(context.Context) ([]*queue.JobState, error) {
 	if s.listAllErr != nil {
 		return nil, s.listAllErr
 	}
