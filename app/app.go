@@ -136,7 +136,10 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 			// resolves jobs via store.Get directly against Redis, so no
 			// in-memory index needs rebuilding. Terminal-state jobs are
 			// left to TTL — we do not proactively delete them.
-			if states, listErr := rs.ListAll(); listErr != nil {
+			rehydrateCtx, rehydrateCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			states, listErr := rs.ListAll(rehydrateCtx)
+			rehydrateCancel()
+			if listErr != nil {
 				appLogger.Warn("JobStore 重新水合失敗（ListAll）", "phase", "失敗", "error", listErr)
 			} else {
 				inflight := 0
@@ -381,7 +384,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		if len(attachPayloads) > 0 {
 			if err := bundle.Attachments.Prepare(ctx, job.ID, attachPayloads); err != nil {
 				appLogger.Error("附件上傳至 Redis 失敗", "phase", "失敗", "error", err)
-				jobStore.UpdateStatus(job.ID, queue.JobFailed)
+				jobStore.UpdateStatus(ctx, job.ID, queue.JobFailed)
 				bundle.Results.Publish(ctx, &queue.JobResult{
 					JobID:      job.ID,
 					Status:     "failed",
@@ -428,7 +431,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}
 		if statusMsgTS != "" {
 			job.StatusMsgTS = statusMsgTS
-			jobStore.Put(job)
+			jobStore.Put(ctx, job)
 		}
 	}
 	wf.SetSubmitHook(submitJob)
@@ -616,18 +619,20 @@ func handleInteraction(
 			retryHandler.Handle(cb.Channel.ID, action.Value, selectorTS)
 		case strings.HasPrefix(action.ActionID, "cancel_job"):
 			jobID := action.Value
-			state, err := jobStore.Get(jobID)
+			cancelCtx, cancelCancel := context.WithTimeout(context.Background(), queue.DefaultStoreOpTimeout)
+			state, err := jobStore.Get(cancelCtx, jobID)
 			if err == nil &&
 				state.Status != queue.JobFailed &&
 				state.Status != queue.JobCompleted &&
 				state.Status != queue.JobCancelled {
-				jobStore.UpdateStatus(jobID, queue.JobCancelled)
-				bundle.Commands.Send(context.Background(), queue.Command{JobID: jobID, Action: "kill"})
+				jobStore.UpdateStatus(cancelCtx, jobID, queue.JobCancelled)
+				bundle.Commands.Send(cancelCtx, queue.Command{JobID: jobID, Action: "kill"})
 				slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":stop_sign: 正在取消...")
 				handler.ClearThreadDedup(cb.Channel.ID, state.Job.ThreadTS)
 			} else {
 				slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":information_source: 此任務已結束")
 			}
+			cancelCancel()
 		default:
 			// Any other selector/button routes through the dispatcher via
 			// HandleSelection. External selectors (repo_search, ask_repo

@@ -183,7 +183,17 @@ func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 		currentURL := rc.getRemoteURL(localPath)
 		if currentURL != cleanURL {
 			setCmd := exec.Command("git", "-C", localPath, "remote", "set-url", "origin", cleanURL)
-			_, _ = setCmd.CombinedOutput() // best-effort; non-fatal
+			if out, err := setCmd.CombinedOutput(); err != nil {
+				// Non-fatal: fetch below will still run, but against the old
+				// URL. Surface the silent failure so token-rotation regressions
+				// are observable instead of manifesting as a mysterious 401.
+				rc.logger.Warn("更新 remote URL 失敗，將以舊 URL 繼續 fetch",
+					"phase", "降級",
+					"repo", SanitizeURL(repoRef),
+					"error", err,
+					"output", strings.TrimSpace(string(out)),
+				)
+			}
 		}
 	}
 

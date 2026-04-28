@@ -68,14 +68,22 @@ type StatusBus interface {
 	Close() error
 }
 
+// JobStore persists job lifecycle state. All methods accept a context so
+// blocking implementations (Redis) honour caller deadlines / cancellation
+// instead of hanging indefinitely on a degraded backend.
+//
+// In-memory implementations are free to ignore ctx (no blocking I/O), but the
+// parameter is required for API uniformity so callers do not need to know
+// which backend is wired. When no upstream ctx is available, callers should
+// bound the call with context.WithTimeout — see DefaultStoreOpTimeout.
 type JobStore interface {
-	Put(job *Job) error
-	Get(jobID string) (*JobState, error)
-	GetByThread(channelID, threadTS string) (*JobState, error)
-	ListPending() ([]*JobState, error)
-	UpdateStatus(jobID string, status JobStatus) error
-	SetWorker(jobID, workerID string) error
-	SetAgentStatus(jobID string, report StatusReport) error
-	Delete(jobID string) error
-	ListAll() ([]*JobState, error)
+	Put(ctx context.Context, job *Job) error
+	Get(ctx context.Context, jobID string) (*JobState, error)
+	GetByThread(ctx context.Context, channelID, threadTS string) (*JobState, error)
+	ListPending(ctx context.Context) ([]*JobState, error)
+	UpdateStatus(ctx context.Context, jobID string, status JobStatus) error
+	SetWorker(ctx context.Context, jobID, workerID string) error
+	SetAgentStatus(ctx context.Context, jobID string, report StatusReport) error
+	Delete(ctx context.Context, jobID string) error
+	ListAll(ctx context.Context) ([]*JobState, error)
 }

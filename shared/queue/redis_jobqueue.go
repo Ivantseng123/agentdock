@@ -76,7 +76,7 @@ func (q *RedisJobQueue) Submit(ctx context.Context, job *Job) error {
 		return fmt.Errorf("marshal job: %w", err)
 	}
 
-	if err := q.store.Put(job); err != nil {
+	if err := q.store.Put(ctx, job); err != nil {
 		return fmt.Errorf("store put: %w", err)
 	}
 
@@ -95,14 +95,19 @@ func (q *RedisJobQueue) Submit(ctx context.Context, job *Job) error {
 // in-memory queue gives, and matches how callers use the value (UX hint, not
 // distributed consensus).
 func (q *RedisJobQueue) QueuePosition(jobID string) (int, error) {
-	state, err := q.store.Get(jobID)
+	// QueuePosition has no ctx in the JobQueue interface (UX hint, not a
+	// request-scoped call). Bound JobStore calls with a short timeout so a
+	// Redis hiccup cannot stall callers indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultStoreOpTimeout)
+	defer cancel()
+	state, err := q.store.Get(ctx, jobID)
 	if err != nil {
 		return 0, err
 	}
 	if state.Status != JobPending {
 		return 0, nil
 	}
-	pending, err := q.store.ListPending()
+	pending, err := q.store.ListPending(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -249,7 +254,7 @@ func (q *RedisJobQueue) Receive(ctx context.Context) (<-chan *Job, error) {
 					}
 
 					// Store in local JobStore so worker pool can find it.
-					q.store.Put(&job)
+					q.store.Put(ctx, &job)
 
 					select {
 					case ch <- &job:
@@ -296,7 +301,7 @@ func receiveBackoffDuration(n int) time.Duration {
 // Ack acknowledges a job by updating its status and acking all pending
 // messages from this consumer.
 func (q *RedisJobQueue) Ack(ctx context.Context, jobID string) error {
-	if err := q.store.UpdateStatus(jobID, JobPreparing); err != nil {
+	if err := q.store.UpdateStatus(ctx, jobID, JobPreparing); err != nil {
 		return fmt.Errorf("update status: %w", err)
 	}
 

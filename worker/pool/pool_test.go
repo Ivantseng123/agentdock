@@ -58,6 +58,7 @@ func (m *mockRepo) PurgeStale() error {
 }
 
 func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -127,6 +128,7 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 }
 
 func TestPool_WorkerIDIncludesHostname(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -163,7 +165,7 @@ func TestPool_WorkerIDIncludesHostname(t *testing.T) {
 	ch, _ := bundle.Results.Subscribe(ctx)
 	select {
 	case <-ch:
-		state, _ := store.Get("j1")
+		state, _ := store.Get(ctx, "j1")
 		if state.WorkerID == "" {
 			t.Error("WorkerID should be set after execution")
 		}
@@ -176,6 +178,7 @@ func TestPool_WorkerIDIncludesHostname(t *testing.T) {
 }
 
 func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -314,6 +317,7 @@ func TestExecuteJob_NoSecretKey_EncryptedSecrets_Fails(t *testing.T) {
 }
 
 func TestPool_ShortCircuitsCancelledJobAsCancelled(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -339,7 +343,7 @@ func TestPool_ShortCircuitsCancelledJobAsCancelled(t *testing.T) {
 	if err := bundle.Queue.Submit(ctx, job); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	store.UpdateStatus("jc", queue.JobCancelled)
+	store.UpdateStatus(ctx, "jc", queue.JobCancelled)
 
 	pool.Start(ctx)
 
@@ -355,6 +359,7 @@ func TestPool_ShortCircuitsCancelledJobAsCancelled(t *testing.T) {
 }
 
 func TestPool_ShortCircuitsFailedJobAsFailed(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -380,7 +385,7 @@ func TestPool_ShortCircuitsFailedJobAsFailed(t *testing.T) {
 	if err := bundle.Queue.Submit(ctx, job); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	store.UpdateStatus("jf", queue.JobFailed)
+	store.UpdateStatus(ctx, "jf", queue.JobFailed)
 
 	pool.Start(ctx)
 
@@ -422,6 +427,7 @@ func (b *prepBlockingRunner) Run(ctx context.Context, workDir, prompt string, op
 
 // Scenario B — Kill arrives while runner is blocked during prep-like work (before OnStarted).
 func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -460,7 +466,7 @@ func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
 	}
 
 	<-runner.started
-	store.UpdateStatus("jprep", queue.JobCancelled)
+	store.UpdateStatus(ctx, "jprep", queue.JobCancelled)
 	bundle.Commands.Send(ctx, queue.Command{JobID: "jprep", Action: "kill"})
 
 	ch, _ := bundle.Results.Subscribe(ctx)
@@ -479,6 +485,7 @@ func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
 // No pool-level duplication needed.
 
 func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -585,6 +592,7 @@ func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {
 }
 
 func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -624,7 +632,7 @@ func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
 
 	<-runner.started
 	// User cancel: mark store then send kill.
-	store.UpdateStatus("jrun", queue.JobCancelled)
+	store.UpdateStatus(ctx, "jrun", queue.JobCancelled)
 	bundle.Commands.Send(ctx, queue.Command{JobID: "jrun", Action: "kill"})
 
 	ch, _ := bundle.Results.Subscribe(ctx)
@@ -668,6 +676,7 @@ func (b *recordingStatusBus) snapshot() []queue.StatusReport {
 }
 
 func TestPool_StatusReportsIncludeJobStatus(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()

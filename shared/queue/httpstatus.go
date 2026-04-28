@@ -59,7 +59,7 @@ type jobsResponse struct {
 // StatusHandler returns an http.HandlerFunc that reports current job states.
 func StatusHandler(store JobStore, queue JobQueue) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		all, err := store.ListAll()
+		all, err := store.ListAll(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -170,7 +170,7 @@ func KillHandler(store JobStore, commands CommandBus) http.HandlerFunc {
 		}
 		jobID := parts[0]
 
-		state, err := store.Get(jobID)
+		state, err := store.Get(r.Context(), jobID)
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
@@ -183,7 +183,7 @@ func KillHandler(store JobStore, commands CommandBus) http.HandlerFunc {
 			return
 		}
 
-		store.UpdateStatus(jobID, JobFailed)
+		store.UpdateStatus(r.Context(), jobID, JobFailed)
 		if commands != nil {
 			commands.Send(r.Context(), Command{JobID: jobID, Action: "kill"})
 		}

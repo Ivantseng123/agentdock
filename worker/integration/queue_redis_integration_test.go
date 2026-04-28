@@ -34,6 +34,7 @@ func redisClient(t *testing.T) *redis.Client {
 }
 
 func TestRedisFullFlow_SubmitToResult(t *testing.T) {
+	ctx := context.Background()
 	rdb := redisClient(t)
 	store := queue.NewMemJobStore()
 	bundle := queue.NewRedisBundle(rdb, store, "triage")

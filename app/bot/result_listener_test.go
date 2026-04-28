@@ -94,8 +94,9 @@ func (f *fakeWorkflow) HandleResult(ctx context.Context, state *queue.JobState, 
 // ── tests: failed path (listener-owned) ──────────────────────────────────────
 
 func TestResultListener_FailedPostsError(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.Put(ctx, &queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -130,8 +131,9 @@ func TestResultListener_FailedPostsError(t *testing.T) {
 }
 
 func TestResultListener_FailedShowsRetryButton(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", RetryCount: 0})
+	store.Put(ctx, &queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", RetryCount: 0})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -177,8 +179,9 @@ func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 }
 
 func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", RetryCount: 1})
+	store.Put(ctx, &queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", RetryCount: 1})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -232,8 +235,9 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 // ── tests: cancelled path (listener-owned) ───────────────────────────────────
 
 func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jcan", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
+	store.Put(ctx, &queue.Job{ID: "jcan", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -263,7 +267,7 @@ func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
 		t.Errorf("no retry button expected, got %v", slackMock.buttons)
 	}
 
-	state, _ := store.Get("jcan")
+	state, _ := store.Get(ctx, "jcan")
 	if state.Status != queue.JobCancelled {
 		t.Errorf("store status = %q, want JobCancelled", state.Status)
 	}
@@ -273,9 +277,10 @@ func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
 // verifies that Design A dominates: if the store marks the job cancelled, a
 // concurrent "completed" result is routed to cancellation, not the workflow.
 func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jrace", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1", TaskType: "issue"})
-	store.UpdateStatus("jrace", queue.JobCancelled)
+	store.Put(ctx, &queue.Job{ID: "jrace", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1", TaskType: "issue"})
+	store.UpdateStatus(ctx, "jrace", queue.JobCancelled)
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -321,8 +326,9 @@ func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(
 // ── tests: dedup ──────────────────────────────────────────────────────────────
 
 func TestResultListener_DedupDropsDuplicateResult(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.Put(ctx, &queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -360,14 +366,15 @@ func TestResultListener_DedupDropsDuplicateResult(t *testing.T) {
 // owns that). We instead verify via the cancelled path, which uses
 // listener's own updateStatus.
 func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
+	ctx := context.Background()
 	slack := &mockSlackPoster{}
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{
+	store.Put(ctx, &queue.Job{
 		ID: "jdouble", Repo: "o/r", ChannelID: "C1",
 		ThreadTS: "T1", StatusMsgTS: "S1",
 	})
 	// Mark as cancelled so cancellation path fires (which uses listener's own updateStatus).
-	store.UpdateStatus("jdouble", queue.JobCancelled)
+	store.UpdateStatus(ctx, "jdouble", queue.JobCancelled)
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -419,8 +426,9 @@ func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
 // result is forwarded to the workflow's HandleResult and the store is updated
 // to JobCompleted on success.
 func TestResultListener_CompletedDispatchesToWorkflow(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jdisp", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
+	store.Put(ctx, &queue.Job{ID: "jdisp", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -461,7 +469,7 @@ func TestResultListener_CompletedDispatchesToWorkflow(t *testing.T) {
 		t.Errorf("workflow received wrong result: %+v", gotResult)
 	}
 
-	state, _ := store.Get("jdisp")
+	state, _ := store.Get(ctx, "jdisp")
 	if state.Status != queue.JobCompleted {
 		t.Errorf("store status = %q, want JobCompleted", state.Status)
 	}
@@ -471,8 +479,9 @@ func TestResultListener_CompletedDispatchesToWorkflow(t *testing.T) {
 // workflow mutates result.Status to "failed" (e.g. for ERROR or parse-fail),
 // the listener records JobFailed in the store and does NOT clear dedup.
 func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jmfail", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
+	store.Put(ctx, &queue.Job{ID: "jmfail", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -520,7 +529,7 @@ func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 		t.Errorf("workflow received wrong result: %+v", gotResult)
 	}
 
-	state, _ := store.Get("jmfail")
+	state, _ := store.Get(ctx, "jmfail")
 	if state.Status != queue.JobFailed {
 		t.Errorf("store status = %q, want JobFailed", state.Status)
 	}
@@ -540,8 +549,9 @@ func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 // on fakeWorkflow and restores the pre-diff behaviour asserted by the deleted
 // TestResultListener_IssueCreationFailureMarksJobFailed test.
 func TestResultListener_WorkflowErrorMarksJobFailed(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
+	store.Put(ctx, &queue.Job{ID: "jerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -573,7 +583,7 @@ func TestResultListener_WorkflowErrorMarksJobFailed(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	state, _ := store.Get("jerr")
+	state, _ := store.Get(ctx, "jerr")
 	if state.Status != queue.JobFailed {
 		t.Errorf("store status = %q, want JobFailed", state.Status)
 	}
@@ -597,9 +607,10 @@ func TestResultListener_WorkflowErrorMarksJobFailed(t *testing.T) {
 // ── tests: worker info in failure messages ────────────────────────────────────
 
 func TestResultListener_FailureShowsNicknameAndWorkerID(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jfnick", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
-	store.SetAgentStatus("jfnick", queue.StatusReport{
+	store.Put(ctx, &queue.Job{ID: "jfnick", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.SetAgentStatus(ctx, "jfnick", queue.StatusReport{
 		JobID:          "jfnick",
 		WorkerID:       "host/worker-2",
 		WorkerNickname: "小明",
@@ -645,9 +656,10 @@ func TestResultListener_FailureShowsNicknameAndWorkerID(t *testing.T) {
 }
 
 func TestResultListener_FailureWithoutNicknameShowsWorkerID(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jfraw", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
-	store.SetAgentStatus("jfraw", queue.StatusReport{
+	store.Put(ctx, &queue.Job{ID: "jfraw", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.SetAgentStatus(ctx, "jfraw", queue.StatusReport{
 		JobID:    "jfraw",
 		WorkerID: "host/worker-3",
 	})
@@ -693,8 +705,9 @@ func TestResultListener_FailureWithoutNicknameShowsWorkerID(t *testing.T) {
 // TestResultListener_DispatchesByTaskType verifies that a completed result for
 // a job with TaskType "issue" is routed to the registered "issue" workflow.
 func TestResultListener_DispatchesByTaskType(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jreg", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
+	store.Put(ctx, &queue.Job{ID: "jreg", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -741,8 +754,9 @@ func TestResultListener_DispatchesByTaskType(t *testing.T) {
 // listener posts an error message to Slack, clears dedup so the user can
 // re-trigger, cleans up attachments, and does NOT call any workflow.
 func TestResultListener_UnknownTaskType_FailsSafely(t *testing.T) {
+	ctx := context.Background()
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "junk", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "nonsense"})
+	store.Put(ctx, &queue.Job{ID: "junk", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", TaskType: "nonsense"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
@@ -805,7 +819,7 @@ func TestResultListener_UnknownTaskType_FailsSafely(t *testing.T) {
 	}
 
 	// Store status must remain untouched (Pending/Running, not Completed/Failed).
-	state, _ := store.Get("junk")
+	state, _ := store.Get(ctx, "junk")
 	if state.Status == queue.JobCompleted || state.Status == queue.JobFailed {
 		t.Errorf("store status should not be completed/failed for unknown task_type, got %q", state.Status)
 	}

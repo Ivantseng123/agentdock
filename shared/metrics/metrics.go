@@ -247,7 +247,9 @@ func countActive(store queue.JobStore) float64 {
 	if store == nil {
 		return 0
 	}
-	all, err := store.ListAll()
+	ctx, cancel := context.WithTimeout(context.Background(), queue.DefaultStoreOpTimeout)
+	defer cancel()
+	all, err := store.ListAll(ctx)
 	if err != nil {
 		return 0
 	}

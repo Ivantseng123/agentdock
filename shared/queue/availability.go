@@ -110,7 +110,7 @@ func (a *availability) compute(ctx context.Context) Verdict {
 	// so it never contributes to depErrorHook. Spec test matrix lists it as a
 	// fail-open dep, but the interface makes that case unreachable today.
 	depth := a.queue.QueueDepth()
-	states, err := a.store.ListAll()
+	states, err := a.store.ListAll(ctx)
 	if err != nil {
 		a.logger.Warn("可用性檢查: 列舉工作狀態失敗", "phase", "失敗", "error", err)
 		if a.depErrorHook != nil {

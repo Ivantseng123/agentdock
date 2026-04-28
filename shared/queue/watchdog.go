@@ -82,8 +82,16 @@ func (w *Watchdog) Start(stop <-chan struct{}) {
 	}
 }
 
+// DefaultStoreOpTimeout bounds each JobStore / CommandBus call that lacks a
+// caller-provided deadline so a degraded backend (Redis hang) cannot stall the
+// caller indefinitely. 5s is comfortably above a healthy Redis round-trip yet
+// surfaces problems well before the next tick / user retry.
+const DefaultStoreOpTimeout = 5 * time.Second
+
 func (w *Watchdog) check() {
-	all, err := w.store.ListAll()
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultStoreOpTimeout)
+	defer cancel()
+	all, err := w.store.ListAll(ctx)
 	if err != nil {
 		w.logger.Warn("Watchdog 列舉工作失敗", "phase", "失敗", "error", err)
 		return
@@ -136,7 +144,9 @@ func (w *Watchdog) publishCancelledFallback(state *JobState) {
 		"job_id", state.Job.ID,
 		"cancelled_age", time.Since(state.CancelledAt))
 	if w.results != nil {
-		w.results.Publish(context.Background(), &JobResult{
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultStoreOpTimeout)
+		defer cancel()
+		w.results.Publish(ctx, &JobResult{
 			JobID:      state.Job.ID,
 			Status:     "cancelled",
 			FinishedAt: time.Now(),
@@ -145,8 +155,10 @@ func (w *Watchdog) publishCancelledFallback(state *JobState) {
 }
 
 func (w *Watchdog) killAndPublish(state *JobState, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultStoreOpTimeout)
+	defer cancel()
 	// Back off if the job was cancelled in the race window.
-	if fresh, _ := w.store.Get(state.Job.ID); fresh != nil && fresh.Status == JobCancelled {
+	if fresh, _ := w.store.Get(ctx, state.Job.ID); fresh != nil && fresh.Status == JobCancelled {
 		return
 	}
 
@@ -157,13 +169,13 @@ func (w *Watchdog) killAndPublish(state *JobState, reason string) {
 		"job_id", state.Job.ID, "status", state.Status, "reason", reason)
 
 	if w.commands != nil {
-		w.commands.Send(context.Background(), Command{JobID: state.Job.ID, Action: "kill"})
+		w.commands.Send(ctx, Command{JobID: state.Job.ID, Action: "kill"})
 	}
 
-	w.store.UpdateStatus(state.Job.ID, JobFailed)
+	w.store.UpdateStatus(ctx, state.Job.ID, JobFailed)
 
 	if w.results != nil {
-		w.results.Publish(context.Background(), &JobResult{
+		w.results.Publish(ctx, &JobResult{
 			JobID:      state.Job.ID,
 			Status:     "failed",
 			Error:      fmt.Sprintf("job terminated: %s", reason),
