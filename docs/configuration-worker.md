@@ -27,6 +27,9 @@ github:
 # agents:
 #   opencode:
 #     timeout: 30m    # 範例：只覆寫 timeout，其餘欄位沿用內建預設
+#     extra_args: ["-m", "opencode/claude-opus-4-7"]
+#     # 範例：用 extra_args 插入 model 等旗標，args 裡的 {extra_args}
+#     # 會被展開成這裡填的 tokens（不用複製整組 args）
 
 providers: [claude, codex, opencode]  # fallback chain（依序嘗試）；單一 agent 模式：providers: [claude]
 
@@ -62,6 +65,42 @@ secret_key: 跟-app-同一把             # REQUIRED：從 app.yaml 複製過來
 secrets:
   GH_TOKEN: ghp_worker_override       # 可選：覆蓋 app 給的值
 ```
+
+## extra_args — 注入額外旗標
+
+`extra_args` 讓你只加旗標，**不用複製整組 `args`**。Builtin agent 的 `args` 裡有 `{extra_args}` token；runtime 會把你的 extra_args slice splice 進去。
+
+### 範例
+
+```yaml
+agents:
+  opencode:
+    extra_args: ["-m", "opencode/claude-opus-4-7"]    # 指定 model
+
+  claude:
+    extra_args: ["--model", "claude-opus-4-7"]        # 指定 model
+
+  codex:
+    extra_args: ["--reasoning-effort", "high"]        # 提升 reasoning effort
+```
+
+### 注入位置
+
+| Agent      | `{extra_args}` 位置                            | 原因                                       |
+|------------|-----------------------------------------------|--------------------------------------------|
+| `claude`   | `stream-json` 後、`-p` 前                      | claude CLI 要求所有 option flag 必須在 `-p` 前 |
+| `codex`    | 固定旗標後、`{prompt}` 前                        | `codex exec` 接受 option 在 positional 前   |
+| `opencode` | `--pure` 後、`{prompt}` 前                      | `-m`、`--variant` 等旗標都放在 positional 前  |
+
+### 優先序
+
+如果你同時寫了完整的 `args` override **和** `extra_args`，但 `args` 裡沒有 `{extra_args}` token，`extra_args` 會被忽略，啟動時會印 warn log：
+
+```
+agent has both args override and extra_args; extra_args ignored
+```
+
+建議：**只寫 `extra_args`，不要複製整組 args** — 這樣之後 builtin 更新旗標時你會自動拿到。
 
 ## Worker Nicknames（選用）
 

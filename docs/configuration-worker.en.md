@@ -29,6 +29,10 @@ github:
 # agents:
 #   opencode:
 #     timeout: 30m    # example: extend timeout for one agent only
+#     extra_args: ["-m", "opencode/claude-opus-4-7"]
+#     # example: inject flags (e.g. model) via extra_args; the {extra_args}
+#     # token inside the builtin args is expanded with these tokens, so you
+#     # don't have to copy the full args array just to add one flag.
 
 providers: [claude, codex, opencode]  # ordered fallback chain; single-agent mode: providers: [claude]
 
@@ -64,6 +68,42 @@ secret_key: same-hex-as-app           # REQUIRED: copy from app.yaml
 secrets:
   GH_TOKEN: ghp_worker_override       # optional: overrides the app-provided value
 ```
+
+## extra_args — injecting extra flags
+
+`extra_args` lets you add flags to a built-in agent **without copying the entire `args` list**. Every built-in agent's `args` contains an `{extra_args}` token; at runtime the worker splices your `extra_args` slice in at that position.
+
+### Examples
+
+```yaml
+agents:
+  opencode:
+    extra_args: ["-m", "opencode/claude-opus-4-7"]    # pin a model
+
+  claude:
+    extra_args: ["--model", "claude-opus-4-7"]        # pin a model
+
+  codex:
+    extra_args: ["--reasoning-effort", "high"]        # raise reasoning effort
+```
+
+### Injection positions
+
+| Agent      | `{extra_args}` position                          | Reason                                          |
+|------------|--------------------------------------------------|-------------------------------------------------|
+| `claude`   | after `stream-json`, before `-p`                 | claude CLI requires all option flags before `-p` |
+| `codex`    | after fixed flags, before `{prompt}`             | `codex exec` accepts options before the positional |
+| `opencode` | after `--pure`, before `{prompt}`                | `-m`, `--variant` etc. all go before the positional |
+
+### Precedence
+
+If you write both a full `args` override **and** `extra_args`, but the `args` override does not contain an `{extra_args}` token, `extra_args` is silently ignored and a startup warn is logged:
+
+```
+agent has both args override and extra_args; extra_args ignored
+```
+
+Recommendation: **only write `extra_args` — do not copy the full args list.** That way you automatically get upstream args refreshes when built-ins change.
 
 ## Worker Nicknames (optional)
 
