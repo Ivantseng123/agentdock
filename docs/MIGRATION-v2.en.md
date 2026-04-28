@@ -177,6 +177,54 @@ Three verbs (`issue` / `ask` / `review`) each with their own prompt. All changes
 
 Full field reference: [configuration-app.en.md](configuration-app.en.md#workflow-specific-prompts) and [configuration-app.en.md](configuration-app.en.md#enabling-pr-review).
 
+### v2.2 → v2.3: `workflows:` promoted to top level, `prompt_defaults:` split out (additive, aliased)
+
+**Motivation** (issue #126): the old schema had two layering problems — `prompt:` doubled as both the prompt container and the workflow container (inverted layering), and a single workflow's properties were split across `prompt.pr_review` and the top-level `pr_review` block. The new schema promotes workflows to the top level, nests prompt beneath each workflow, and pulls cross-workflow `language` / `allow_worker_rules` into `prompt_defaults:`.
+
+**New shape (recommended)**:
+
+```yaml
+workflows:
+  issue:
+    prompt:
+      goal: "..."
+      response_schema: "..."
+      output_rules: []
+  ask:
+    prompt:
+      goal: "..."
+      output_rules: [...]
+  pr_review:
+    enabled: false          # PR Review feature flag now lives here
+    prompt:
+      goal: "..."
+      output_rules: [...]
+
+prompt_defaults:
+  language: English
+  allow_worker_rules: true
+```
+
+**Legacy aliases (handled automatically — old yaml still loads)**:
+
+| Old path | Mapped to | Notes |
+|---|---|---|
+| `prompt.goal` / `prompt.response_schema` / `prompt.output_rules` (Old-A, pre-v2.1 flat form) | `workflows.issue.prompt.*` | Only copied when the new field is empty |
+| `prompt.issue.*` / `prompt.ask.*` / `prompt.pr_review.*` (Old-B, v2.2 interim) | `workflows.issue.prompt.*` / `workflows.ask.prompt.*` / `workflows.pr_review.prompt.*` | Only copied when the new field is empty |
+| `prompt.language` / `prompt.allow_worker_rules` | `prompt_defaults.language` / `prompt_defaults.allow_worker_rules` | Works for both legacy variants |
+| Top-level `pr_review.enabled` (Old-B) | `workflows.pr_review.enabled` | |
+
+**Mixed yaml rule**: if both the new shape and a legacy block are present in the same file, the new shape wins; the app logs a `component=config phase=載入` warning at startup suggesting the legacy block be removed.
+
+**Suggested migration**:
+
+1. `prompt.issue.*` → `workflows.issue.prompt.*` (ditto ask / pr_review).
+2. Top-level `pr_review.enabled` → `workflows.pr_review.enabled`.
+3. `prompt.language` / `prompt.allow_worker_rules` → `prompt_defaults.*`.
+4. Drop the legacy `prompt:` / top-level `pr_review:` blocks.
+
+Shortcut: `agentdock init app -c app-new.yaml --force` produces the new shape directly — port your custom goal / output_rules into it.
+
 ### v2.5 → v2.6: `queue.store` field added (**defaults to `redis` — upgrade changes behaviour**)
 
 v2.6 wires `RedisJobStore` (#145 / PR #147) into the app (#146) and defaults `queue.store` to `redis` so production deployments get the #123 fix (in-flight jobs resuming after app restart) without having to opt in.

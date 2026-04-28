@@ -9,15 +9,17 @@ import (
 
 func TestAssemblePromptContext_PassesConfigThrough(t *testing.T) {
 	allow := false
-	pc := config.PromptConfig{
+	wp := config.WorkflowPromptConfig{
+		Goal:        "custom",
+		OutputRules: []string{"one", "two"},
+	}
+	defaults := config.PromptDefaultsConfig{
 		Language:         "zh-TW",
-		Goal:             "custom",
-		OutputRules:      []string{"one", "two"},
 		AllowWorkerRules: &allow,
 	}
 	msgs := []queue.ThreadMessage{{User: "Alice", Timestamp: "1", Text: "t"}}
 
-	got := AssemblePromptContext(msgs, "extra", "general", "Alice", "main", pc)
+	got := AssemblePromptContext(msgs, "extra", "general", "Alice", "main", wp, defaults)
 
 	if got.Language != "zh-TW" {
 		t.Errorf("Language = %q", got.Language)
@@ -40,10 +42,10 @@ func TestAssemblePromptContext_PassesConfigThrough(t *testing.T) {
 }
 
 func TestAssemblePromptContext_NilAllowWorkerRulesDefaultsTrue(t *testing.T) {
-	// Delegates to PromptConfig.IsWorkerRulesAllowed(), which treats nil as
-	// "allow" (matching applyDefaults). Keeps the invariant in one place.
-	pc := config.PromptConfig{AllowWorkerRules: nil}
-	got := AssemblePromptContext(nil, "", "", "", "", pc)
+	// Delegates to PromptDefaultsConfig.IsWorkerRulesAllowed(), which treats
+	// nil as "allow" (matching applyDefaults). Keeps the invariant in one place.
+	defaults := config.PromptDefaultsConfig{AllowWorkerRules: nil}
+	got := AssemblePromptContext(nil, "", "", "", "", config.WorkflowPromptConfig{}, defaults)
 	if !got.AllowWorkerRules {
 		t.Error("nil AllowWorkerRules should assemble as true (matches applyDefaults default)")
 	}

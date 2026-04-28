@@ -7,6 +7,12 @@ package config
 import "time"
 
 // Config is the app module's yaml-backed configuration.
+//
+// Workflow config lives under top-level `workflows:`, and cross-workflow
+// prompt defaults under `prompt_defaults:`. Legacy `prompt:` / `pr_review:`
+// top-level blocks are accepted as aliases (see migrateLegacy) — those
+// fields remain on Config so unknown-key warners still recognise the legacy
+// paths and mixed yaml (old + new) is handled deterministically.
 type Config struct {
 	LogLevel          string                   `yaml:"log_level"`
 	Server            ServerConfig             `yaml:"server"`
@@ -20,17 +26,25 @@ type Config struct {
 	RateLimit         RateLimitConfig          `yaml:"rate_limit"`
 	Mantis            MantisConfig             `yaml:"mantis"`
 	ChannelPriority   map[string]int           `yaml:"channel_priority"`
-	Prompt            PromptConfig             `yaml:"prompt"`
-	PRReview          PRReviewConfig           `yaml:"pr_review"`
-	SkillsConfig      string                   `yaml:"skills_config"`
-	Attachments       AttachmentsConfig        `yaml:"attachments"`
-	RepoCache         RepoCacheConfig          `yaml:"repo_cache"`
-	Queue             QueueConfig              `yaml:"queue"`
-	Availability      AvailabilityConfig       `yaml:"availability"`
-	Logging           LoggingConfig            `yaml:"logging"`
-	Redis             RedisConfig              `yaml:"redis"`
-	SecretKey         string                   `yaml:"secret_key"`
-	Secrets           map[string]string        `yaml:"secrets"`
+
+	Workflows      WorkflowsConfig      `yaml:"workflows"`
+	PromptDefaults PromptDefaultsConfig `yaml:"prompt_defaults"`
+
+	// Legacy aliases. ApplyDefaults migrates these into Workflows /
+	// PromptDefaults and then zeroes them so downstream marshalling only
+	// emits the new shape. See docs/MIGRATION-v2.md.
+	Prompt   LegacyPromptConfig   `yaml:"prompt,omitempty"`
+	PRReview LegacyPRReviewConfig `yaml:"pr_review,omitempty"`
+
+	SkillsConfig string             `yaml:"skills_config"`
+	Attachments  AttachmentsConfig  `yaml:"attachments"`
+	RepoCache    RepoCacheConfig    `yaml:"repo_cache"`
+	Queue        QueueConfig        `yaml:"queue"`
+	Availability AvailabilityConfig `yaml:"availability"`
+	Logging      LoggingConfig      `yaml:"logging"`
+	Redis        RedisConfig        `yaml:"redis"`
+	SecretKey    string             `yaml:"secret_key"`
+	Secrets      map[string]string  `yaml:"secrets"`
 }
 
 type ServerConfig struct {
@@ -46,23 +60,86 @@ type GitHubConfig struct {
 	Token string `yaml:"token"`
 }
 
-// PromptConfig nests per-workflow goal / output rules. Legacy flat
-// Goal / OutputRules are aliased at load time into Issue.* so pre-v2.2
-// operators keep working.
-type PromptConfig struct {
+// WorkflowsConfig groups the three workflows (issue / ask / pr_review) under
+// one top-level key. Fixed struct (not a map) because the set is closed —
+// adding a new workflow type is a code change anyway.
+type WorkflowsConfig struct {
+	Issue    WorkflowConfig         `yaml:"issue"`
+	Ask      WorkflowConfig         `yaml:"ask"`
+	PRReview PRReviewWorkflowConfig `yaml:"pr_review"`
+}
+
+// WorkflowConfig is the per-workflow block. Currently only `prompt` lives
+// here; future per-workflow feature flags should be added as siblings.
+type WorkflowConfig struct {
+	Prompt WorkflowPromptConfig `yaml:"prompt"`
+}
+
+// PRReviewWorkflowConfig is the pr_review workflow's block. Unlike Issue / Ask,
+// it has a feature flag (`enabled`) because the workflow can be gated off.
+type PRReviewWorkflowConfig struct {
+	Enabled *bool                `yaml:"enabled"`
+	Prompt  WorkflowPromptConfig `yaml:"prompt"`
+}
+
+// IsEnabled reports whether the PR Review workflow should run. Nil pointer
+// is treated as enabled — the default ships on.
+func (w PRReviewWorkflowConfig) IsEnabled() bool {
+	return w.Enabled == nil || *w.Enabled
+}
+
+// PromptDefaultsConfig carries prompt knobs that apply across all workflows.
+type PromptDefaultsConfig struct {
 	Language         string `yaml:"language"`
 	AllowWorkerRules *bool  `yaml:"allow_worker_rules"`
+}
 
-	// Legacy flat fields — at load time, these are copied into Issue.* if
-	// Issue.* is unset. Operators may remove these from their yaml once they
-	// migrate to the nested form.
-	Goal        string   `yaml:"goal,omitempty"`
-	OutputRules []string `yaml:"output_rules,omitempty"`
+// IsWorkerRulesAllowed returns whether worker-side ExtraRules should be
+// rendered into the prompt. Nil pointer is treated as true (default) so
+// callers don't have to duplicate the ApplyDefaults invariant.
+func (p PromptDefaultsConfig) IsWorkerRulesAllowed() bool {
+	return p.AllowWorkerRules == nil || *p.AllowWorkerRules
+}
 
-	// Per-workflow sections.
-	Issue    WorkflowPromptConfig `yaml:"issue"`
-	Ask      WorkflowPromptConfig `yaml:"ask"`
-	PRReview WorkflowPromptConfig `yaml:"pr_review"`
+// LegacyPromptConfig accepts the legacy top-level `prompt:` block shape.
+// migrateLegacy copies its values into Workflows / PromptDefaults and zeroes
+// it. See docs/MIGRATION-v2.md for the alias table.
+type LegacyPromptConfig struct {
+	Language         string `yaml:"language,omitempty"`
+	AllowWorkerRules *bool  `yaml:"allow_worker_rules,omitempty"`
+
+	// Old-A: flat goal/response_schema/output_rules under prompt:.
+	Goal           string   `yaml:"goal,omitempty"`
+	ResponseSchema string   `yaml:"response_schema,omitempty"`
+	OutputRules    []string `yaml:"output_rules,omitempty"`
+
+	// Old-B: per-workflow nesting under prompt:.
+	Issue    WorkflowPromptConfig `yaml:"issue,omitempty"`
+	Ask      WorkflowPromptConfig `yaml:"ask,omitempty"`
+	PRReview WorkflowPromptConfig `yaml:"pr_review,omitempty"`
+}
+
+// IsZero reports whether this legacy block carries any operator-supplied
+// data. An all-zero block is treated as absent so ApplyDefaults can skip
+// migration logging.
+func (l LegacyPromptConfig) IsZero() bool {
+	return l.Language == "" && l.AllowWorkerRules == nil &&
+		l.Goal == "" && l.ResponseSchema == "" && len(l.OutputRules) == 0 &&
+		isWorkflowPromptZero(l.Issue) && isWorkflowPromptZero(l.Ask) && isWorkflowPromptZero(l.PRReview)
+}
+
+func isWorkflowPromptZero(w WorkflowPromptConfig) bool {
+	return w.Goal == "" && w.ResponseSchema == "" && len(w.OutputRules) == 0
+}
+
+// LegacyPRReviewConfig accepts the legacy top-level `pr_review:` block; its
+// enabled flag is migrated to Workflows.PRReview.Enabled.
+type LegacyPRReviewConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+func (l LegacyPRReviewConfig) IsZero() bool {
+	return l.Enabled == nil
 }
 
 // WorkflowPromptConfig holds one workflow's prompt knobs. All fields are
@@ -77,30 +154,6 @@ type WorkflowPromptConfig struct {
 	Goal           string   `yaml:"goal"`
 	ResponseSchema string   `yaml:"response_schema"`
 	OutputRules    []string `yaml:"output_rules"`
-}
-
-// IsWorkerRulesAllowed returns whether worker-side ExtraRules should be
-// rendered into the prompt. Nil pointer is treated as true (default) so
-// callers don't have to duplicate the ApplyDefaults invariant.
-func (p PromptConfig) IsWorkerRulesAllowed() bool {
-	return p.AllowWorkerRules == nil || *p.AllowWorkerRules
-}
-
-// PRReviewConfig gates the PR Review workflow. **Enabled by default** —
-// the github-pr-review skill and `agentdock pr-review-helper` subcommand
-// are now baked into the release image, so opting in was just ceremony.
-// Operators can still force it off with `pr_review.enabled: false`.
-//
-// Pointer-to-bool (not plain bool) lets us distinguish "unset" (→ default
-// true) from "explicit false" (→ disabled). See IsEnabled() for the gate.
-type PRReviewConfig struct {
-	Enabled *bool `yaml:"enabled"`
-}
-
-// IsEnabled reports whether the PR Review workflow should run. Nil pointer
-// is treated as enabled — the default ships on.
-func (c PRReviewConfig) IsEnabled() bool {
-	return c.Enabled == nil || *c.Enabled
 }
 
 type ChannelConfig struct {
