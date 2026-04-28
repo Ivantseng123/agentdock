@@ -31,6 +31,56 @@ func TestInitApp_YAML(t *testing.T) {
 	}
 }
 
+// TestInitApp_EmitsNewSchema pins the v2.3 schema shape — top-level
+// workflows: / prompt_defaults:, no top-level legacy prompt: / pr_review:.
+// Regression guard for issue #126: accidentally emitting the legacy shape
+// would undo the refactor and mislead fresh operators.
+func TestInitApp_EmitsNewSchema(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.yaml")
+	if err := runInitApp(path, false, false); err != nil {
+		t.Fatalf("runInitApp: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse generated yaml: %v", err)
+	}
+
+	// New-shape keys must be present.
+	workflows, ok := parsed["workflows"].(map[string]any)
+	if !ok {
+		t.Fatal("generated app.yaml missing top-level workflows: block")
+	}
+	for _, name := range []string{"issue", "ask", "pr_review"} {
+		wf, ok := workflows[name].(map[string]any)
+		if !ok {
+			t.Errorf("workflows.%s missing", name)
+			continue
+		}
+		if _, ok := wf["prompt"]; !ok {
+			t.Errorf("workflows.%s.prompt missing", name)
+		}
+	}
+	if _, ok := workflows["pr_review"].(map[string]any)["enabled"]; !ok {
+		t.Error("workflows.pr_review.enabled missing (feature flag moved here)")
+	}
+	if _, ok := parsed["prompt_defaults"]; !ok {
+		t.Error("generated app.yaml missing top-level prompt_defaults: block")
+	}
+
+	// Legacy top-level blocks must NOT be emitted.
+	if _, ok := parsed["prompt"]; ok {
+		t.Error("generated app.yaml still emits legacy top-level prompt: block")
+	}
+	if _, ok := parsed["pr_review"]; ok {
+		t.Error("generated app.yaml still emits legacy top-level pr_review: block")
+	}
+}
+
 func TestInitApp_JSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.json")

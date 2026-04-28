@@ -177,6 +177,54 @@ v2.0 還支援 `queue.transport: inmem`（app 和 worker 跑在同一個 process
 
 欄位完整說明：[configuration-app.md](configuration-app.md#workflow-specific-prompts)、[configuration-app.md](configuration-app.md#pr-review-啟用)。
 
+### v2.2 → v2.3：`workflows:` 升格為頂層、`prompt_defaults:` 分出（additive，有 legacy alias）
+
+**動機**（issue #126）：舊 schema 有兩個結構問題——`prompt:` 同時當 prompt 容器與 workflow 容器（層級反了），而同一個 workflow 的屬性被拆到 `prompt.pr_review` 和頂層 `pr_review` 兩個 block。新 schema 把 workflow 升格為頂層、prompt 縮進到 workflow 底下，跨 workflow 共用的 `language` / `allow_worker_rules` 獨立成 `prompt_defaults:`。
+
+**新 shape（推薦）**：
+
+```yaml
+workflows:
+  issue:
+    prompt:
+      goal: "..."
+      response_schema: "..."
+      output_rules: []
+  ask:
+    prompt:
+      goal: "..."
+      output_rules: [...]
+  pr_review:
+    enabled: false          # PR Review workflow feature flag 現在住這裡
+    prompt:
+      goal: "..."
+      output_rules: [...]
+
+prompt_defaults:
+  language: 繁體中文
+  allow_worker_rules: true
+```
+
+**Legacy alias（自動，沒遷移也能跑）**：
+
+| 舊寫法 | 映射到 | 備註 |
+|---|---|---|
+| `prompt.goal` / `prompt.response_schema` / `prompt.output_rules`（Old-A，v2.1 以前的 flat 寫法） | `workflows.issue.prompt.*` | 只有在 `workflows.issue.prompt.*` 還沒設時才會被搬 |
+| `prompt.issue.*` / `prompt.ask.*` / `prompt.pr_review.*`（Old-B，v2.2 中間型） | `workflows.issue.prompt.*` / `workflows.ask.prompt.*` / `workflows.pr_review.prompt.*` | 同樣只在新欄位空著時搬 |
+| `prompt.language` / `prompt.allow_worker_rules` | `prompt_defaults.language` / `prompt_defaults.allow_worker_rules` | 兩個 legacy 版本都支援 |
+| 頂層 `pr_review.enabled`（Old-B） | `workflows.pr_review.enabled` | |
+
+**混用規則**：新舊欄位同時出現在一份 yaml 時，以 `workflows:` / `prompt_defaults:` 為準，啟動時會 log 一條 `component=config phase=載入` warning 建議移除 legacy 區塊。
+
+**建議遷移步驟**：
+
+1. `prompt.issue.*` → `workflows.issue.prompt.*`（ask / pr_review 同理）。
+2. 頂層 `pr_review.enabled` → `workflows.pr_review.enabled`。
+3. `prompt.language` / `prompt.allow_worker_rules` → `prompt_defaults.*`。
+4. 刪掉舊的 `prompt:` / 頂層 `pr_review:` 區塊。
+
+最省事：`agentdock init app -c app-new.yaml --force`（會直接產出新 shape），再把你自訂的 goal / output_rules 搬進去。
+
 ### v2.5 → v2.6：`queue.store` 新欄位（**預設 redis，升級後行為會變**）
 
 v2.6 把 `RedisJobStore`（#145 / PR #147）接進 App（#146），並把 `queue.store` 預設設為 `redis`，讓生產部署預設就能在 app 重啟後 resume in-flight job（#123）。
