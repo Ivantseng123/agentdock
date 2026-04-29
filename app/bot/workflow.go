@@ -155,6 +155,44 @@ func (w *Workflow) HandleRepoSuggestion(query string) []string {
 	return repos
 }
 
+// HandleRefRepoSuggestion is the ref-pick variant of HandleRepoSuggestion:
+// runs the same repoDiscovery search, then filters out repos returned by
+// the pending state's RefExclusionReader (primary + already-picked refs).
+// When the state doesn't implement RefExclusionReader, falls through with
+// no filtering — defensive, but workflows that use ask_ref should always
+// implement the interface.
+func (w *Workflow) HandleRefRepoSuggestion(selectorMsgTS, query string) []string {
+	if w.repoDiscovery == nil {
+		return nil
+	}
+	repos, err := w.repoDiscovery.SearchRepos(context.Background(), query)
+	if err != nil {
+		slog.Warn("Ref repo 搜尋失敗", "phase", "失敗", "error", err)
+		return nil
+	}
+	w.mu.Lock()
+	pending, ok := w.pending[selectorMsgTS]
+	w.mu.Unlock()
+	if !ok || pending == nil {
+		return repos
+	}
+	excluder, ok := pending.State.(workflow.RefExclusionReader)
+	if !ok {
+		return repos
+	}
+	excluded := make(map[string]bool)
+	for _, r := range excluder.RefExclusions() {
+		excluded[r] = true
+	}
+	out := repos[:0:len(repos)]
+	for _, r := range repos {
+		if !excluded[r] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // maxBranchSuggestions caps the type-ahead result list. External_select is
 // also bounded at 100 options per Slack's own API limit.
 const maxBranchSuggestions = 100

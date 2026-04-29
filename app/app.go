@@ -586,11 +586,17 @@ func handleSocketEvent(
 				// Issue uses "repo_search"; Ask uses "ask_repo" (fallback
 				// when the channel has no repos configured).
 				ackSuggestions("Repo 搜尋結果", wf.HandleRepoSuggestion(cb.Value))
-			case "branch_select", "ask_branch":
-				// The branch selector auto-upgrades to external_select when
-				// a repo has >100 branches (issue #153). The suggestion
-				// handler resolves the pending by the selector's own
-				// message TS and filters that repo's branches.
+			case "ask_ref":
+				// Ref repo type-ahead — same shape as ask_repo but the
+				// handler also filters out primary + already-picked refs
+				// via the pending state's RefExclusionReader.
+				ackSuggestions("Ref repo 搜尋結果", wf.HandleRefRepoSuggestion(cb.Container.MessageTs, cb.Value))
+			case "branch_select", "ask_branch", "ask_ref_branch":
+				// Branch selector auto-upgrades to external_select when a
+				// repo has >100 branches (issue #153). The handler resolves
+				// the pending by selector ts and reads BranchSelectedRepo()
+				// from state — askState toggles its BranchTargetRepo across
+				// primary vs ref phases so this single handler serves both.
 				ackSuggestions("Branch 搜尋結果", wf.HandleBranchSuggestion(cb.Container.MessageTs, cb.Value))
 			default:
 				sm.Ack(*evt.Request)

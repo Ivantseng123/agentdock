@@ -52,6 +52,18 @@ type BranchStateReader interface {
 	BranchSelectedRepo() string
 }
 
+// RefExclusionReader is implemented by workflow states that participate in
+// the multi-repo (ref) flow. RefExclusions returns the repo names that
+// should NOT appear in ref-pick type-ahead results — typically primary +
+// already-picked refs. Used by HandleRefRepoSuggestion to filter results
+// when a channel uses external_select for ref repos (no static list).
+//
+// Same concurrency contract as BranchStateReader: implementations must be
+// safe to read on the BlockSuggestion hot path without the workflow lock.
+type RefExclusionReader interface {
+	RefExclusions() []string
+}
+
 // GitHubPR abstracts the PR endpoints PR Review needs for URL validation.
 // PRReviewWorkflow uses this to verify a URL references a real, accessible PR
 // before submitting work. The concrete type (shared/github.Client) lives in

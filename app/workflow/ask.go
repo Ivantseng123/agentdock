@@ -48,15 +48,50 @@ type askState struct {
 	// descriptionPromptStep runs twice for the same ask (shouldn't happen
 	// in current flow, but cheap defense against future back-nav changes).
 	priorAnswerFetchAttempted bool
+
+	// Multi-repo (ref) state. AddRefs is the user's yes/no on the decide
+	// prompt; RefRepos accumulates as the user picks each ref (Branch is
+	// filled later in the per-ref branch loop). RefBranchIdx steps the
+	// per-ref branch picker forward. BranchTargetRepo is the transient
+	// "which repo are we asking branches for right now" — set before each
+	// branch select phase (primary OR ref) so BranchSelectedRepo can stay
+	// a single-method interface (workflow.BranchStateReader) that doesn't
+	// need to know about phases.
+	AddRefs          bool
+	RefRepos         []queue.RefRepo
+	RefBranchIdx     int
+	BranchTargetRepo string
 }
 
 // BranchSelectedRepo satisfies workflow.BranchStateReader so app/bot can
 // read the repo off a Pending.State without depending on askState.
+//
+// Reads BranchTargetRepo (transient, set before each branch select phase)
+// rather than SelectedRepo directly — for primary branch select we set
+// BranchTargetRepo = SelectedRepo; for per-ref branch select we set it to
+// the current ref's repo. This way BranchStateReader stays phase-agnostic.
 func (s *askState) BranchSelectedRepo() string {
 	if s == nil {
 		return ""
 	}
-	return s.SelectedRepo
+	return s.BranchTargetRepo
+}
+
+// RefExclusions returns the repos that should NOT appear as ref candidates:
+// the primary plus any refs already picked. Used by HandleRefRepoSuggestion
+// to filter type-ahead results when the channel has no static repo list.
+func (s *askState) RefExclusions() []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, 0, 1+len(s.RefRepos))
+	if s.SelectedRepo != "" {
+		out = append(out, s.SelectedRepo)
+	}
+	for _, r := range s.RefRepos {
+		out = append(out, r.Repo)
+	}
+	return out
 }
 
 // NewAskWorkflow constructs a workflow instance.
@@ -194,7 +229,48 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 			return NextStep{Kind: NextStepCancel}, nil
 		}
 		st.SelectedBranch = value
-		return w.priorAnswerOrDescriptionStep(p), nil
+		return w.maybeAskRefStep(p), nil
+
+	case "ask_ref_decide":
+		if value == "skip" {
+			st.AddRefs = false
+			return w.priorAnswerOrDescriptionStep(p), nil
+		}
+		// "add" → enter the ref-pick loop.
+		st.AddRefs = true
+		return w.refPickStep(p), nil
+
+	case "ask_ref_pick":
+		// Cancellation (returning to attach prompt etc.) — bail out of refs
+		// entirely and proceed to prior-answer/description.
+		if value == "back_to_decide" || value == "ask_ref_back" {
+			st.AddRefs = false
+			return w.priorAnswerOrDescriptionStep(p), nil
+		}
+		st.RefRepos = append(st.RefRepos, queue.RefRepo{
+			Repo:     value,
+			CloneURL: cleanCloneURL(value),
+		})
+		return w.refContinueStep(p), nil
+
+	case "ask_ref_continue":
+		switch value {
+		case "more":
+			return w.refPickStep(p), nil
+		case "done":
+			st.RefBranchIdx = 0
+			return w.nextRefBranchStep(p), nil
+		default:
+			return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf(":x: unexpected ref_continue value: %q", value)}, nil
+		}
+
+	case "ask_ref_branch":
+		if value == "取消" {
+			return NextStep{Kind: NextStepCancel}, nil
+		}
+		st.RefRepos[st.RefBranchIdx].Branch = value
+		st.RefBranchIdx++
+		return w.nextRefBranchStep(p), nil
 
 	case "ask_prior_answer_prompt":
 		// Standalone yes/no on whether to carry the bot's last substantive
@@ -282,9 +358,10 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 		if len(branches) == 1 {
 			st.SelectedBranch = branches[0]
 		}
-		return w.priorAnswerOrDescriptionStep(p)
+		return w.maybeAskRefStep(p)
 	}
 
+	st.BranchTargetRepo = st.SelectedRepo
 	p.Phase = "ask_branch_select"
 	options := make([]SelectorOption, 0, len(branches)+1)
 	for _, b := range branches {
@@ -348,6 +425,189 @@ func (w *AskWorkflow) priorAnswerOrDescriptionStep(p *Pending) NextStep {
 	return w.descriptionPromptStep(p)
 }
 
+// refCandidates returns the channel-allowed repo list minus primary and
+// already-picked refs. Returns useExternalSearch=true when the channel uses
+// type-ahead repo search instead of a static list — caller dispatches to
+// the search-style selector with HandleRefRepoSuggestion as the suggestion
+// handler.
+func (w *AskWorkflow) refCandidates(p *Pending) (list []string, useExternalSearch bool) {
+	st, _ := p.State.(*askState)
+	cc := w.cfg.ChannelDefaults
+	if c, ok := w.cfg.Channels[p.ChannelID]; ok {
+		cc = c
+	}
+	repos := cc.GetRepos()
+	if len(repos) == 0 {
+		// External search: filtering happens in HandleRefRepoSuggestion.
+		return nil, true
+	}
+	picked := make(map[string]bool, len(st.RefRepos))
+	for _, r := range st.RefRepos {
+		picked[r.Repo] = true
+	}
+	for _, r := range repos {
+		if r == st.SelectedRepo || picked[r] {
+			continue
+		}
+		list = append(list, r)
+	}
+	return list, false
+}
+
+// maybeAskRefStep is the single entry into the ref flow. Skips entirely
+// when no candidate repos exist (channel has only primary) — keeps the
+// thread free of the "加入參考 repo？" message in that case (spec AC-12).
+func (w *AskWorkflow) maybeAskRefStep(p *Pending) NextStep {
+	list, useExternalSearch := w.refCandidates(p)
+	if !useExternalSearch && len(list) == 0 {
+		return w.priorAnswerOrDescriptionStep(p)
+	}
+	p.Phase = "ask_ref_decide"
+	return NextStep{
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   ":books: 加入參考 repo 嗎？(唯讀脈絡)",
+			ActionID: "ask_ref_decide",
+			Options: []SelectorOption{
+				{Label: "加入", Value: "add"},
+				{Label: "不用", Value: "skip"},
+			},
+		},
+		Pending: p,
+	}
+}
+
+// refPickStep posts the single-select picker for "next ref repo". Re-uses
+// the existing selector infrastructure (button row / static_select /
+// external_select auto-dispatch) — when the channel has no static list,
+// falls back to type-ahead search via the ask_ref action_id which app/app.go
+// routes to HandleRefRepoSuggestion (filters primary + already-picked).
+func (w *AskWorkflow) refPickStep(p *Pending) NextStep {
+	st := p.State.(*askState)
+	list, useExternalSearch := w.refCandidates(p)
+	p.Phase = "ask_ref_pick"
+	prompt := ":point_right: 選參考 repo:"
+	if len(st.RefRepos) > 0 {
+		prompt = fmt.Sprintf(":point_right: 選下一個參考 repo（已加 %d 個）:", len(st.RefRepos))
+	}
+	if useExternalSearch {
+		return NextStep{
+			Kind: NextStepSelector,
+			Selector: &SelectorSpec{
+				Prompt:         prompt,
+				ActionID:       "ask_ref",
+				Searchable:     true,
+				Placeholder:    "Type to search repos...",
+				CancelActionID: "ask_ref_back",
+				CancelLabel:    "← 不加 ref",
+			},
+			Pending: p,
+		}
+	}
+	options := make([]SelectorOption, 0, len(list)+1)
+	for _, r := range list {
+		options = append(options, SelectorOption{Label: r, Value: r})
+	}
+	options = append(options, SelectorOption{Label: "← 不加 ref", Value: "back_to_decide"})
+	return NextStep{
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   prompt,
+			ActionID: "ask_ref",
+			Options:  options,
+		},
+		Pending: p,
+	}
+}
+
+// refContinueStep is the loop pivot after each ref pick: "再加一個 / 開始問問題".
+// When the candidate pool is exhausted (static list and all picked), the
+// "再加一個" option drops so the user can only proceed to the question.
+func (w *AskWorkflow) refContinueStep(p *Pending) NextStep {
+	st := p.State.(*askState)
+	p.Phase = "ask_ref_continue"
+	list, useExternalSearch := w.refCandidates(p)
+	options := []SelectorOption{
+		{Label: "開始問問題", Value: "done"},
+	}
+	// Allow another ref unless the static-list pool is fully consumed.
+	// External search is unbounded so always offer "再加一個" there.
+	if useExternalSearch || len(list) > 0 {
+		options = append([]SelectorOption{{Label: "再加一個 ref", Value: "more"}}, options...)
+	}
+	return NextStep{
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   fmt.Sprintf(":heavy_plus_sign: 已加 %d 個 ref。", len(st.RefRepos)),
+			ActionID: "ask_ref_continue",
+			Options:  options,
+		},
+		Pending: p,
+	}
+}
+
+// nextRefBranchStep advances the per-ref branch picker. Mirrors the
+// primary's afterRepoSelectedStep skip rules: branch_select disabled OR
+// ≤ 1 branch resolved → use the (sole or default) branch and move on.
+// Otherwise show a type-ahead branch picker. When idx exhausts the ref
+// list, drops out of the ref flow into the prior-answer/description path.
+func (w *AskWorkflow) nextRefBranchStep(p *Pending) NextStep {
+	st := p.State.(*askState)
+	if st.RefBranchIdx >= len(st.RefRepos) {
+		return w.priorAnswerOrDescriptionStep(p)
+	}
+	target := st.RefRepos[st.RefBranchIdx].Repo
+
+	cc := w.cfg.ChannelDefaults
+	if c, ok := w.cfg.Channels[p.ChannelID]; ok {
+		cc = c
+	}
+	if !cc.IsBranchSelectEnabled() {
+		// All refs use default branch (Branch stays empty).
+		st.RefBranchIdx++
+		return w.nextRefBranchStep(p)
+	}
+
+	var branches []string
+	if len(cc.Branches) > 0 {
+		branches = cc.Branches
+	} else if w.repoCache != nil {
+		ghToken := ""
+		if w.cfg.Secrets != nil {
+			ghToken = w.cfg.Secrets["GH_TOKEN"]
+		}
+		if rp, err := w.repoCache.EnsureRepo(target, ghToken); err == nil {
+			if lb, lerr := w.repoCache.ListBranches(rp); lerr == nil {
+				branches = lb
+			}
+		}
+	}
+	if len(branches) <= 1 {
+		if len(branches) == 1 {
+			st.RefRepos[st.RefBranchIdx].Branch = branches[0]
+		}
+		st.RefBranchIdx++
+		return w.nextRefBranchStep(p)
+	}
+
+	st.BranchTargetRepo = target
+	p.Phase = "ask_ref_branch"
+	options := make([]SelectorOption, 0, len(branches)+1)
+	for _, b := range branches {
+		options = append(options, SelectorOption{Label: b, Value: b})
+	}
+	options = append(options, SelectorOption{Label: "取消", Value: "取消"})
+	return NextStep{
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   fmt.Sprintf(":point_right: Which branch of ref `%s`?", target),
+			ActionID: "ask_ref_branch",
+			Options:  options,
+		},
+		Pending: p,
+	}
+}
+
 // descriptionPromptStep returns the 補充說明 / 跳過 selector. The opt-in
 // 帶上次回覆 button used to live here but was promoted to its own phase —
 // see priorAnswerOrDescriptionStep for the routing wrapper. ActionID mirrors
@@ -392,6 +652,19 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 		priorAnswer = []queue.ThreadMessage{*st.PriorAnswer}
 	}
 
+	// Output rules injection: when refs are attached, append two hard rules
+	// (spec §4.6 Layer 2). Read-only enforcement + critical-fail-fast match
+	// SKILL.md §5's Reference repos section. Inject regardless of whether
+	// the refs successfully cloned — user intent was ref-aware ask, so the
+	// rules are relevant even if all refs end up unavailable.
+	outputRules := w.cfg.Workflows.Ask.Prompt.OutputRules
+	if len(st.RefRepos) > 0 {
+		outputRules = append(outputRules,
+			"不可寫入、修改、刪除 <ref_repos> 列出之任何 path 之下的檔案；refs 為唯讀脈絡。",
+			"若 <unavailable_refs> 含關鍵 ref，必須在答案開頭聲明「無法取得 X repo 脈絡，無法回答」並停手；不要 best-effort 拼湊。",
+		)
+	}
+
 	job := &queue.Job{
 		ID:          reqID,
 		RequestID:   reqID,
@@ -402,11 +675,12 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 		Repo:        st.SelectedRepo,
 		Branch:      st.SelectedBranch,
 		CloneURL:    cloneURL,
+		RefRepos:    st.RefRepos,
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
 			Goal:             w.cfg.Workflows.Ask.Prompt.Goal,
 			ResponseSchema:   w.cfg.Workflows.Ask.Prompt.ResponseSchema,
-			OutputRules:      w.cfg.Workflows.Ask.Prompt.OutputRules,
+			OutputRules:      outputRules,
 			Language:         w.cfg.PromptDefaults.Language,
 			ExtraDescription: st.Question,
 			Branch:           st.SelectedBranch,
@@ -414,7 +688,10 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 			Reporter:         p.Reporter,
 			AllowWorkerRules: w.cfg.PromptDefaults.IsWorkerRulesAllowed(),
 			PriorAnswer:      priorAnswer,
-			// ThreadMessages, Attachments filled by downstream submit-helper.
+			// ThreadMessages, Attachments, RefRepos, UnavailableRefs filled
+			// by downstream — ThreadMessages/Attachments by submit-helper,
+			// RefRepos/UnavailableRefs by worker after PrepareAt resolves
+			// per-ref absolute paths.
 		},
 		// Skills is populated by submitJob via loadSkills(); leaving it unset
 		// here (instead of Skills: nil) avoids the misleading impression that
