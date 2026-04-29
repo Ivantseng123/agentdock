@@ -736,3 +736,63 @@ func TestPool_StatusReportsIncludeJobStatus(t *testing.T) {
 		t.Errorf("no report with JobStatus=JobPreparing; seen=%v", seen)
 	}
 }
+
+// Pins the ordering of (Store.UpdateStatus → final publishStatus → Results.Publish):
+// the final status report MUST carry a terminal JobStatus, otherwise the
+// app-side StatusListener races ResultListener and can clobber the workflow's
+// final Slack message with a stale "running" template (incident 2026-04-29
+// job 20260429-041810-f0bd994e). If this test fails, the result-handling
+// race window is reopened — fix the worker, not the test.
+func TestPool_FinalStatusReportCarriesTerminalJobStatus(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queuetest.NewBundle(10, 3, store)
+	defer bundle.Close()
+
+	recorder := &recordingStatusBus{}
+	agentOutput := "ok\n\n===ASK_RESULT===\n" + `{"answer": "yes"}`
+
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      &mockRunner{output: agentOutput},
+		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
+		WorkerCount: 1,
+		Status:      recorder,
+		Logger:      slog.Default(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool.Start(ctx)
+	bundle.Attachments.Prepare(ctx, "j1", nil)
+	bundle.Queue.Submit(ctx, &queue.Job{
+		ID:       "j1",
+		Priority: 50,
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
+	})
+
+	resCh, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case <-resCh:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for result")
+	}
+
+	reports := recorder.snapshot()
+	if len(reports) == 0 {
+		t.Fatal("no status reports captured")
+	}
+	final := reports[len(reports)-1]
+	if final.JobStatus != queue.JobCompleted {
+		t.Errorf("final status report JobStatus=%q, want %q (otherwise app StatusListener races ResultListener and clobbers the answer)",
+			final.JobStatus, queue.JobCompleted)
+	}
+}

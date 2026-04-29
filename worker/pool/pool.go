@@ -207,6 +207,15 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	result := executeJob(jobCtx, job, deps, opts, logger)
 	status.setPrepareSeconds(result.PrepareSeconds)
 
+	// Promote the worker-side store to the terminal status BEFORE the final
+	// status report. publishStatus stamps state.Status onto the report's
+	// JobStatus field; if we do this after, the final report still says
+	// "running" and app-side StatusListener.maybeUpdateSlack races
+	// ResultListener — the cancel-button template can land after the
+	// workflow's final message and clobber it (see incident 2026-04-29
+	// job 20260429-041810-f0bd994e).
+	p.cfg.Store.UpdateStatus(ctx, job.ID, queue.JobStatus(result.Status))
+
 	// Send final status report (captures cost/tokens from result event).
 	status.alive = false
 	if p.cfg.Status != nil {
@@ -226,7 +235,6 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		}
 	}
 
-	p.cfg.Store.UpdateStatus(ctx, job.ID, queue.JobStatus(result.Status))
 	if err := p.cfg.Results.Publish(ctx, result); err != nil {
 		logger.Error("failed to publish result", "error", err)
 	}
