@@ -87,6 +87,37 @@ func BuildPrompt(ctx queue.PromptContext, extraRules []string, attachments []Att
 	}
 	b.WriteString("</issue_context>\n\n")
 
+	// <ref_repos> — successful ref repos with absolute on-disk paths. Worker
+	// fills these after PrepareAt so the agent knows where to grep / read.
+	if len(ctx.RefRepos) > 0 {
+		b.WriteString("<ref_repos>\n")
+		for _, r := range ctx.RefRepos {
+			if r.Branch != "" {
+				fmt.Fprintf(&b,
+					"  <ref repo=\"%s\" branch=\"%s\" path=\"%s\"/>\n",
+					xmlEscape(r.Repo), xmlEscape(r.Branch), xmlEscape(r.Path),
+				)
+			} else {
+				fmt.Fprintf(&b,
+					"  <ref repo=\"%s\" path=\"%s\"/>\n",
+					xmlEscape(r.Repo), xmlEscape(r.Path),
+				)
+			}
+		}
+		b.WriteString("</ref_repos>\n\n")
+	}
+
+	// <unavailable_refs> — refs the user requested but worker couldn't clone.
+	// Listed by owner/name so the agent can self-declare missing context per
+	// SKILL.md's critical-fail-fast rule.
+	if len(ctx.UnavailableRefs) > 0 {
+		b.WriteString("<unavailable_refs>\n")
+		for _, repo := range ctx.UnavailableRefs {
+			fmt.Fprintf(&b, "  <repo>%s</repo>\n", xmlEscape(repo))
+		}
+		b.WriteString("</unavailable_refs>\n\n")
+	}
+
 	// <response_language> — always rendered if non-empty (the app has a default).
 	if ctx.Language != "" {
 		fmt.Fprintf(&b, "<response_language>%s</response_language>\n\n", xmlEscape(ctx.Language))

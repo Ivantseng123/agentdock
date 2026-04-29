@@ -461,3 +461,99 @@ func TestBuildPrompt_OutputRulesArray_MultipleRendered(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildPrompt_RefRepos_Rendered covers both the with-branch and
+// default-branch render paths. Default-branch refs must omit the branch
+// attribute so the agent doesn't see an empty branch="" string and infer
+// "no branch / detached HEAD" — that's not what default-branch means.
+func TestBuildPrompt_RefRepos_Rendered(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Goal:           "g",
+		RefRepos: []queue.RefRepoContext{
+			{Repo: "frontend/web", Branch: "main", Path: "/tmp/refs/frontend__web"},
+			{Repo: "backend/api", Path: "/tmp/refs/backend__api"},
+		},
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	if !strings.Contains(got, `<ref_repos>`) {
+		t.Fatalf("missing <ref_repos> block:\n%s", got)
+	}
+	if !strings.Contains(got, `<ref repo="frontend/web" branch="main" path="/tmp/refs/frontend__web"/>`) {
+		t.Errorf("missing branch-attr ref render:\n%s", got)
+	}
+	if !strings.Contains(got, `<ref repo="backend/api" path="/tmp/refs/backend__api"/>`) {
+		t.Errorf("missing default-branch ref render:\n%s", got)
+	}
+	// The default-branch ref must NOT include branch="".
+	if strings.Contains(got, `<ref repo="backend/api" branch="" path=`) {
+		t.Errorf("default-branch ref leaked empty branch attribute:\n%s", got)
+	}
+}
+
+// TestBuildPrompt_UnavailableRefs_Rendered covers the failure-list block
+// that signals to the agent which refs were requested but couldn't be
+// cloned. Used by SKILL.md's critical-fail-fast rule.
+func TestBuildPrompt_UnavailableRefs_Rendered(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages:  []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:         "c",
+		Reporter:        "r",
+		Goal:            "g",
+		UnavailableRefs: []string{"broken/repo", "missing/other"},
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	if !strings.Contains(got, "<unavailable_refs>") {
+		t.Fatalf("missing <unavailable_refs> block:\n%s", got)
+	}
+	for _, want := range []string{"<repo>broken/repo</repo>", "<repo>missing/other</repo>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing unavailable entry %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestBuildPrompt_NoRefs_NoBlock asserts the existing prompt shape is
+// regression-free when no ref fields are populated — neither block renders.
+func TestBuildPrompt_NoRefs_NoBlock(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Goal:           "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	if strings.Contains(got, "<ref_repos>") {
+		t.Errorf("expected no <ref_repos> when empty, got:\n%s", got)
+	}
+	if strings.Contains(got, "<unavailable_refs>") {
+		t.Errorf("expected no <unavailable_refs> when empty, got:\n%s", got)
+	}
+}
+
+// TestBuildPrompt_RefRepos_BeforeResponseLanguage asserts the new block
+// slots between <issue_context> and <response_language>, matching spec §4.5.
+func TestBuildPrompt_RefRepos_BeforeResponseLanguage(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Language:       "zh-TW",
+		Goal:           "g",
+		RefRepos:       []queue.RefRepoContext{{Repo: "x/y", Path: "/p"}},
+	}
+	got := BuildPrompt(ctx, nil, nil)
+
+	issueIdx := strings.Index(got, "</issue_context>")
+	refIdx := strings.Index(got, "<ref_repos>")
+	langIdx := strings.Index(got, "<response_language>")
+	if issueIdx == -1 || refIdx == -1 || langIdx == -1 {
+		t.Fatalf("missing sections: issue=%d ref=%d lang=%d", issueIdx, refIdx, langIdx)
+	}
+	if !(issueIdx < refIdx && refIdx < langIdx) {
+		t.Errorf("expected issue_context < ref_repos < response_language, got issue=%d ref=%d lang=%d",
+			issueIdx, refIdx, langIdx)
+	}
+}

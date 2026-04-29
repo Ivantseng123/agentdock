@@ -38,6 +38,12 @@ func (f *fakeRepo) Prepare(cloneURL, branch, token string) (string, error) {
 	return "/tmp/fake-repo", nil
 }
 
+// PrepareAt satisfies RepoProvider for tests that don't exercise refs.
+// Defaults to no-op success.
+func (f *fakeRepo) PrepareAt(cloneURL, branch, token, targetPath string) error {
+	return nil
+}
+
 func (f *fakeRepo) RemoveWorktree(path string) error { return nil }
 func (f *fakeRepo) CleanAll() error                  { return nil }
 func (f *fakeRepo) PurgeStale() error                { return nil }

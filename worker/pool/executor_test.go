@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -249,4 +252,278 @@ func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
 	if result.Status != "cancelled" {
 		t.Errorf("status = %q, want cancelled", result.Status)
 	}
+}
+
+// initGitWorktree creates a tiny initialised git repo at dir with one empty
+// commit. Returns the path. Used by the ref-guard tests so `git status` has
+// a real worktree to walk.
+func initGitWorktree(t *testing.T, dir string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@t", "-c", "user.name=t",
+			"commit", "--allow-empty", "-q", "-m", "init"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir
+}
+
+// TestRunRefGuard_DetectsViolation creates a real git worktree, modifies a
+// tracked-ish file, and asserts the callback fires with the right ref.
+// Tests the lenient-callback path's most important property: it observes
+// without interrupting (no error returned, just side effects).
+func TestRunRefGuard_DetectsViolation(t *testing.T) {
+	dir := initGitWorktree(t, filepath.Join(t.TempDir(), "ref"))
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("agent wrote here"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var fired []string
+	cb := func(ref queue.RefRepoContext, diff string, _ *slog.Logger) {
+		fired = append(fired, ref.Repo)
+		if !strings.Contains(diff, "f.txt") {
+			t.Errorf("diff should mention f.txt, got %q", diff)
+		}
+	}
+	runRefGuard([]queue.RefRepoContext{{Repo: "foo/bar", Path: dir}}, cb, slog.Default())
+
+	if len(fired) != 1 || fired[0] != "foo/bar" {
+		t.Fatalf("expected one violation for foo/bar; got %v", fired)
+	}
+}
+
+// TestRunRefGuard_CleanWorktree_NoCallback asserts the no-violation path
+// doesn't fire the callback — important so the metric only counts real
+// violations, not background activity.
+func TestRunRefGuard_CleanWorktree_NoCallback(t *testing.T) {
+	dir := initGitWorktree(t, filepath.Join(t.TempDir(), "ref"))
+
+	var fired int
+	cb := func(_ queue.RefRepoContext, _ string, _ *slog.Logger) { fired++ }
+	runRefGuard([]queue.RefRepoContext{{Repo: "foo/bar", Path: dir}}, cb, slog.Default())
+
+	if fired != 0 {
+		t.Fatalf("clean worktree must not fire callback, fired=%d", fired)
+	}
+}
+
+// TestRunRefGuard_NilCallback_NoOp ensures the guard is safe to invoke even
+// when no callback is configured (defensive — callers shouldn't normally
+// pass nil, but the impl should not panic).
+func TestRunRefGuard_NilCallback_NoOp(t *testing.T) {
+	dir := initGitWorktree(t, filepath.Join(t.TempDir(), "ref"))
+	runRefGuard([]queue.RefRepoContext{{Repo: "x/y", Path: dir}}, nil, slog.Default())
+}
+
+// TestRunRefGuard_EmptyRefs_NoOp covers the no-refs path so the callback
+// definitely doesn't fire and no git command runs.
+func TestRunRefGuard_EmptyRefs_NoOp(t *testing.T) {
+	var fired int
+	cb := func(_ queue.RefRepoContext, _ string, _ *slog.Logger) { fired++ }
+	runRefGuard(nil, cb, slog.Default())
+	if fired != 0 {
+		t.Fatalf("empty refs must not fire callback, fired=%d", fired)
+	}
+}
+
+// TestTruncateRefDiff covers the log-volume cap on diff previews.
+func TestTruncateRefDiff(t *testing.T) {
+	short := "M f.txt"
+	if got := truncateRefDiff(short); got != short {
+		t.Errorf("short input changed: in=%q out=%q", short, got)
+	}
+	long := strings.Repeat("x", 500)
+	got := truncateRefDiff(long)
+	if !strings.HasSuffix(got, "…(truncated)") {
+		t.Errorf("long input not truncated: %q", got)
+	}
+	if len(got) > 220 { // 200 + truncation marker
+		t.Errorf("truncated length too long: %d", len(got))
+	}
+}
+
+// recordingRepo is a RepoProvider that records every call and lets the test
+// dictate per-target PrepareAt outcomes. Used by the multi-repo executeJob
+// test below where we need both success and failure paths exercised in one
+// run plus the ability to assert cleanup ordering.
+type recordingRepo struct {
+	primaryPath   string
+	prepareAtFail map[string]bool // key: target path suffix; value: should fail
+	prepareAtCalls []string         // recorded target paths in call order
+	removedWorktrees []string
+}
+
+func (r *recordingRepo) Prepare(cloneURL, branch, token string) (string, error) {
+	if err := os.MkdirAll(r.primaryPath, 0755); err != nil {
+		return "", err
+	}
+	return r.primaryPath, nil
+}
+
+func (r *recordingRepo) PrepareAt(cloneURL, branch, token, target string) error {
+	r.prepareAtCalls = append(r.prepareAtCalls, target)
+	for suffix, shouldFail := range r.prepareAtFail {
+		if strings.HasSuffix(target, suffix) && shouldFail {
+			return fmt.Errorf("simulated clone failure for %s", target)
+		}
+	}
+	// Initialise a real git worktree so the post-execute guard's git status
+	// has something to walk. Without this, guard would log debug + skip.
+	return initBareGitFolder(target)
+}
+
+func (r *recordingRepo) RemoveWorktree(path string) error {
+	r.removedWorktrees = append(r.removedWorktrees, path)
+	return nil
+}
+func (r *recordingRepo) CleanAll() error   { return nil }
+func (r *recordingRepo) PurgeStale() error { return nil }
+
+func initBareGitFolder(dir string) error {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@t", "-c", "user.name=t",
+			"commit", "--allow-empty", "-q", "-m", "init"},
+	} {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %v: %w\n%s", args, err, out)
+		}
+	}
+	return nil
+}
+
+// TestExecuteJob_MultiRepo_EndToEnd is the executor-level integration test
+// for the ref pipeline: schema → prepareRefs → PromptContext fill → builder
+// renders ref blocks → guard fires on dirty refs → cleanup walks all paths
+// in reverse order. One ref clones successfully (and gets dirtied to
+// trigger the lenient guard); a second ref deliberately fails to clone.
+func TestExecuteJob_MultiRepo_EndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	tmp := t.TempDir()
+	primaryPath := filepath.Join(tmp, "triage-repo-abc")
+
+	repo := &recordingRepo{
+		primaryPath: primaryPath,
+		prepareAtFail: map[string]bool{
+			"broken__repo": true, // second ref clone fails
+		},
+	}
+
+	// dirtyingRunner writes into the successful ref's worktree before
+	// returning so the post-execute guard sees a non-empty `git status` and
+	// fires the lenient callback. Path is deterministic from refDirName.
+	runner := &dirtyingRunner{
+		dirtyPath: filepath.Join(primaryPath+"-refs", "frontend__web", "agent-wrote-here.txt"),
+		output:    "answer body",
+	}
+
+	store := queue.NewMemJobStore()
+	job := &queue.Job{
+		ID:       "j-multi",
+		Repo:     "primary/repo",
+		CloneURL: "https://example.com/primary/repo.git",
+		Branch:   "main",
+		PromptContext: &queue.PromptContext{
+			Channel:  "general",
+			Reporter: "Alice",
+			Goal:     "answer the question",
+			OutputRules: []string{"do not write to refs"},
+		},
+		RefRepos: []queue.RefRepo{
+			{Repo: "frontend/web", CloneURL: "https://example.com/frontend/web.git", Branch: "main"},
+			{Repo: "broken/repo", CloneURL: "https://example.com/broken/repo.git"},
+		},
+	}
+	store.Put(context.Background(), job)
+
+	deps := executionDeps{
+		attachments: queuetest.NewAttachmentStore(),
+		repoCache:   repo,
+		runner:      runner,
+		store:       store,
+	}
+
+	res := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
+
+	if res.Status != "completed" {
+		t.Fatalf("status = %q, want completed (Error=%q)", res.Status, res.Error)
+	}
+
+	// Successful ref clones once at <primary>-refs/<owner>__<name>.
+	gotTargets := repo.prepareAtCalls
+	if len(gotTargets) != 2 {
+		t.Fatalf("PrepareAt call count = %d, want 2 (got %v)", len(gotTargets), gotTargets)
+	}
+	wantSuffixes := []string{"frontend__web", "broken__repo"}
+	for i, want := range wantSuffixes {
+		if !strings.HasSuffix(gotTargets[i], want) {
+			t.Errorf("PrepareAt[%d] target = %q, want suffix %q", i, gotTargets[i], want)
+		}
+	}
+
+	// Prompt contains the successful ref + the unavailable ref.
+	if !strings.Contains(runner.gotPrompt, "<ref_repos>") {
+		t.Errorf("prompt missing <ref_repos> block:\n%s", runner.gotPrompt)
+	}
+	if !strings.Contains(runner.gotPrompt, `repo="frontend/web"`) {
+		t.Errorf("prompt missing successful ref:\n%s", runner.gotPrompt)
+	}
+	if !strings.Contains(runner.gotPrompt, "<unavailable_refs>") {
+		t.Errorf("prompt missing <unavailable_refs> block:\n%s", runner.gotPrompt)
+	}
+	if !strings.Contains(runner.gotPrompt, "<repo>broken/repo</repo>") {
+		t.Errorf("prompt missing unavailable entry for broken/repo:\n%s", runner.gotPrompt)
+	}
+
+	// Cleanup: ref worktree removed (RemoveWorktree called for the successful
+	// ref's path), refs root rm'd. Order is reversed (only one successful
+	// ref here), and the refs-root dir should be gone after job.
+	if len(repo.removedWorktrees) != 1 {
+		t.Errorf("RemoveWorktree call count = %d, want 1 (got %v)",
+			len(repo.removedWorktrees), repo.removedWorktrees)
+	}
+	if !strings.HasSuffix(repo.removedWorktrees[0], "frontend__web") {
+		t.Errorf("RemoveWorktree path = %q, want suffix frontend__web",
+			repo.removedWorktrees[0])
+	}
+	refsRoot := primaryPath + "-refs"
+	if _, err := os.Stat(refsRoot); !os.IsNotExist(err) {
+		t.Errorf("refs root should be cleaned up; stat err = %v", err)
+	}
+}
+
+// dirtyingRunner writes a file into a ref worktree before returning, to
+// trigger the post-execute guard. Used only by the multi-repo end-to-end
+// test above.
+type dirtyingRunner struct {
+	dirtyPath  string
+	output     string
+	gotPrompt  string
+	gotWorkDir string
+}
+
+func (d *dirtyingRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
+	d.gotPrompt = prompt
+	d.gotWorkDir = workDir
+	if d.dirtyPath != "" {
+		_ = os.WriteFile(d.dirtyPath, []byte("agent leaked"), 0644)
+	}
+	return d.output, nil
 }

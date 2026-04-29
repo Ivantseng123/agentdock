@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/crypto"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 	"github.com/Ivantseng123/agentdock/worker/prompt"
@@ -22,8 +24,17 @@ type Runner interface {
 }
 
 // RepoProvider abstracts repo clone/checkout (for testing).
+//
+// Prepare creates a worktree under the cache's default worktree dir; used for
+// the primary repo whose path is opaque to the caller.
+//
+// PrepareAt creates a worktree at the caller-supplied path; used for ref
+// repos so worker can co-locate them with the primary worktree (the path
+// shape is `<primary worktree>-refs/<owner>__<repo>`). Caller is responsible
+// for the parent dir.
 type RepoProvider interface {
 	Prepare(cloneURL, branch, token string) (string, error)
+	PrepareAt(cloneURL, branch, token, targetPath string) error
 	RemoveWorktree(worktreePath string) error
 	CleanAll() error
 	PurgeStale() error
@@ -109,6 +120,36 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		return failedResult(job, startedAt, fmt.Errorf("malformed job: missing prompt_context"), repoPath)
 	}
 
+	// Ref repos — only when primary is real (CloneURL set; refs without a
+	// primary have no anchor for refsRoot). Sequential clone with partial
+	// success: per-ref failures collect into UnavailableRefs and never abort
+	// the job. Cleanup deferred so cancellation / failure paths still rm.
+	var refContexts []queue.RefRepoContext
+	var successfulRefPaths []string
+	var unavailableRefs []string
+	var refsRoot string
+	if job.CloneURL != "" && len(job.RefRepos) > 0 {
+		var refErr error
+		refContexts, successfulRefPaths, unavailableRefs, refsRoot, refErr = prepareRefs(
+			deps.repoCache, repoPath, ghToken, job.RefRepos, logger,
+		)
+		if refErr != nil {
+			// Only refs-root mkdir failures bubble up; per-ref failures are
+			// absorbed into unavailableRefs by prepareRefs itself.
+			return classifyResult(job, startedAt, fmt.Errorf("refs prepare: %w", refErr), repoPath, ctx, deps.store)
+		}
+		logger.Info("Refs 已就緒",
+			"phase", "處理中",
+			"count_success", len(refContexts),
+			"count_unavailable", len(unavailableRefs),
+		)
+	}
+	defer cleanupRefs(deps.repoCache, successfulRefPaths, refsRoot)
+
+	// Worker-filled fields on PromptContext: Path is only known after PrepareAt.
+	job.PromptContext.RefRepos = refContexts
+	job.PromptContext.UnavailableRefs = unavailableRefs
+
 	// Write attachments into worktree — cleaned up together with RemoveWorktree.
 	var attachInfos []prompt.AttachmentInfo
 	if len(attachments) > 0 {
@@ -153,6 +194,12 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
 	logger.Debug("Agent output 內容", "phase", "完成", "output", output)
 
+	// Post-execute ref guard. Only fires when refs were prepared; lenient
+	// callback for Ask (warn + metric, do NOT fail). #217 will route Issue
+	// jobs through a strict callback. Today Ask is the only multi-repo
+	// workflow, so the callback selection is hardcoded.
+	runRefGuard(refContexts, askLenientRefViolation, logger)
+
 	// Ship the raw agent output to the app. Parsing and REJECTED/ERROR/parse-failed
 	// classification live in the app-side result listener — worker has no
 	// business interpreting agent output or deciding whether to create an issue.
@@ -164,6 +211,57 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		StartedAt:      startedAt,
 		FinishedAt:     time.Now(),
 		PrepareSeconds: prepareSeconds,
+	}
+}
+
+// RefViolationCallback is invoked when post-execute guard finds modifications
+// in a ref worktree. Ask installs a lenient impl (warn + metric); Issue (#217)
+// will install a strict impl that fails the job. The two-arg shape lets a
+// future strict impl record violations, then the caller decides whether to
+// continue — this spec only ships the lenient flavour, but the abstraction
+// is a callback so the strict impl can drop in without restructuring.
+type RefViolationCallback func(refContext queue.RefRepoContext, diffPreview string, logger *slog.Logger)
+
+// askLenientRefViolation is the Ask-workflow callback: warn-log + metric.
+// Worktree cleanup happens regardless, so writes have no persistent effect —
+// the guard is observability, not enforcement (spec §4.6 Layer 3, Q8).
+func askLenientRefViolation(ref queue.RefRepoContext, diff string, logger *slog.Logger) {
+	logger.Warn("agent wrote into ref repo (lenient: not failing job)",
+		"phase", "處理中",
+		"ref", ref.Repo,
+		"diff_preview", truncateRefDiff(diff),
+	)
+	metrics.AskRefWriteViolationsTotal.WithLabelValues(ref.Repo).Inc()
+}
+
+// truncateRefDiff caps the log preview at 200 chars so a multi-MB diff can't
+// blow up log volume on a misbehaving agent run.
+func truncateRefDiff(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 200 {
+		return s[:200] + "…(truncated)"
+	}
+	return s
+}
+
+// runRefGuard walks successful ref worktrees and runs `git status --porcelain`
+// in each. Non-empty output → invoke callback. `git status` failure is logged
+// at debug and skipped (a corrupt worktree shouldn't escalate; cleanup runs
+// regardless). When refs is empty or onViolation is nil, this is a no-op.
+func runRefGuard(refs []queue.RefRepoContext, onViolation RefViolationCallback, logger *slog.Logger) {
+	if onViolation == nil || len(refs) == 0 {
+		return
+	}
+	for _, ref := range refs {
+		out, err := exec.Command("git", "-C", ref.Path, "status", "--porcelain").Output()
+		if err != nil {
+			logger.Debug("ref guard: git status failed; skipping",
+				"phase", "處理中", "ref", ref.Repo, "error", err)
+			continue
+		}
+		if diff := strings.TrimSpace(string(out)); diff != "" {
+			onViolation(ref, diff, logger)
+		}
 	}
 }
 

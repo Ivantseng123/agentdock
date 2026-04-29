@@ -42,6 +42,13 @@ func (m *mockRepo) Prepare(cloneURL, branch, token string) (string, error) {
 	return m.path, m.err
 }
 
+// PrepareAt satisfies RepoProvider for tests that don't exercise refs.
+// Defaults to success without creating the dir — pool_test fixtures don't
+// inspect the filesystem, so a no-op is enough to keep the interface honest.
+func (m *mockRepo) PrepareAt(cloneURL, branch, token, targetPath string) error {
+	return nil
+}
+
 func (m *mockRepo) RemoveWorktree(path string) error {
 	m.removedWorktrees = append(m.removedWorktrees, path)
 	return nil

@@ -2,6 +2,7 @@ package queue
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -151,5 +152,109 @@ func TestJob_WorkflowArgsOmitEmpty(t *testing.T) {
 	buf, _ := json.Marshal(j)
 	if strings.Contains(string(buf), "workflow_args") {
 		t.Errorf("empty WorkflowArgs should be omitted: %s", buf)
+	}
+}
+
+// TestJob_RefRepos_RoundTrip ensures the new RefRepos field marshals and
+// unmarshals losslessly. Default-branch refs (Branch == "") must drop the
+// field via omitempty so the wire shape stays minimal.
+func TestJob_RefRepos_RoundTrip(t *testing.T) {
+	in := Job{
+		ID:       "abc",
+		Repo:     "foo/bar",
+		CloneURL: "https://example/foo/bar.git",
+		RefRepos: []RefRepo{
+			{Repo: "frontend/web", CloneURL: "https://example/frontend/web.git", Branch: "main"},
+			{Repo: "backend/api", CloneURL: "https://example/backend/api.git"},
+		},
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"ref_repos":[`) {
+		t.Errorf("expected ref_repos array in JSON, got: %s", raw)
+	}
+	// Default-branch ref must omit the branch key. Marshal a single bare
+	// RefRepo so the assertion isn't muddled by Job.Branch (which has no
+	// omitempty by design — it's a top-level required-shaped field).
+	defaultBranchOnly, _ := json.Marshal(RefRepo{Repo: "x/y", CloneURL: "u"})
+	if strings.Contains(string(defaultBranchOnly), `"branch"`) {
+		t.Errorf("default-branch RefRepo should omit branch field: %s", defaultBranchOnly)
+	}
+
+	var out Job
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(in.RefRepos, out.RefRepos) {
+		t.Fatalf("RefRepos mismatch:\n in=%+v\nout=%+v", in.RefRepos, out.RefRepos)
+	}
+}
+
+// TestJob_OldJob_NoRefRepos_StillParses asserts pre-RefRepos jobs (no field
+// in JSON) parse cleanly with RefRepos == nil. Critical for the deploy-window
+// where workers running new code receive jobs queued by older app code.
+func TestJob_OldJob_NoRefRepos_StillParses(t *testing.T) {
+	raw := []byte(`{"id":"abc","repo":"foo/bar","clone_url":"https://example/foo/bar.git"}`)
+	var out Job
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.RefRepos != nil {
+		t.Fatalf("expected nil RefRepos on old-job parse, got %+v", out.RefRepos)
+	}
+}
+
+// TestJob_RefRepos_OmitEmpty asserts that a job with no refs serializes
+// without the ref_repos key entirely.
+func TestJob_RefRepos_OmitEmpty(t *testing.T) {
+	j := &Job{ID: "j1", TaskType: "ask"}
+	buf, _ := json.Marshal(j)
+	if strings.Contains(string(buf), "ref_repos") {
+		t.Errorf("empty RefRepos should be omitted: %s", buf)
+	}
+}
+
+// TestPromptContext_RefFields_RoundTrip covers the worker-filled fields on
+// PromptContext. Empty paths/branches drop via omitempty; populated fields
+// survive a round-trip.
+func TestPromptContext_RefFields_RoundTrip(t *testing.T) {
+	in := PromptContext{
+		Channel:  "general",
+		Reporter: "Bob",
+		Goal:     "ask",
+		RefRepos: []RefRepoContext{
+			{Repo: "frontend/web", Branch: "main", Path: "/tmp/refs/frontend__web"},
+			{Repo: "backend/api", Path: "/tmp/refs/backend__api"},
+		},
+		UnavailableRefs: []string{"broken/repo"},
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out PromptContext
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(in.RefRepos, out.RefRepos) {
+		t.Errorf("RefRepos mismatch:\n in=%+v\nout=%+v", in.RefRepos, out.RefRepos)
+	}
+	if !reflect.DeepEqual(in.UnavailableRefs, out.UnavailableRefs) {
+		t.Errorf("UnavailableRefs mismatch:\n in=%+v\nout=%+v", in.UnavailableRefs, out.UnavailableRefs)
+	}
+}
+
+// TestPromptContext_RefFields_OmitEmpty asserts the new fields drop from JSON
+// when unset, so the existing wire shape for non-ref jobs is unchanged.
+func TestPromptContext_RefFields_OmitEmpty(t *testing.T) {
+	pc := &PromptContext{Channel: "c", Reporter: "r", Goal: "g"}
+	buf, _ := json.Marshal(pc)
+	if strings.Contains(string(buf), "ref_repos") {
+		t.Errorf("empty RefRepos should be omitted: %s", buf)
+	}
+	if strings.Contains(string(buf), "unavailable_refs") {
+		t.Errorf("empty UnavailableRefs should be omitted: %s", buf)
 	}
 }

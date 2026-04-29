@@ -46,6 +46,24 @@ func (a *RepoCacheAdapter) Prepare(cloneURL, branch, token string) (string, erro
 	return worktreePath, nil
 }
 
+// PrepareAt clones into targetPath rather than the cache's default worktree
+// dir. Used for ref repos so worker can co-locate them with the primary
+// worktree under `<primary>-refs/<owner>__<repo>`.
+//
+// Caller is responsible for the PARENT of targetPath existing; this method
+// removes targetPath itself first because git worktree add requires the
+// target dir not to exist.
+func (a *RepoCacheAdapter) PrepareAt(cloneURL, branch, token, targetPath string) error {
+	barePath, err := a.Cache.EnsureRepo(cloneURL, token)
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(targetPath); err != nil {
+		return fmt.Errorf("clear ref target %s: %w", targetPath, err)
+	}
+	return a.Cache.AddWorktree(barePath, branch, targetPath)
+}
+
 func (a *RepoCacheAdapter) RemoveWorktree(path string) error { return a.Cache.RemoveWorktree(path) }
 func (a *RepoCacheAdapter) CleanAll() error                  { return a.Cache.CleanAll() }
 func (a *RepoCacheAdapter) PurgeStale() error                { return a.Cache.PurgeStale() }

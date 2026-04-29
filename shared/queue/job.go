@@ -41,6 +41,7 @@ type Job struct {
 	PromptContext    *PromptContext           `json:"prompt_context,omitempty"`
 	SubmittedAt      time.Time                `json:"submitted_at"`
 	EncryptedSecrets []byte                   `json:"encrypted_secrets,omitempty"`
+	RefRepos         []RefRepo                `json:"ref_repos,omitempty"`
 }
 
 type AttachmentMeta struct {
@@ -49,6 +50,15 @@ type AttachmentMeta struct {
 	Size        int64  `json:"size"`
 	MimeType    string `json:"mime_type"`
 	DownloadURL string `json:"download_url"`
+}
+
+// RefRepo is a read-only reference repo attached alongside the primary repo.
+// Repo is owner/name (mirrors Job.Repo); CloneURL is the worker's clone target;
+// Branch empty = default branch.
+type RefRepo struct {
+	Repo     string `json:"repo"`
+	CloneURL string `json:"clone_url"`
+	Branch   string `json:"branch,omitempty"`
 }
 
 type ThreadMessage struct {
@@ -74,6 +84,23 @@ type PromptContext struct {
 	// Slice shape reserves room for multi-turn history; v1 only fills the
 	// most recent qualifying message.
 	PriorAnswer []ThreadMessage `json:"prior_answer,omitempty"`
+	// RefRepos lists ref repos that prepared successfully, with their
+	// absolute paths on the worker for the agent to grep/read. Filled by
+	// worker after PrepareAt, not by the app at BuildJob time.
+	RefRepos []RefRepoContext `json:"ref_repos,omitempty"`
+	// UnavailableRefs lists ref repos (owner/name) whose clone failed.
+	// Filled by worker; the prompt builder renders an `<unavailable_refs>`
+	// block so the agent knows which context is missing.
+	UnavailableRefs []string `json:"unavailable_refs,omitempty"`
+}
+
+// RefRepoContext is one ref repo as seen by the prompt builder. Path is the
+// absolute on-disk path the agent should grep/read; filled by worker after
+// PrepareAt succeeds. Empty Branch = default branch.
+type RefRepoContext struct {
+	Repo   string `json:"repo"`
+	Branch string `json:"branch,omitempty"`
+	Path   string `json:"path"`
 }
 
 type JobResult struct {
