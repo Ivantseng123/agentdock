@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/workflow"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type updateCall struct{ ChannelID, MessageTS, Text string }
@@ -822,5 +825,61 @@ func TestResultListener_UnknownTaskType_FailsSafely(t *testing.T) {
 	state, _ := store.Get(ctx, "junk")
 	if state.Status == queue.JobCompleted || state.Status == queue.JobFailed {
 		t.Errorf("store status should not be completed/failed for unknown task_type, got %q", state.Status)
+	}
+}
+
+// TestResultListener_RefViolations_EmitsMetricPerWorkflow asserts that
+// recordMetrics fires ref_write_violations_total{workflow,repo} once per
+// ref-violation entry. Worker is task-agnostic — it just reports; this app
+// hook is where the metric label gets populated. Both Ask and Issue paths
+// flow through the same code, so one shared test verifies labelling for
+// both workflows in a table.
+func TestResultListener_RefViolations_EmitsMetricPerWorkflow(t *testing.T) {
+	cases := []struct {
+		workflow   string
+		repo       string
+	}{
+		{"ask", "frontend/web"},
+		{"issue", "backend/api"},
+	}
+	r := &ResultListener{logger: slog.Default()}
+	for _, tc := range cases {
+		t.Run(tc.workflow+"/"+tc.repo, func(t *testing.T) {
+			before := testutil.ToFloat64(metrics.RefWriteViolationsTotal.WithLabelValues(tc.workflow, tc.repo))
+
+			state := &queue.JobState{
+				Job: &queue.Job{ID: "j", TaskType: tc.workflow},
+			}
+			result := &queue.JobResult{
+				JobID:         "j",
+				Status:        "completed",
+				RefViolations: []string{tc.repo},
+			}
+			r.recordMetrics(state, result)
+
+			after := testutil.ToFloat64(metrics.RefWriteViolationsTotal.WithLabelValues(tc.workflow, tc.repo))
+			if got := after - before; got != 1 {
+				t.Fatalf("RefWriteViolationsTotal{%s,%s} delta = %v, want 1", tc.workflow, tc.repo, got)
+			}
+		})
+	}
+}
+
+// TestResultListener_RefViolations_EmptySliceNoop asserts that a result with
+// no violations does not touch the counter (preserves baseline for Grafana
+// rate() queries — a zero violation should not register as a sample).
+func TestResultListener_RefViolations_EmptySliceNoop(t *testing.T) {
+	r := &ResultListener{logger: slog.Default()}
+	state := &queue.JobState{Job: &queue.Job{ID: "j", TaskType: "ask"}}
+	result := &queue.JobResult{JobID: "j", Status: "completed"}
+
+	// Pull a "should not be touched" sample value — any unique label combo
+	// works; we just need a stable reading before/after.
+	before := testutil.ToFloat64(metrics.RefWriteViolationsTotal.WithLabelValues("ask", "no-such/repo"))
+	r.recordMetrics(state, result)
+	after := testutil.ToFloat64(metrics.RefWriteViolationsTotal.WithLabelValues("ask", "no-such/repo"))
+
+	if after != before {
+		t.Fatalf("counter should not have moved on empty RefViolations: before=%v after=%v", before, after)
 	}
 }

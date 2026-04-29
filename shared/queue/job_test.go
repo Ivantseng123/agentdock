@@ -258,3 +258,35 @@ func TestPromptContext_RefFields_OmitEmpty(t *testing.T) {
 		t.Errorf("empty UnavailableRefs should be omitted: %s", buf)
 	}
 }
+
+// TestJobResult_RefViolations_RoundTrip ensures the RefViolations field
+// (added for #217) marshals and unmarshals losslessly. Worker writes the
+// slice; app reads it on the other side of Redis.
+func TestJobResult_RefViolations_RoundTrip(t *testing.T) {
+	in := JobResult{JobID: "j1", Status: "completed", RefViolations: []string{"foo/bar", "baz/qux"}}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"ref_violations":[`) {
+		t.Errorf("expected ref_violations array in JSON, got: %s", raw)
+	}
+	var out JobResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(in.RefViolations, out.RefViolations) {
+		t.Fatalf("RefViolations mismatch:\n in=%v\nout=%v", in.RefViolations, out.RefViolations)
+	}
+}
+
+// TestJobResult_RefViolations_OmitEmpty asserts a result with no violations
+// serializes without the ref_violations key — keeps the wire shape minimal
+// for the common no-ref / clean-guard case.
+func TestJobResult_RefViolations_OmitEmpty(t *testing.T) {
+	r := JobResult{JobID: "j1", Status: "completed"}
+	buf, _ := json.Marshal(r)
+	if strings.Contains(string(buf), "ref_violations") {
+		t.Errorf("empty RefViolations should be omitted: %s", buf)
+	}
+}

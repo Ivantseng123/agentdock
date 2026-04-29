@@ -113,6 +113,11 @@ type JobResult struct {
 	CostUSD        float64   `json:"cost_usd,omitempty"`
 	InputTokens    int       `json:"input_tokens,omitempty"`
 	OutputTokens   int       `json:"output_tokens,omitempty"`
+	// RefViolations lists ref repos (owner/name) where the post-execute
+	// guard detected agent writes. Worker is task-agnostic — it always
+	// reports; app side decides how to react (Ask: metric only; Issue:
+	// fail-fast at createAndPostIssue s1).
+	RefViolations  []string  `json:"ref_violations,omitempty"`
 	RepoPath       string    `json:"-"` // local only, not serialized over Redis
 	PrepareSeconds float64   `json:"-"` // local only, not serialized over Redis
 }

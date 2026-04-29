@@ -116,16 +116,17 @@ var WorkflowRetryTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Count of workflow retry attempts and exhaustions.",
 }, []string{"workflow", "outcome"})
 
-// AskRefWriteViolationsTotal counts post-execute guard violations: an Ask
-// agent wrote into a ref worktree despite the read-only contract. Lenient
-// strategy — increment + warn-log, do NOT fail the job. Surfaces prompt
-// drift; if this counter trends up, the SKILL.md / output_rules need
-// strengthening, not the runtime guard.
-var AskRefWriteViolationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+// RefWriteViolationsTotal counts post-execute guard violations: an agent
+// wrote into a ref worktree despite the read-only contract. Labelled by
+// workflow ("ask"|"issue") and repo. Worker is task-agnostic — it always
+// reports via JobResult.RefViolations; app side increments this metric
+// on each violation. Ask path is lenient (increment, do not fail). Issue
+// path is strict (increment + fail-fast at createAndPostIssue s1).
+var RefWriteViolationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: namespace,
-	Name:      "ask_ref_write_violations_total",
-	Help:      "Number of times an Ask-workflow agent wrote into a ref repo (lenient: violation does not fail the job).",
-}, []string{"repo"})
+	Name:      "ref_write_violations_total",
+	Help:      "Post-execute guard detected agent writing into a ref worktree.",
+}, []string{"workflow", "repo"})
 
 // ---- Handler ----
 
@@ -211,7 +212,7 @@ func Register(reg prometheus.Registerer, q queue.JobQueue, store queue.JobStore)
 		AgentTokensTotal,
 		WorkflowCompletionsTotal,
 		WorkflowRetryTotal,
-		AskRefWriteViolationsTotal,
+		RefWriteViolationsTotal,
 		HandlerDedupRejectionsTotal,
 		HandlerRateLimitTotal,
 		WatchdogKillsTotal,

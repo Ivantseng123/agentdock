@@ -80,18 +80,12 @@ func (s *askState) BranchSelectedRepo() string {
 // RefExclusions returns the repos that should NOT appear as ref candidates:
 // the primary plus any refs already picked. Used by HandleRefRepoSuggestion
 // to filter type-ahead results when the channel has no static repo list.
+// Body delegates to shared refExclusionsFor (also used by issueState).
 func (s *askState) RefExclusions() []string {
 	if s == nil {
 		return nil
 	}
-	out := make([]string, 0, 1+len(s.RefRepos))
-	if s.SelectedRepo != "" {
-		out = append(out, s.SelectedRepo)
-	}
-	for _, r := range s.RefRepos {
-		out = append(out, r.Repo)
-	}
-	return out
+	return refExclusionsFor(s.SelectedRepo, s.RefRepos)
 }
 
 // NewAskWorkflow constructs a workflow instance.

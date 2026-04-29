@@ -278,61 +278,42 @@ func initGitWorktree(t *testing.T, dir string) string {
 	return dir
 }
 
-// TestRunRefGuard_DetectsViolation creates a real git worktree, modifies a
-// tracked-ish file, and asserts the callback fires with the right ref.
-// Tests the lenient-callback path's most important property: it observes
-// without interrupting (no error returned, just side effects).
+// TestRunRefGuard_DetectsViolation creates a real git worktree with an
+// untracked file (representing an agent write) and asserts the guard returns
+// the violating ref's owner/name in the slice. Worker is task-agnostic — the
+// slice is the contract; app side acts on it.
 func TestRunRefGuard_DetectsViolation(t *testing.T) {
 	dir := initGitWorktree(t, filepath.Join(t.TempDir(), "ref"))
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("agent wrote here"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	var fired []string
-	cb := func(ref queue.RefRepoContext, diff string, _ *slog.Logger) {
-		fired = append(fired, ref.Repo)
-		if !strings.Contains(diff, "f.txt") {
-			t.Errorf("diff should mention f.txt, got %q", diff)
-		}
-	}
-	runRefGuard([]queue.RefRepoContext{{Repo: "foo/bar", Path: dir}}, cb, slog.Default())
+	violations := runRefGuard([]queue.RefRepoContext{{Repo: "foo/bar", Path: dir}}, slog.Default())
 
-	if len(fired) != 1 || fired[0] != "foo/bar" {
-		t.Fatalf("expected one violation for foo/bar; got %v", fired)
+	if len(violations) != 1 || violations[0] != "foo/bar" {
+		t.Fatalf("expected violations=[foo/bar]; got %v", violations)
 	}
 }
 
-// TestRunRefGuard_CleanWorktree_NoCallback asserts the no-violation path
-// doesn't fire the callback — important so the metric only counts real
-// violations, not background activity.
-func TestRunRefGuard_CleanWorktree_NoCallback(t *testing.T) {
+// TestRunRefGuard_CleanWorktree_NoNoise asserts the no-violation path returns
+// nil — important so app side's `len(violations) > 0` check only triggers on
+// real writes, not on every successful job.
+func TestRunRefGuard_CleanWorktree_NoNoise(t *testing.T) {
 	dir := initGitWorktree(t, filepath.Join(t.TempDir(), "ref"))
 
-	var fired int
-	cb := func(_ queue.RefRepoContext, _ string, _ *slog.Logger) { fired++ }
-	runRefGuard([]queue.RefRepoContext{{Repo: "foo/bar", Path: dir}}, cb, slog.Default())
+	violations := runRefGuard([]queue.RefRepoContext{{Repo: "foo/bar", Path: dir}}, slog.Default())
 
-	if fired != 0 {
-		t.Fatalf("clean worktree must not fire callback, fired=%d", fired)
+	if violations != nil {
+		t.Fatalf("clean worktree must return nil violations; got %v", violations)
 	}
 }
 
-// TestRunRefGuard_NilCallback_NoOp ensures the guard is safe to invoke even
-// when no callback is configured (defensive — callers shouldn't normally
-// pass nil, but the impl should not panic).
-func TestRunRefGuard_NilCallback_NoOp(t *testing.T) {
-	dir := initGitWorktree(t, filepath.Join(t.TempDir(), "ref"))
-	runRefGuard([]queue.RefRepoContext{{Repo: "x/y", Path: dir}}, nil, slog.Default())
-}
-
-// TestRunRefGuard_EmptyRefs_NoOp covers the no-refs path so the callback
-// definitely doesn't fire and no git command runs.
+// TestRunRefGuard_EmptyRefs_NoOp covers the no-refs path: returns nil without
+// running any git command (no panic on nil/empty input).
 func TestRunRefGuard_EmptyRefs_NoOp(t *testing.T) {
-	var fired int
-	cb := func(_ queue.RefRepoContext, _ string, _ *slog.Logger) { fired++ }
-	runRefGuard(nil, cb, slog.Default())
-	if fired != 0 {
-		t.Fatalf("empty refs must not fire callback, fired=%d", fired)
+	violations := runRefGuard(nil, slog.Default())
+	if violations != nil {
+		t.Fatalf("empty refs must return nil; got %v", violations)
 	}
 }
 
@@ -507,6 +488,12 @@ func TestExecuteJob_MultiRepo_EndToEnd(t *testing.T) {
 	refsRoot := filepath.Join(primaryPath, ".refs")
 	if _, err := os.Stat(refsRoot); !os.IsNotExist(err) {
 		t.Errorf("refs root should be cleaned up; stat err = %v", err)
+	}
+
+	// Post-execute guard: dirtied frontend ref → JobResult.RefViolations
+	// carries owner/name. Worker is task-agnostic; app side reads this.
+	if len(res.RefViolations) != 1 || res.RefViolations[0] != "frontend/web" {
+		t.Errorf("RefViolations = %v, want [frontend/web]", res.RefViolations)
 	}
 }
 

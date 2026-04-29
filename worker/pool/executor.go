@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/crypto"
-	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 	"github.com/Ivantseng123/agentdock/worker/prompt"
@@ -194,11 +193,11 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
 	logger.Debug("Agent output 內容", "phase", "完成", "output", output)
 
-	// Post-execute ref guard. Only fires when refs were prepared; lenient
-	// callback for Ask (warn + metric, do NOT fail). #217 will route Issue
-	// jobs through a strict callback. Today Ask is the only multi-repo
-	// workflow, so the callback selection is hardcoded.
-	runRefGuard(refContexts, askLenientRefViolation, logger)
+	// Post-execute ref guard. Worker is task-agnostic — accumulates violations
+	// into JobResult.RefViolations and warn-logs locally. App side decides what
+	// to do (Ask: metric only via result_listener; Issue: fail-fast at
+	// createAndPostIssue s1).
+	violations := runRefGuard(refContexts, logger)
 
 	// Ship the raw agent output to the app. Parsing and REJECTED/ERROR/parse-failed
 	// classification live in the app-side result listener — worker has no
@@ -211,27 +210,38 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		StartedAt:      startedAt,
 		FinishedAt:     time.Now(),
 		PrepareSeconds: prepareSeconds,
+		RefViolations:  violations,
 	}
 }
 
-// RefViolationCallback is invoked when post-execute guard finds modifications
-// in a ref worktree. Ask installs a lenient impl (warn + metric); Issue (#217)
-// will install a strict impl that fails the job. The two-arg shape lets a
-// future strict impl record violations, then the caller decides whether to
-// continue — this spec only ships the lenient flavour, but the abstraction
-// is a callback so the strict impl can drop in without restructuring.
-type RefViolationCallback func(refContext queue.RefRepoContext, diffPreview string, logger *slog.Logger)
-
-// askLenientRefViolation is the Ask-workflow callback: warn-log + metric.
-// Worktree cleanup happens regardless, so writes have no persistent effect —
-// the guard is observability, not enforcement (spec §4.6 Layer 3, Q8).
-func askLenientRefViolation(ref queue.RefRepoContext, diff string, logger *slog.Logger) {
-	logger.Warn("agent wrote into ref repo (lenient: not failing job)",
-		"phase", "處理中",
-		"ref", ref.Repo,
-		"diff_preview", truncateRefDiff(diff),
-	)
-	metrics.AskRefWriteViolationsTotal.WithLabelValues(ref.Repo).Inc()
+// runRefGuard walks successful ref worktrees and runs `git status --porcelain`
+// in each, warn-logs on dirty bits, and returns the owner/name list of violating
+// refs. Caller writes the slice into JobResult.RefViolations; app side decides
+// how to react (Ask: metric only; Issue: fail-fast at createAndPostIssue s1).
+// `git status` failure is debug-logged and skipped — a corrupt worktree
+// shouldn't escalate, cleanup runs regardless. Empty refs → returns nil.
+func runRefGuard(refs []queue.RefRepoContext, logger *slog.Logger) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	var violations []string
+	for _, ref := range refs {
+		out, err := exec.Command("git", "-C", ref.Path, "status", "--porcelain").Output()
+		if err != nil {
+			logger.Debug("ref guard: git status failed; skipping",
+				"phase", "處理中", "ref", ref.Repo, "error", err)
+			continue
+		}
+		if diff := strings.TrimSpace(string(out)); diff != "" {
+			logger.Warn("agent wrote into ref repo",
+				"phase", "處理中",
+				"ref", ref.Repo,
+				"diff_preview", truncateRefDiff(diff),
+			)
+			violations = append(violations, ref.Repo)
+		}
+	}
+	return violations
 }
 
 // truncateRefDiff caps the log preview at 200 chars so a multi-MB diff can't
@@ -242,27 +252,6 @@ func truncateRefDiff(s string) string {
 		return s[:200] + "…(truncated)"
 	}
 	return s
-}
-
-// runRefGuard walks successful ref worktrees and runs `git status --porcelain`
-// in each. Non-empty output → invoke callback. `git status` failure is logged
-// at debug and skipped (a corrupt worktree shouldn't escalate; cleanup runs
-// regardless). When refs is empty or onViolation is nil, this is a no-op.
-func runRefGuard(refs []queue.RefRepoContext, onViolation RefViolationCallback, logger *slog.Logger) {
-	if onViolation == nil || len(refs) == 0 {
-		return
-	}
-	for _, ref := range refs {
-		out, err := exec.Command("git", "-C", ref.Path, "status", "--porcelain").Output()
-		if err != nil {
-			logger.Debug("ref guard: git status failed; skipping",
-				"phase", "處理中", "ref", ref.Repo, "error", err)
-			continue
-		}
-		if diff := strings.TrimSpace(string(out)); diff != "" {
-			onViolation(ref, diff, logger)
-		}
-	}
 }
 
 func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]prompt.AttachmentInfo, error) {

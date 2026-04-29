@@ -167,6 +167,14 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 		metrics.QueueWait.Observe(state.WaitTime.Seconds())
 	}
 
+	// Ref-write violations: worker is task-agnostic and reports any ref
+	// worktree dirty bits via JobResult.RefViolations. App side is where the
+	// metric lives — Ask path is lenient (count, do not block); Issue path
+	// fail-fasts at createAndPostIssue s1 in addition to this metric.
+	for _, repo := range result.RefViolations {
+		metrics.RefWriteViolationsTotal.WithLabelValues(workflowLabel(job), repo).Inc()
+	}
+
 	// Agent metrics from StatusReport (relayed by StatusListener from worker's StatusBus).
 	if as := state.AgentStatus; as != nil {
 		provider := as.AgentCmd
