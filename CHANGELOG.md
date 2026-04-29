@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.2.0](https://github.com/Ivantseng123/agentdock/compare/v3.1.0...v3.2.0) (2026-04-29)
+
+
+### Features
+
+* **selector:** auto-upgrade to external_select for &gt;100 branches (closes [#153](https://github.com/Ivantseng123/agentdock/issues/153)) ([b71d6d2](https://github.com/Ivantseng123/agentdock/commit/b71d6d28b47f6d1307bc19a0163b592f4c927f44))
+* **worker,config:** add extra_args field + {extra_args} placeholder ([f3acc33](https://github.com/Ivantseng123/agentdock/commit/f3acc3366e514be4dc945c05e5a056fdbaedfc88))
+* **worker:** extra_args placeholder for per-agent flag customisation (closes [#190](https://github.com/Ivantseng123/agentdock/issues/190)) ([33f6828](https://github.com/Ivantseng123/agentdock/commit/33f6828cca99c0c3b0111b55252b4cffd141c706))
+
+
+### Bug Fixes
+
+* ask result race + agent CLI bumps ([5ef06c2](https://github.com/Ivantseng123/agentdock/commit/5ef06c2ef180b8825f34cdd329e89695aaa33641))
+* **github:** log swallowed set-url error (closes [#193](https://github.com/Ivantseng123/agentdock/issues/193)) ([b045c0e](https://github.com/Ivantseng123/agentdock/commit/b045c0e68e967314261e91fc3af3dbde0b828dfb))
+* **image:** bump opencode 1.4.11→1.14.29 and pin claude-code/codex ([63e03aa](https://github.com/Ivantseng123/agentdock/commit/63e03aa155e72217a6b1f6f0abf4a9b468186789))
+* **worker/agent:** drop duplicate token const, runtime warn, and dead splice ([235b5f7](https://github.com/Ivantseng123/agentdock/commit/235b5f7556d7c82f50ac3c1d294fde78d60b5d71))
+* **worker:** stamp terminal JobStatus on final status report ([76b3c77](https://github.com/Ivantseng123/agentdock/commit/76b3c77a1f5aea4099ec4d20dc224d0bf7786687))
+* **workflow:** redact REJECTED.Message and POSTED.Severity ([#180](https://github.com/Ivantseng123/agentdock/issues/180)) ([24f034a](https://github.com/Ivantseng123/agentdock/commit/24f034a30e74a36416f764a484115ce22a1d83c1))
+
 ## [3.1.0](https://github.com/Ivantseng123/agentdock/compare/v3.0.0...v3.1.0) (2026-04-26)
 
 
