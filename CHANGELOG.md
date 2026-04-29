@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.3.0](https://github.com/Ivantseng123/agentdock/compare/v3.2.0...v3.3.0) (2026-04-29)
+
+
+### Features
+
+* **worker:** Ask multi-repo backend (refs schema, workdir, prompt, guard) ([5d787b6](https://github.com/Ivantseng123/agentdock/commit/5d787b60bcaa5e041256a4c1f417d7387f126aae))
+* **worker:** Ask multi-repo backend (refs schema, workdir, prompt, guard) ([54e3318](https://github.com/Ivantseng123/agentdock/commit/54e33185dcd6cac3b74d5efd50ed2df8e23044b4)), closes [#216](https://github.com/Ivantseng123/agentdock/issues/216)
+* **workflow/ask:** multi-repo frontend (Slack phases, output_rules, SKILL) ([bb9e5c4](https://github.com/Ivantseng123/agentdock/commit/bb9e5c404d371e27f53404ba3a573f7b6c3ef8c9))
+* **workflow/ask:** multi-repo frontend (Slack phases, output_rules, SKILL) ([7ab7c2f](https://github.com/Ivantseng123/agentdock/commit/7ab7c2f8d530532cbd24b5a36a15a0ff42449437)), closes [#216](https://github.com/Ivantseng123/agentdock/issues/216)
+
+
+### Bug Fixes
+
+* **workflow/ask:** e2e fixes from live Slack testing ([023e825](https://github.com/Ivantseng123/agentdock/commit/023e82549ddfad64e7b67eb5e4de49c94285047b)), closes [#216](https://github.com/Ivantseng123/agentdock/issues/216)
+
 ## [3.2.0](https://github.com/Ivantseng123/agentdock/compare/v3.1.0...v3.2.0) (2026-04-29)
 
 
