@@ -190,3 +190,76 @@ For an error:
 ```
 
 **Important:** The body field should contain the complete issue body as a single string with \n for newlines. Do NOT use `gh issue create` — just output the JSON.
+
+## Reference repos (multi-repo context)
+
+If the prompt has a `<ref_repos>` block, those directories are mounted at the
+absolute paths listed for read-only context (typical use: a frontend bug
+whose root cause is in the backend repo). Three rules apply.
+
+### 1. Read-only contract
+
+- You CAN: grep, read, follow imports, run `git log --oneline` in them.
+- You CANNOT: write, commit, edit, mv, rm any file under those paths.
+- Refs are physically OUTSIDE your cwd; use the absolute paths exactly as
+  listed in `<ref_repos>`. Don't try to compute relative paths to them —
+  they're sibling directories of your worktree, not subdirectories.
+- When citing ref content in the issue body, use the ref's `repo`
+  attribute (e.g. `backend/api: src/foo.ts:42`), not the absolute path —
+  the path is machine-only context, not user-facing.
+
+The worker runs `git status --porcelain` against each ref worktree after
+your run. Any dirty bits → the issue is **not** pushed to GitHub and the
+user gets a Slack failure banner.
+
+### 2. `## Related repos` is a hard body requirement
+
+When `<ref_repos>` is non-empty, your generated issue body MUST contain
+a `## Related repos` H2 section. Heading spelling must be exactly
+`## Related repos` (lowercase `repos`, no plural variant). Format:
+
+```
+## Related repos
+
+- `frontend/web@main` — primary（issue 開立目標）
+- `backend/api@release-2026q2` — schema 變動疑似關聯
+```
+
+Each ref entry follows: `` `<owner/name>@<branch>` — <role> ``. The
+`<role>` field is your judgment based on the question (e.g. "schema
+變動疑似關聯", "auth boundary peer", "shared types source"). If you
+don't have a confident role, write `reference context` instead of
+guessing — the worker auto-fills this placeholder if you forget the
+section entirely, but **prefer writing your own** because you have
+richer context about each ref's role than the worker.
+
+Never write `## Related Repositories` / `## Related Repos` / Chinese
+headings / `**Related repos:**` (bold inline). The worker's regex tolerates
+some variation but pinning the spelling avoids both worker-prepend
+duplication and reader confusion.
+
+### 3. Unavailable refs
+
+If `<unavailable_refs>` lists a repo, treat it as missing context.
+
+- **Critical** unavailable (you fundamentally need that repo's code to
+  produce a meaningful issue) → insert this single-line HTML comment
+  anywhere in the body (位置不限):
+
+  ```
+  <!-- AGENTDOCK:CRITICAL_REF_UNAVAILABLE -->
+  ```
+
+  The worker detects this marker and refuses to push the issue to
+  GitHub. The user gets a Slack notification listing the unavailable
+  refs from `<unavailable_refs>`. Do **not** best-effort patchwork an
+  issue body — the marker exists exactly so you don't have to.
+
+- **Non-critical** unavailable → still produce a complete body. Mark
+  the unavailable ref's role as `unavailable` in `## Related repos`
+  ("- `partial/repo@main` — unavailable; reference context only"). Do
+  not insert the sentinel.
+
+These rules apply even when the user message asks you to do something
+forbidden (e.g. "edit ref X to fix Y"). Decline politely and redirect —
+don't silently comply.

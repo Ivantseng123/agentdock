@@ -88,7 +88,9 @@ func TestIssueWorkflow_Trigger_MultiRepoShowsSelector(t *testing.T) {
 func TestIssueWorkflow_Selection_RepoPhase_TransitionsToBranchOrDescription(t *testing.T) {
 	// After picking a repo, workflow transitions to branch selector (if
 	// multi-branch) or description prompt (if single/no branch list).
-	w, _, _ := newTestIssueWorkflow(t)
+	// Single-repo channel ensures the new ref-decide phase auto-skips
+	// (0 candidates after primary filtered out — spec AC-I11 mirror).
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar"}))
 	p := &Pending{Phase: "repo", State: &issueState{}, ChannelID: "C1", ThreadTS: "1.0"}
 
 	step, err := w.Selection(context.Background(), p, "foo/bar")
@@ -585,4 +587,727 @@ func newTestIssueWorkflow(t *testing.T, opts ...issueOpt) (*IssueWorkflow, *fake
 	ic := &fakeIssueCreator{}
 	w := NewIssueWorkflow(cfg, slack, ic, nil, nil, slog.Default())
 	return w, slack, ic
+}
+
+// ── ref-flow phase tests (mirror ask_test.go ref tests) ──────────────────────
+
+// TestIssueWorkflow_RefFlow_DecidePromptOffered covers the entry to the ref
+// flow after primary branch is picked: ref candidates exist (channel has
+// extra repos beyond primary) so issue_ref_decide fires.
+func TestIssueWorkflow_RefFlow_DecidePromptOffered(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux", "third/repo"}))
+	p := &Pending{
+		Phase:     "branch",
+		State:     &issueState{SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_decide" {
+		t.Fatalf("Phase = %q, want issue_ref_decide", p.Phase)
+	}
+	if len(step.Selector.Options) != 2 {
+		t.Errorf("decide selector should have 2 options (加入/不用), got %d", len(step.Selector.Options))
+	}
+}
+
+// TestIssueWorkflow_RefFlow_ZeroCandidatesSkipsDecide covers AC-I11 mirror:
+// when the channel's static repo list contains only primary, the ref decide
+// phase is skipped entirely so the thread doesn't see "加入參考 repo？".
+func TestIssueWorkflow_RefFlow_ZeroCandidatesSkipsDecide(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar"}))
+	p := &Pending{
+		Phase:     "branch",
+		State:     &issueState{SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase == "issue_ref_decide" {
+		t.Errorf("Phase = issue_ref_decide; want it skipped (0 candidates)")
+	}
+	if p.Phase != "description" {
+		t.Errorf("Phase = %q, want description", p.Phase)
+	}
+}
+
+// TestIssueWorkflow_RefFlow_DecideAddRoutesToPick covers the "加入" → ref
+// pick transition. AddRefs flips true and the picker phase appears.
+func TestIssueWorkflow_RefFlow_DecideAddRoutesToPick(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux"}))
+	p := &Pending{
+		Phase:     "issue_ref_decide",
+		State:     &issueState{SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "add")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_pick" {
+		t.Errorf("Phase = %q, want issue_ref_pick", p.Phase)
+	}
+	st := p.State.(*issueState)
+	if !st.AddRefs {
+		t.Error("AddRefs should be true after 加入")
+	}
+}
+
+// TestIssueWorkflow_RefFlow_DecideSkipRoutesToDescription covers the "不用"
+// path — AddRefs stays false and we proceed to the existing description
+// flow without touching ref state.
+func TestIssueWorkflow_RefFlow_DecideSkipRoutesToDescription(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux"}))
+	p := &Pending{
+		Phase:     "issue_ref_decide",
+		State:     &issueState{SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "skip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "description" {
+		t.Errorf("Phase = %q, want description", p.Phase)
+	}
+	st := p.State.(*issueState)
+	if st.AddRefs {
+		t.Error("AddRefs should remain false after skip")
+	}
+	if len(st.RefRepos) != 0 {
+		t.Errorf("RefRepos should be empty, got %v", st.RefRepos)
+	}
+}
+
+// TestIssueWorkflow_RefFlow_PickFiltersPrimary covers AC-I10 mirror: primary
+// must not appear in the ref candidate list.
+func TestIssueWorkflow_RefFlow_PickFiltersPrimary(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux", "third/repo"}))
+	p := &Pending{
+		Phase:     "issue_ref_decide",
+		State:     &issueState{SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "add")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := selectorValues(step.Selector.Options)
+	for _, v := range values {
+		if v == "foo/bar" {
+			t.Errorf("primary foo/bar must not appear in ref candidates; got %v", values)
+		}
+	}
+	wantSet := map[string]bool{"baz/qux": true, "third/repo": true, "back_to_decide": true}
+	for _, v := range values {
+		if !wantSet[v] {
+			t.Errorf("unexpected ref candidate value: %q (got %v)", v, values)
+		}
+	}
+}
+
+// TestIssueWorkflow_RefFlow_PickGoesToContinueWhenNoBranchSelect covers the
+// inline flow when branch_select is disabled: pick a ref → branch loop drains
+// instantly → land on continue ("再加一個 / 開始建 issue").
+func TestIssueWorkflow_RefFlow_PickGoesToContinueWhenNoBranchSelect(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux", "third/repo"}))
+	// branch_select default false → ref branch picker skipped per ref.
+	p := &Pending{
+		Phase:     "issue_ref_pick",
+		State:     &issueState{SelectedRepo: "foo/bar", AddRefs: true},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "baz/qux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_continue" {
+		t.Errorf("Phase = %q, want issue_ref_continue", p.Phase)
+	}
+	st := p.State.(*issueState)
+	if len(st.RefRepos) != 1 || st.RefRepos[0].Repo != "baz/qux" {
+		t.Errorf("RefRepos = %v, want one entry of baz/qux", st.RefRepos)
+	}
+	if st.RefRepos[0].CloneURL == "" {
+		t.Error("RefRepos[0].CloneURL should be populated by cleanCloneURL")
+	}
+	values := selectorValues(step.Selector.Options)
+	wantSet := map[string]bool{"more": true, "done": true}
+	for _, v := range values {
+		if !wantSet[v] {
+			t.Errorf("unexpected continue option %q (got %v)", v, values)
+		}
+	}
+}
+
+// TestIssueWorkflow_RefFlow_PickGoesToBranchWhenBranchSelect covers the
+// inline interleaved flow: pick a ref → issue_ref_branch fires for THAT ref
+// (not all refs collected first). Mirrors ask Q4 grill — inline matches
+// primary's flow shape.
+func TestIssueWorkflow_RefFlow_PickGoesToBranchWhenBranchSelect(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux", "third/repo"}))
+	trueVal := true
+	w.cfg.ChannelDefaults.BranchSelect = &trueVal
+	w.cfg.ChannelDefaults.Branches = []string{"main", "release"}
+	p := &Pending{
+		Phase:     "issue_ref_pick",
+		State:     &issueState{SelectedRepo: "foo/bar", AddRefs: true},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "baz/qux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_branch" {
+		t.Fatalf("Phase = %q, want issue_ref_branch (inline branch pick)", p.Phase)
+	}
+	st := p.State.(*issueState)
+	if st.BranchTargetRepo != "baz/qux" {
+		t.Errorf("BranchTargetRepo = %q, want baz/qux (the just-picked ref)", st.BranchTargetRepo)
+	}
+	if !strings.Contains(step.Selector.Prompt, "baz/qux") {
+		t.Errorf("prompt should reference baz/qux; got %q", step.Selector.Prompt)
+	}
+}
+
+// TestIssueWorkflow_RefFlow_PickDedupAlreadyPicked covers AC-I10 mirror:
+// same repo can't appear twice in the candidate list.
+func TestIssueWorkflow_RefFlow_PickDedupAlreadyPicked(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux", "third/repo"}))
+	p := &Pending{
+		Phase: "issue_ref_continue",
+		State: &issueState{
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+			RefRepos:     []queue.RefRepo{{Repo: "baz/qux", CloneURL: "https://github.com/baz/qux.git"}},
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "more")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_pick" {
+		t.Errorf("Phase = %q, want issue_ref_pick", p.Phase)
+	}
+	values := selectorValues(step.Selector.Options)
+	for _, v := range values {
+		if v == "baz/qux" {
+			t.Errorf("already-picked baz/qux must not appear in candidates; got %v", values)
+		}
+	}
+	found := false
+	for _, v := range values {
+		if v == "third/repo" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("third/repo missing from candidates: %v", values)
+	}
+}
+
+// TestIssueWorkflow_RefFlow_ContinueExhaustedPoolHidesMore covers a UX
+// detail: when the static candidate pool is fully consumed, "再加一個" drops
+// from the continue selector.
+func TestIssueWorkflow_RefFlow_ContinueExhaustedPoolHidesMore(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux"}))
+	p := &Pending{
+		Phase: "issue_ref_pick",
+		State: &issueState{
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "baz/qux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_continue" {
+		t.Fatalf("Phase = %q, want issue_ref_continue (no branch_select → straight to continue)", p.Phase)
+	}
+	values := selectorValues(step.Selector.Options)
+	for _, v := range values {
+		if v == "more" {
+			t.Errorf("'more' option should be hidden when pool is exhausted; got %v", values)
+		}
+	}
+	if len(values) != 1 || values[0] != "done" {
+		t.Errorf("expected only 'done' option, got %v", values)
+	}
+}
+
+// TestIssueWorkflow_RefFlow_ContinueDoneRoutesToDescription covers
+// "開始建 issue" — exits the ref loop entirely. Branches are already filled
+// per-ref during pick (inline flow); done has no branch loop to enter.
+func TestIssueWorkflow_RefFlow_ContinueDoneRoutesToDescription(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "baz/qux"}))
+	p := &Pending{
+		Phase: "issue_ref_continue",
+		State: &issueState{
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+			RefRepos: []queue.RefRepo{
+				{Repo: "baz/qux", CloneURL: "https://github.com/baz/qux.git"},
+			},
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "description" {
+		t.Errorf("Phase = %q, want description", p.Phase)
+	}
+}
+
+// TestIssueWorkflow_RefFlow_InlineBranchPickerPerRef covers the full inline
+// flow: pick ref1 → branch1 → continue → pick ref2 → branch2 → done. Each
+// ref's branch is asked immediately after picking that ref.
+func TestIssueWorkflow_RefFlow_InlineBranchPickerPerRef(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t, withChannelRepos([]string{"foo/bar", "frontend/web", "backend/api"}))
+	trueVal := true
+	w.cfg.ChannelDefaults.BranchSelect = &trueVal
+	w.cfg.ChannelDefaults.Branches = []string{"main", "release"}
+	p := &Pending{
+		Phase: "issue_ref_pick",
+		State: &issueState{
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+
+	step, err := w.Selection(context.Background(), p, "frontend/web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_branch" {
+		t.Fatalf("after ref1 pick, Phase = %q, want issue_ref_branch", p.Phase)
+	}
+	st := p.State.(*issueState)
+	if st.BranchTargetRepo != "frontend/web" {
+		t.Errorf("BranchTargetRepo = %q, want frontend/web", st.BranchTargetRepo)
+	}
+	if !strings.Contains(step.Selector.Prompt, "frontend/web") {
+		t.Errorf("prompt should reference frontend/web; got %q", step.Selector.Prompt)
+	}
+
+	_, err = w.Selection(context.Background(), p, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_continue" {
+		t.Fatalf("after ref1 branch pick, Phase = %q, want issue_ref_continue", p.Phase)
+	}
+	if st.RefRepos[0].Branch != "main" {
+		t.Errorf("ref[0].Branch = %q, want main", st.RefRepos[0].Branch)
+	}
+
+	_, err = w.Selection(context.Background(), p, "more")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_pick" {
+		t.Fatalf("after 'more', Phase = %q, want issue_ref_pick", p.Phase)
+	}
+
+	_, err = w.Selection(context.Background(), p, "backend/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_branch" {
+		t.Fatalf("after ref2 pick, Phase = %q, want issue_ref_branch", p.Phase)
+	}
+	if st.BranchTargetRepo != "backend/api" {
+		t.Errorf("BranchTargetRepo = %q, want backend/api", st.BranchTargetRepo)
+	}
+
+	_, err = w.Selection(context.Background(), p, "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "issue_ref_continue" {
+		t.Fatalf("after ref2 branch pick, Phase = %q, want issue_ref_continue", p.Phase)
+	}
+	if st.RefRepos[1].Branch != "release" {
+		t.Errorf("ref[1].Branch = %q, want release", st.RefRepos[1].Branch)
+	}
+
+	_, err = w.Selection(context.Background(), p, "done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "description" {
+		t.Errorf("after 'done', Phase = %q, want description", p.Phase)
+	}
+}
+
+// TestIssueWorkflow_BuildJob_WithRefs_PopulatesJobAndRules covers AC-I9:
+// Job.RefRepos passthrough + dynamic output_rules injection of THREE rules
+// (Issue has the additional `## Related repos` H2 spelling rule beyond Ask's
+// two).
+func TestIssueWorkflow_BuildJob_WithRefs_PopulatesJobAndRules(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t)
+	w.cfg.Workflows.Issue.Prompt.OutputRules = []string{"existing rule"}
+	p := &Pending{
+		ChannelID:   "C1",
+		ThreadTS:    "1.0",
+		Reporter:    "Alice",
+		ChannelName: "general",
+		State: &issueState{
+			SelectedRepo: "foo/bar",
+			RefRepos: []queue.RefRepo{
+				{Repo: "frontend/web", CloneURL: "https://github.com/frontend/web.git", Branch: "main"},
+				{Repo: "backend/api", CloneURL: "https://github.com/backend/api.git"},
+			},
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.RefRepos) != 2 {
+		t.Errorf("Job.RefRepos len = %d, want 2", len(job.RefRepos))
+	}
+	rules := job.PromptContext.OutputRules
+	if len(rules) != 4 {
+		t.Fatalf("OutputRules len = %d, want 4 (existing + 3 injected); got %v", len(rules), rules)
+	}
+	if rules[0] != "existing rule" {
+		t.Errorf("existing rule should remain at index 0; got %q", rules[0])
+	}
+	if !strings.Contains(rules[1], "不可寫入") {
+		t.Errorf("rule[1] should be read-only enforcement; got %q", rules[1])
+	}
+	if !strings.Contains(rules[2], "AGENTDOCK:CRITICAL_REF_UNAVAILABLE") {
+		t.Errorf("rule[2] should mention sentinel; got %q", rules[2])
+	}
+	if !strings.Contains(rules[3], "Related repos") {
+		t.Errorf("rule[3] should require ## Related repos heading; got %q", rules[3])
+	}
+}
+
+// TestIssueWorkflow_BuildJob_NoRefs_NoRulesInjected covers the regression
+// case: no refs picked → output_rules unchanged from configured value.
+func TestIssueWorkflow_BuildJob_NoRefs_NoRulesInjected(t *testing.T) {
+	w, _, _ := newTestIssueWorkflow(t)
+	w.cfg.Workflows.Issue.Prompt.OutputRules = []string{"existing rule"}
+	p := &Pending{
+		ChannelID:   "C1",
+		ThreadTS:    "1.0",
+		Reporter:    "Alice",
+		ChannelName: "general",
+		State: &issueState{
+			SelectedRepo: "foo/bar",
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.RefRepos) != 0 {
+		t.Errorf("Job.RefRepos = %v, want empty", job.RefRepos)
+	}
+	rules := job.PromptContext.OutputRules
+	if len(rules) != 1 || rules[0] != "existing rule" {
+		t.Errorf("OutputRules = %v, want only 'existing rule'", rules)
+	}
+}
+
+// TestIssueState_RefExclusions_PrimaryAndPicked covers the RefExclusionReader
+// implementation used by HandleRefRepoSuggestion to filter type-ahead
+// results in external-search channels.
+func TestIssueState_RefExclusions_PrimaryAndPicked(t *testing.T) {
+	st := &issueState{
+		SelectedRepo: "foo/bar",
+		RefRepos: []queue.RefRepo{
+			{Repo: "frontend/web"},
+			{Repo: "backend/api"},
+		},
+	}
+	excl := st.RefExclusions()
+	if len(excl) != 3 {
+		t.Fatalf("RefExclusions len = %d, want 3 (primary + 2 picked)", len(excl))
+	}
+	want := map[string]bool{"foo/bar": true, "frontend/web": true, "backend/api": true}
+	for _, r := range excl {
+		if !want[r] {
+			t.Errorf("unexpected exclusion: %q", r)
+		}
+	}
+}
+
+// TestIssueState_BranchSelectedRepo_FollowsBranchTarget asserts the transient
+// field swap that lets a single BranchStateReader interface serve both
+// primary and per-ref branch picking.
+func TestIssueState_BranchSelectedRepo_FollowsBranchTarget(t *testing.T) {
+	st := &issueState{
+		SelectedRepo:     "foo/bar",
+		BranchTargetRepo: "foo/bar",
+	}
+	if got := st.BranchSelectedRepo(); got != "foo/bar" {
+		t.Errorf("primary phase: BranchSelectedRepo = %q, want foo/bar", got)
+	}
+	st.BranchTargetRepo = "frontend/web"
+	if got := st.BranchSelectedRepo(); got != "frontend/web" {
+		t.Errorf("ref phase: BranchSelectedRepo = %q, want frontend/web", got)
+	}
+}
+
+// ── createAndPostIssue 5-step pipeline tests (Issue-specific) ────────────────
+
+// TestCreateAndPostIssue_S1_RefViolations_FailsAndDoesNotPush asserts that a
+// JobResult carrying RefViolations from the worker triggers the strict
+// fail-fast path: no GitHub push, banner names the violating refs, metric
+// emits with rejected_ref_violation outcome. (AC-I7)
+func TestCreateAndPostIssue_S1_RefViolations_FailsAndDoesNotPush(t *testing.T) {
+	w, slack, ic := newTestIssueWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", Repo: "foo/bar", ChannelID: "C1", ThreadTS: "1.0",
+	}
+	state := &queue.JobState{Job: job}
+	r := &queue.JobResult{
+		JobID:         "j1",
+		Status:        "completed",
+		RawOutput:     "===TRIAGE_RESULT===\n{\"status\":\"CREATED\",\"title\":\"x\",\"body\":\"## Description\\n\\nfoo\"}",
+		RefViolations: []string{"frontend/web"},
+	}
+	parsed := TriageResult{Status: "CREATED", Title: "x", Body: "## Description\n\nfoo"}
+
+	if err := w.createAndPostIssue(context.Background(), state, r, parsed); err != nil {
+		t.Fatalf("createAndPostIssue: %v", err)
+	}
+
+	if ic.LastTitle != "" {
+		t.Errorf("CreateIssue should NOT have been called on s1 fail; got title=%q", ic.LastTitle)
+	}
+	if got := slack.LastPosted(); got == "" || !strings.Contains(got, "frontend/web") {
+		t.Errorf("Slack banner should mention violating ref; got %q", got)
+	}
+	if got := slack.LastPosted(); !strings.Contains(got, "違規寫入") {
+		t.Errorf("Slack banner should explain the failure; got %q", got)
+	}
+}
+
+// TestCreateAndPostIssue_S2_CriticalSentinel_FailsAndDoesNotPush asserts
+// that an agent body containing the HTML-comment sentinel triggers the
+// critical-unavailable fail-fast path: no GitHub push, banner names the
+// unavailable refs from PromptContext (not from the sentinel — it's bare).
+// (AC-I12)
+func TestCreateAndPostIssue_S2_CriticalSentinel_FailsAndDoesNotPush(t *testing.T) {
+	w, slack, ic := newTestIssueWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", Repo: "foo/bar", ChannelID: "C1", ThreadTS: "1.0",
+		PromptContext: &queue.PromptContext{
+			UnavailableRefs: []string{"broken/repo"},
+		},
+	}
+	state := &queue.JobState{Job: job}
+	body := "<!-- AGENTDOCK:CRITICAL_REF_UNAVAILABLE -->\n\n## 無法回答\n\nbackend ref unreachable."
+	r := &queue.JobResult{JobID: "j1", Status: "completed", RawOutput: "x"}
+	parsed := TriageResult{Status: "CREATED", Title: "x", Body: body}
+
+	if err := w.createAndPostIssue(context.Background(), state, r, parsed); err != nil {
+		t.Fatalf("createAndPostIssue: %v", err)
+	}
+
+	if ic.LastTitle != "" {
+		t.Errorf("CreateIssue should NOT have been called on sentinel; got title=%q", ic.LastTitle)
+	}
+	if got := slack.LastPosted(); !strings.Contains(got, "broken/repo") {
+		t.Errorf("Slack banner should list UnavailableRefs; got %q", got)
+	}
+	if got := slack.LastPosted(); !strings.Contains(got, "關鍵脈絡") {
+		t.Errorf("Slack banner should explain critical-unavailable failure; got %q", got)
+	}
+}
+
+// TestCreateAndPostIssue_S3_AgentWroteRelatedRepos_NotPrepended asserts that
+// when the agent already wrote a `## Related repos` section, the worker
+// does NOT prepend a duplicate. (AC-I4)
+func TestCreateAndPostIssue_S3_AgentWroteRelatedRepos_NotPrepended(t *testing.T) {
+	w, _, ic := newTestIssueWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", Repo: "foo/bar", Branch: "main", ChannelID: "C1", ThreadTS: "1.0",
+		RefRepos: []queue.RefRepo{
+			{Repo: "frontend/web", Branch: "main"},
+		},
+	}
+	state := &queue.JobState{Job: job}
+	body := "## Related repos\n\n- `frontend/web@main` — root cause suspect\n\n## Description\n\nfoo"
+	r := &queue.JobResult{JobID: "j1", Status: "completed"}
+	parsed := TriageResult{Status: "CREATED", Title: "x", Body: body}
+
+	if err := w.createAndPostIssue(context.Background(), state, r, parsed); err != nil {
+		t.Fatalf("createAndPostIssue: %v", err)
+	}
+
+	if ic.LastBody == "" {
+		t.Fatal("CreateIssue should have been called with body")
+	}
+	// Worker must not have prepended a second `## Related repos` heading.
+	headingCount := strings.Count(strings.ToLower(ic.LastBody), "## related repos")
+	if headingCount != 1 {
+		t.Errorf("expected exactly 1 `## Related repos` heading, got %d in body:\n%s", headingCount, ic.LastBody)
+	}
+	// Agent's role description must survive (no truncation/replacement).
+	if !strings.Contains(ic.LastBody, "root cause suspect") {
+		t.Errorf("agent's role description lost; body=%q", ic.LastBody)
+	}
+}
+
+// TestCreateAndPostIssue_S3_AgentMissed_PrependsMinimal asserts that when
+// the agent forgot to include `## Related repos`, the worker prepends a
+// minimal version derived from Job.RefRepos using the `reference context`
+// placeholder. (AC-I5)
+func TestCreateAndPostIssue_S3_AgentMissed_PrependsMinimal(t *testing.T) {
+	w, _, ic := newTestIssueWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", Repo: "foo/bar", Branch: "main", ChannelID: "C1", ThreadTS: "1.0",
+		RefRepos: []queue.RefRepo{
+			{Repo: "frontend/web", Branch: "main"},
+			{Repo: "backend/api"},
+		},
+	}
+	state := &queue.JobState{Job: job}
+	body := "## Description\n\nfoo bar"
+	r := &queue.JobResult{JobID: "j1", Status: "completed"}
+	parsed := TriageResult{Status: "CREATED", Title: "x", Body: body}
+
+	if err := w.createAndPostIssue(context.Background(), state, r, parsed); err != nil {
+		t.Fatalf("createAndPostIssue: %v", err)
+	}
+	if ic.LastBody == "" {
+		t.Fatal("CreateIssue should have been called with body")
+	}
+	// Body should now start with `## Related repos`.
+	if !strings.HasPrefix(ic.LastBody, "## Related repos\n\n") {
+		t.Errorf("body should start with ## Related repos; got prefix:\n%s", ic.LastBody[:min(120, len(ic.LastBody))])
+	}
+	// Primary entry uses the Chinese parenthetical role.
+	if !strings.Contains(ic.LastBody, "`foo/bar@main` — primary（issue 開立目標）") {
+		t.Errorf("primary entry missing or wrong format; body=%q", ic.LastBody)
+	}
+	// Refs use the placeholder `reference context`.
+	if !strings.Contains(ic.LastBody, "`frontend/web@main` — reference context") {
+		t.Errorf("ref1 entry missing/wrong format; body=%q", ic.LastBody)
+	}
+	// Ref without branch should omit the @branch suffix.
+	if !strings.Contains(ic.LastBody, "`backend/api` — reference context") {
+		t.Errorf("ref2 (no branch) entry missing/wrong format; body=%q", ic.LastBody)
+	}
+	// Original body content survives after the prepended section.
+	if !strings.Contains(ic.LastBody, "foo bar") {
+		t.Errorf("original body content lost; got %q", ic.LastBody)
+	}
+}
+
+// TestCreateAndPostIssue_S3_NoRefs_NoOp asserts that the body normalization
+// pipeline is a no-op when no refs are attached — pushed body equals the
+// agent body byte-for-byte (modulo Redact passthrough). (AC-I6)
+func TestCreateAndPostIssue_S3_NoRefs_NoOp(t *testing.T) {
+	w, _, ic := newTestIssueWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", Repo: "foo/bar", Branch: "main", ChannelID: "C1", ThreadTS: "1.0",
+	}
+	state := &queue.JobState{Job: job}
+	body := "## Description\n\nfoo bar"
+	r := &queue.JobResult{JobID: "j1", Status: "completed"}
+	parsed := TriageResult{Status: "CREATED", Title: "x", Body: body}
+
+	if err := w.createAndPostIssue(context.Background(), state, r, parsed); err != nil {
+		t.Fatalf("createAndPostIssue: %v", err)
+	}
+	if ic.LastBody != body {
+		t.Errorf("body should be unchanged when no refs; got %q want %q", ic.LastBody, body)
+	}
+	if strings.Contains(ic.LastBody, "## Related repos") {
+		t.Errorf("body should NOT contain ## Related repos when no refs; got %q", ic.LastBody)
+	}
+}
+
+// TestHasRelatedReposSection_RegexVariants table-tests the loose regex used
+// for auto-fill detection. Hits should cover normal LLM output variation
+// (singular/plural, case, H1-H4); misses should cover non-heading mentions
+// (bold inline, Chinese, plain text). (AC-I10 + grill Q3)
+func TestHasRelatedReposSection_RegexVariants(t *testing.T) {
+	hits := []string{
+		"## Related repos\n\n- foo",
+		"## Related Repos\n",
+		"## Related Repositories\n",
+		"### Related Repo\n",
+		"# RELATED REPOS\n",
+		"## related repo\n",
+		"#### Related repos\n",
+	}
+	misses := []string{
+		"## 相關 repos\n",
+		"**Related repos:**\n",
+		"This issue is related to backend repos.\n",
+		"## Description\n\n關於 related repos 的事...\n",
+		"",
+	}
+	for _, in := range hits {
+		if !hasRelatedReposSection(in) {
+			t.Errorf("expected hit, got miss for: %q", in)
+		}
+	}
+	for _, in := range misses {
+		if hasRelatedReposSection(in) {
+			t.Errorf("expected miss, got hit for: %q", in)
+		}
+	}
+}
+
+// TestCreateAndPostIssue_PipelineOrder_S1BeforeS2 asserts that when both
+// strict guard and critical sentinel signals are present, s1 (RefViolations)
+// fires first — outcome metric is rejected_ref_violation, not
+// rejected_critical_ref. Order matters because each step is a return path.
+func TestCreateAndPostIssue_PipelineOrder_S1BeforeS2(t *testing.T) {
+	w, slack, ic := newTestIssueWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", Repo: "foo/bar", ChannelID: "C1", ThreadTS: "1.0",
+		PromptContext: &queue.PromptContext{
+			UnavailableRefs: []string{"broken/repo"},
+		},
+	}
+	state := &queue.JobState{Job: job}
+	body := "<!-- AGENTDOCK:CRITICAL_REF_UNAVAILABLE -->\n\n## Body\n\n..."
+	r := &queue.JobResult{
+		JobID:         "j1",
+		Status:        "completed",
+		RefViolations: []string{"frontend/web"}, // s1 signal
+	}
+	parsed := TriageResult{Status: "CREATED", Title: "x", Body: body}
+
+	if err := w.createAndPostIssue(context.Background(), state, r, parsed); err != nil {
+		t.Fatalf("createAndPostIssue: %v", err)
+	}
+	if ic.LastTitle != "" {
+		t.Errorf("CreateIssue should NOT have been called; got title=%q", ic.LastTitle)
+	}
+	// s1 banner mentions frontend/web (the violating ref); s2 banner would
+	// mention broken/repo. Confirm s1 won.
+	got := slack.LastPosted()
+	if !strings.Contains(got, "frontend/web") {
+		t.Errorf("expected s1 banner (frontend/web), got %q", got)
+	}
+	if strings.Contains(got, "broken/repo") {
+		t.Errorf("s2 fired before s1 — banner contains broken/repo: %q", got)
+	}
+}
+
+// min is a tiny helper for slicing logic in error messages.
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

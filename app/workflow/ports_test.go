@@ -24,6 +24,15 @@ type fakeSlackPort struct {
 
 func newFakeSlackPort() *fakeSlackPort { return &fakeSlackPort{} }
 
+// LastPosted returns the most recent text written to Posted, or "" if none.
+// Convenience for tests that only care about the final banner.
+func (f *fakeSlackPort) LastPosted() string {
+	if len(f.Posted) == 0 {
+		return ""
+	}
+	return f.Posted[len(f.Posted)-1]
+}
+
 func (f *fakeSlackPort) PostMessage(ch, text, ts string) error {
 	f.Posted = append(f.Posted, text)
 	return nil
