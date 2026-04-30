@@ -584,12 +584,15 @@ echo '`+streamResultLine+`'
 func TestRunner_InactivityTimeout_FiresOnIdleStream(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "idle-stream")
-	// One event then a long silence well past the timeout. Final event is
-	// never reached because the timer fires SIGTERM first.
+	// One event then a long silence well past the timeout. `exec sleep`
+	// replaces sh with sleep at the same PID so the inactivity timer's
+	// SIGTERM reaches the actual sleep process. Without exec, orphaned
+	// sleep keeps stdout/stderr pipes open and blocks cmd.Wait on Linux
+	// until natural completion — same trap PR1 fixed in version_test.go
+	// (commit 8acb83c).
 	os.WriteFile(script, []byte(`#!/bin/sh
 echo '`+streamEventLine+`'
-sleep 3
-echo '`+streamResultLine+`'
+exec sleep 3
 `), 0755)
 
 	runner := NewRunner([]config.AgentConfig{{
