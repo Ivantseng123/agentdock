@@ -47,8 +47,14 @@ type StatusReport struct {
 	PID            int       `json:"pid"`
 	AgentCmd     string    `json:"agent_cmd"`
 	Alive        bool      `json:"alive"`
-	LastEvent    string    `json:"last_event,omitempty"`
-	LastEventAt  time.Time `json:"last_event_at"`
+	LastEvent   string    `json:"last_event,omitempty"`
+	// LastTool / LastToolArg surface the most recent tool_use event from
+	// streaming agents so Slack renderers can show "正在 Read · src/foo.go"
+	// instead of an aggregate counter. Empty for non-streaming agents — the
+	// renderer falls back to ToolCalls/FilesRead in that case.
+	LastTool    string    `json:"last_tool,omitempty"`
+	LastToolArg string    `json:"last_tool_arg,omitempty"`
+	LastEventAt time.Time `json:"last_event_at"`
 	ToolCalls    int       `json:"tool_calls"`
 	FilesRead    int       `json:"files_read"`
 	OutputBytes  int       `json:"output_bytes"`

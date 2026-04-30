@@ -482,3 +482,81 @@ func TestFormatWorkerLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderStatusMessage_RunningWithLastTool(t *testing.T) {
+	state := &queue.JobState{Status: queue.JobRunning, StartedAt: time.Now()}
+	r := queue.StatusReport{
+		WorkerID:    "host/worker-0",
+		PID:         1234,
+		AgentCmd:    "claude",
+		ToolCalls:   3, // counter present but should be ignored when LastTool set
+		FilesRead:   2,
+		LastTool:    "Read",
+		LastToolArg: "src/foo/bar.go",
+	}
+	got := renderStatusMessage(state, r, "running")
+	if !contains(got, ":wrench: 正在 Read · src/foo/bar.go") {
+		t.Errorf("missing tool-name activity line: %q", got)
+	}
+	if contains(got, "已經敲了") {
+		t.Errorf("counter line should NOT appear when LastTool is set: %q", got)
+	}
+}
+
+func TestRenderStatusMessage_RunningLastToolNoArg(t *testing.T) {
+	state := &queue.JobState{Status: queue.JobRunning, StartedAt: time.Now()}
+	r := queue.StatusReport{
+		WorkerID: "host/worker-0",
+		PID:      1234,
+		AgentCmd: "claude",
+		LastTool: "TodoWrite",
+		// LastToolArg empty — tool with no recognised input key.
+	}
+	got := renderStatusMessage(state, r, "running")
+	if !contains(got, ":wrench: 正在 TodoWrite") {
+		t.Errorf("missing bare tool-name line: %q", got)
+	}
+	// The separator should only show up when there is an arg to follow it.
+	if contains(got, ":wrench: 正在 TodoWrite · ") {
+		t.Errorf("separator should be omitted when LastToolArg is empty: %q", got)
+	}
+}
+
+func TestRenderStatusMessage_RunningLastToolEscaped(t *testing.T) {
+	state := &queue.JobState{Status: queue.JobRunning, StartedAt: time.Now()}
+	r := queue.StatusReport{
+		WorkerID:    "host/worker-0",
+		PID:         1234,
+		AgentCmd:    "claude",
+		LastTool:    "Read",
+		LastToolArg: "<scary>file.go", // includes chars Slack mrkdwn interprets
+	}
+	got := renderStatusMessage(state, r, "running")
+	if !contains(got, "&lt;scary&gt;file.go") {
+		t.Errorf("LastToolArg should be Slack-escaped: %q", got)
+	}
+	if contains(got, "<scary>") {
+		t.Errorf("raw <> leaked into Slack output: %q", got)
+	}
+}
+
+func TestRenderStatusMessage_RunningLastToolEmptyFallsBackToCounter(t *testing.T) {
+	// LastTool empty but ToolCalls/FilesRead non-zero (typical non-stream
+	// agent path) — renderer must keep the counter line.
+	state := &queue.JobState{Status: queue.JobRunning, StartedAt: time.Now()}
+	r := queue.StatusReport{
+		WorkerID:  "host/worker-0",
+		PID:       1234,
+		AgentCmd:  "codex",
+		ToolCalls: 7,
+		FilesRead: 3,
+		// LastTool empty
+	}
+	got := renderStatusMessage(state, r, "running")
+	if !contains(got, "已經敲了 7 次工具、翻了 3 份檔") {
+		t.Errorf("counter fallback missing: %q", got)
+	}
+	if contains(got, ":wrench:") {
+		t.Errorf("tool-name line should NOT appear when LastTool is empty: %q", got)
+	}
+}

@@ -8,18 +8,20 @@ import (
 )
 
 type statusAccumulator struct {
-	mu           sync.Mutex
-	jobID        string
-	workerID     string
-	nickname     string
-	pid          int
-	agentCmd     string
-	alive        bool
-	lastEvent    string
-	lastEventAt  time.Time
-	toolCalls    int
-	filesRead    int
-	outputBytes  int
+	mu             sync.Mutex
+	jobID          string
+	workerID       string
+	nickname       string
+	pid            int
+	agentCmd       string
+	alive          bool
+	lastEvent      string
+	lastTool       string
+	lastToolArg    string
+	lastEventAt    time.Time
+	toolCalls      int
+	filesRead      int
+	outputBytes    int
 	costUSD        float64
 	inputTokens    int
 	outputTokens   int
@@ -42,6 +44,8 @@ func (s *statusAccumulator) recordEvent(event queue.StreamEvent) {
 	case "tool_use":
 		s.toolCalls++
 		s.lastEvent = "tool_use:" + event.ToolName
+		s.lastTool = event.ToolName
+		s.lastToolArg = event.ToolInputFirstArg
 		if event.ToolName == "Read" {
 			s.filesRead++
 		}
@@ -73,6 +77,8 @@ func (s *statusAccumulator) toReport() queue.StatusReport {
 		AgentCmd:       s.agentCmd,
 		Alive:          s.alive,
 		LastEvent:      s.lastEvent,
+		LastTool:       s.lastTool,
+		LastToolArg:    s.lastToolArg,
 		LastEventAt:    s.lastEventAt,
 		ToolCalls:      s.toolCalls,
 		FilesRead:      s.filesRead,

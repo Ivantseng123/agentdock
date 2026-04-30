@@ -8,12 +8,13 @@ import (
 )
 
 type StreamEvent struct {
-	Type         string
-	ToolName     string
-	TextBytes    int
-	CostUSD      float64
-	InputTokens  int
-	OutputTokens int
+	Type              string
+	ToolName          string
+	ToolInputFirstArg string // truncated to toolInputArgMaxLen runes; empty when no recognized key
+	TextBytes         int
+	CostUSD           float64
+	InputTokens       int
+	OutputTokens      int
 }
 
 // ReadStreamJSON reads NDJSON from claude --output-format stream-json.
@@ -50,8 +51,13 @@ func ReadStreamJSON(r io.Reader, eventCh chan<- StreamEvent) string {
 				switch blockType {
 				case "tool_use":
 					name, _ := block["name"].(string)
+					input, _ := block["input"].(map[string]any)
 					select {
-					case eventCh <- StreamEvent{Type: "tool_use", ToolName: name}:
+					case eventCh <- StreamEvent{
+						Type:              "tool_use",
+						ToolName:          name,
+						ToolInputFirstArg: extractFirstArg(input),
+					}:
 					default:
 					}
 				case "text":
@@ -104,4 +110,36 @@ func ReadRawOutput(r io.Reader) string {
 		buf.WriteByte('\n')
 	}
 	return buf.String()
+}
+
+// toolInputArgMaxLen caps how much of a tool_use input field surfaces into
+// StreamEvent. Slack rendering may truncate further; this is the upstream cap.
+const toolInputArgMaxLen = 100
+
+// extractFirstArg returns a human-readable string from a claude tool_use
+// input object, truncated to toolInputArgMaxLen runes. Tries common keys in
+// priority order: file_path (Read/Write/Edit), command (Bash), pattern
+// (Grep), path (LS/Glob), url (WebFetch). Returns empty when no key matches
+// — Slack render then falls back to the counter line.
+func extractFirstArg(input map[string]any) string {
+	if input == nil {
+		return ""
+	}
+	keys := []string{"file_path", "command", "pattern", "path", "url"}
+	for _, k := range keys {
+		if v, ok := input[k].(string); ok && v != "" {
+			return truncateRunes(v, toolInputArgMaxLen)
+		}
+	}
+	return ""
+}
+
+// truncateRunes caps s to max runes, appending "…" when truncation occurs.
+// Rune-based to avoid splitting multi-byte UTF-8 characters mid-byte.
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max-1]) + "…"
 }

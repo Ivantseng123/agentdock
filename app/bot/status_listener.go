@@ -229,7 +229,16 @@ func renderStatusMessage(state *queue.JobState, r queue.StatusReport, phase stri
 			suffix = fmt.Sprintf(" · 奮鬥 %s", formatElapsed(time.Since(state.StartedAt)))
 		}
 		base := fmt.Sprintf(":fire: %s 開工啦！(%s)%s", label, agent, suffix)
-		if r.ToolCalls > 0 || r.FilesRead > 0 {
+		if r.LastTool != "" {
+			// Stream-aware activity line: tool name + first arg when present.
+			// Counter-only fallback below kicks in for non-stream agents that
+			// never produce LastTool.
+			activity := slackEscape(r.LastTool)
+			if r.LastToolArg != "" {
+				activity += " · " + slackEscape(r.LastToolArg)
+			}
+			base += "\n:wrench: 正在 " + activity
+		} else if r.ToolCalls > 0 || r.FilesRead > 0 {
 			base += fmt.Sprintf("\n%s 已經敲了 %d 次工具、翻了 %d 份檔",
 				label, r.ToolCalls, r.FilesRead)
 		}
