@@ -569,7 +569,7 @@ echo '`+streamResultLine+`'
 
 	runner := NewRunner([]config.AgentConfig{{
 		Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
-		Stream: true,
+		StreamFormat: config.StreamFormatClaude,
 		// InactivityTimeout: 0 — explicitly disabled.
 	}})
 	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
@@ -597,7 +597,7 @@ exec sleep 3
 
 	runner := NewRunner([]config.AgentConfig{{
 		Command: script, Args: []string{"{prompt}"}, Timeout: 10 * time.Second,
-		Stream:            true,
+		StreamFormat:      config.StreamFormatClaude,
 		InactivityTimeout: 300 * time.Millisecond,
 	}})
 	start := time.Now()
@@ -633,7 +633,7 @@ echo '`+streamResultLine+`'
 
 	runner := NewRunner([]config.AgentConfig{{
 		Command: script, Args: []string{"{prompt}"}, Timeout: 10 * time.Second,
-		Stream:            true,
+		StreamFormat:      config.StreamFormatClaude,
 		InactivityTimeout: 500 * time.Millisecond,
 	}})
 	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
@@ -657,7 +657,7 @@ echo "non-stream output with enough characters padding padding padding padding"
 
 	runner := NewRunner([]config.AgentConfig{{
 		Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
-		// Stream defaults to false
+		// StreamFormat defaults to "" (non-streaming)
 		InactivityTimeout: 100 * time.Millisecond, // would fire if applied
 	}})
 	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})

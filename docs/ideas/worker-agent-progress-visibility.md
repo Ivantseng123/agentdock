@@ -103,9 +103,19 @@ PRs are split for independent user verification, per
 - **`thinking` content in Slack** — 200-char truncation in a 15s
   debounce window converts useful thought into noise.
 - **`tool_result` in Slack** — same.
-- **opencode `--format json` parsing** — `--pure` interaction is
+- ~~**opencode `--format json` parsing** — `--pure` interaction is
   unverified, and the V3 fallback (`LastTool == ""`) means opencode
-  visibility is a no-op rather than a regression.
+  visibility is a no-op rather than a regression.~~ Reopened and shipped
+  in PR4 once `--pure --format json` was empirically verified to emit
+  per-tool NDJSON events. The earlier "cascade collapse" concern in
+  `worker/agent/runner.go` turned out to be a stdin-not-closed artifact
+  on interactive shells; the worker's `exec.Command` defaults already
+  close child stdin, so no permission relaxation
+  (`OPENCODE_PERMISSION={"*":"allow"}` etc.) was needed. PR4 added a
+  flat-shape parser (`shared/queue/stream.go ReadStreamJSONOpencode`),
+  generalized the `Stream bool` toggle to a `StreamFormat string`
+  selector, and extended `extractFirstArg` with the camelCase `filePath`
+  key opencode uses for Read/Edit/Write.
 - **codex `app-server` rewrite** — separate 1000+ LOC effort; tracked
   separately if codex stream support ever becomes load-bearing.
 - **`JobResult.CostUSD/InputTokens/OutputTokens` propagation** — the

@@ -182,7 +182,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	// no events and would be killed prematurely. Disabled when timeout <= 0.
 	var inactivityKilled atomic.Bool
 	eventCallback := opts.OnEvent
-	if agent.InactivityTimeout > 0 && agent.Stream {
+	if agent.InactivityTimeout > 0 && agent.StreamFormat != "" {
 		inactivityTimer := time.AfterFunc(agent.InactivityTimeout, func() {
 			inactivityKilled.Store(true)
 			logger.Warn("Inactivity timeout 觸發，發送 SIGTERM",
@@ -206,7 +206,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		output = readOutput(ctx, stdoutPipe, agent.Stream, eventCallback)
+		output = readOutput(ctx, stdoutPipe, agent.StreamFormat, eventCallback)
 	}()
 	wg.Wait()
 
@@ -241,9 +241,14 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	return trimmed, nil
 }
 
-// readOutput routes stdout through the appropriate reader based on stream config.
-func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queue.StreamEvent)) string {
-	if !stream {
+// readOutput routes stdout through the appropriate reader based on the
+// stream format. Empty format is the non-streaming path; recognized formats
+// dispatch to per-CLI parsers in shared/queue. Unknown values fall back to
+// raw stdout — same observable output as a non-streaming agent, only the
+// live event channel is silent. Validate at config-load time to surface
+// typos before they reach here.
+func readOutput(ctx context.Context, r io.Reader, format string, onEvent func(queue.StreamEvent)) string {
+	if format == "" {
 		return queue.ReadRawOutput(r)
 	}
 
@@ -273,7 +278,17 @@ func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queu
 		}
 	}()
 
-	result = queue.ReadStreamJSON(r, eventCh)
+	switch format {
+	case config.StreamFormatClaude:
+		result = queue.ReadStreamJSONClaude(r, eventCh)
+	case config.StreamFormatOpencode:
+		result = queue.ReadStreamJSONOpencode(r, eventCh)
+	default:
+		// Unknown format — drain stdout into the raw reader so the agent's
+		// final answer still surfaces. eventCh stays empty; the forwarder
+		// goroutine exits on close.
+		result = queue.ReadRawOutput(r)
+	}
 	close(eventCh)
 	wg.Wait()
 	return result

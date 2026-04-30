@@ -28,6 +28,15 @@ type Config struct {
 // count — the token must stand alone as its own arg slot.
 const ExtraArgsToken = "{extra_args}"
 
+// Stream parser identifiers wired to AgentConfig.StreamFormat. Empty means
+// "no streaming" (raw stdout). Adding a new format means: new constant
+// here, new parser branch in worker/agent/runner.go's readOutput, new
+// parser function in shared/queue/stream.go.
+const (
+	StreamFormatClaude   = "claude_stream_json" // claude --print --output-format stream-json
+	StreamFormatOpencode = "opencode_run_json"  // opencode run --format json
+)
+
 // AgentConfig is the worker's agent CLI description.
 //
 // ExtraArgs is a user-supplied flag list that's spliced into Args in place of
@@ -41,14 +50,19 @@ type AgentConfig struct {
 	Args      []string      `yaml:"args"`
 	ExtraArgs []string      `yaml:"extra_args"`
 	Timeout   time.Duration `yaml:"timeout"`
-	// InactivityTimeout: if > 0 and Stream is true, send SIGTERM when no
-	// stream event arrives within this duration. Default zero (disabled).
-	// Only meaningful for streaming agents — non-stream CLIs emit no events
-	// and would be killed prematurely if applied. Should be shorter than
-	// Timeout but long enough for a thinking-heavy turn (e.g. 2m).
+	// InactivityTimeout: if > 0 and StreamFormat is non-empty, send SIGTERM
+	// when no stream event arrives within this duration. Default zero
+	// (disabled). Only meaningful for streaming agents — non-stream CLIs
+	// emit no events and would be killed prematurely if applied. Should be
+	// shorter than Timeout but long enough for a thinking-heavy turn (e.g. 2m).
 	InactivityTimeout time.Duration `yaml:"inactivity_timeout"`
 	SkillDir          string        `yaml:"skill_dir"`
-	Stream            bool          `yaml:"stream"`
+	// StreamFormat picks the parser for stdout. Empty means non-streaming
+	// (raw stdout capture). Recognized values are the StreamFormat*
+	// constants above. Unknown values fall back to raw stdout at runtime,
+	// silently losing the live event stream — set this only to a known
+	// constant.
+	StreamFormat string `yaml:"stream_format"`
 }
 
 // PromptConfig is the worker-owned prompt extension (the extra_rules segment

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestReadStreamJSON_ResultEvent(t *testing.T) {
+func TestReadStreamJSONClaude_ResultEvent(t *testing.T) {
 	input := `{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at code..."}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/src/main.go"}}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"Found the issue..."}]}}
@@ -13,7 +13,7 @@ func TestReadStreamJSON_ResultEvent(t *testing.T) {
 
 	r := strings.NewReader(input)
 	eventCh := make(chan StreamEvent, 100)
-	text := ReadStreamJSON(r, eventCh)
+	text := ReadStreamJSONClaude(r, eventCh)
 	close(eventCh)
 
 	if text != "Final answer text here" {
@@ -52,13 +52,13 @@ func TestReadStreamJSON_ResultEvent(t *testing.T) {
 	}
 }
 
-func TestReadStreamJSON_FallbackToReassembly(t *testing.T) {
+func TestReadStreamJSONClaude_FallbackToReassembly(t *testing.T) {
 	input := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello "}]}}
 {"type":"assistant","message":{"content":[{"type":"text","text":"World"}]}}`
 
 	r := strings.NewReader(input)
 	eventCh := make(chan StreamEvent, 100)
-	text := ReadStreamJSON(r, eventCh)
+	text := ReadStreamJSONClaude(r, eventCh)
 	close(eventCh)
 
 	if text != "Hello World" {
@@ -75,7 +75,7 @@ func TestReadRawOutput(t *testing.T) {
 	}
 }
 
-func TestReadStreamJSON_ToolInputFirstArg(t *testing.T) {
+func TestReadStreamJSONClaude_ToolInputFirstArg(t *testing.T) {
 	// Verify the tool_use event surfaces input.file_path through the parser
 	// into StreamEvent.ToolInputFirstArg. Other key recognition is unit-tested
 	// in TestExtractFirstArg_*; this end-to-end path is the integration check.
@@ -83,7 +83,7 @@ func TestReadStreamJSON_ToolInputFirstArg(t *testing.T) {
 
 	r := strings.NewReader(input)
 	eventCh := make(chan StreamEvent, 10)
-	ReadStreamJSON(r, eventCh)
+	ReadStreamJSONClaude(r, eventCh)
 	close(eventCh)
 
 	var got StreamEvent
@@ -98,6 +98,151 @@ func TestReadStreamJSON_ToolInputFirstArg(t *testing.T) {
 	}
 	if got.ToolInputFirstArg != "src/foo/bar.go" {
 		t.Errorf("ToolInputFirstArg = %q, want src/foo/bar.go", got.ToolInputFirstArg)
+	}
+}
+
+// TestReadStreamJSONOpencode_ReadTool fixture is a minimized capture from
+// `opencode 1.14.29 run --pure --format json` reading a small file. Confirms
+// the opencode parser surfaces tool_use events with title-cased tool name and
+// the camelCase filePath argument.
+func TestReadStreamJSONOpencode_ReadTool(t *testing.T) {
+	input := `{"type":"step_start","sessionID":"ses_x","part":{"type":"step-start"}}
+{"type":"tool_use","sessionID":"ses_x","part":{"type":"tool","tool":"read","callID":"call_a","state":{"status":"completed","input":{"filePath":"/tmp/test.txt"}}}}
+{"type":"text","sessionID":"ses_x","part":{"type":"text","text":"The magic number is 42."}}
+{"type":"step_finish","sessionID":"ses_x","part":{"type":"step-finish","tokens":{"input":18000,"output":120},"cost":0.0123}}`
+
+	r := strings.NewReader(input)
+	eventCh := make(chan StreamEvent, 100)
+	text := ReadStreamJSONOpencode(r, eventCh)
+	close(eventCh)
+
+	if text != "The magic number is 42." {
+		t.Errorf("text = %q, want 'The magic number is 42.'", text)
+	}
+
+	var events []StreamEvent
+	for e := range eventCh {
+		events = append(events, e)
+	}
+
+	var toolUse, result StreamEvent
+	for _, e := range events {
+		switch e.Type {
+		case "tool_use":
+			toolUse = e
+		case "result":
+			result = e
+		}
+	}
+	if toolUse.ToolName != "Read" {
+		t.Errorf("ToolName = %q, want Read (title-cased)", toolUse.ToolName)
+	}
+	if toolUse.ToolInputFirstArg != "/tmp/test.txt" {
+		t.Errorf("ToolInputFirstArg = %q, want /tmp/test.txt", toolUse.ToolInputFirstArg)
+	}
+	if result.CostUSD != 0.0123 {
+		t.Errorf("cost = %f, want 0.0123", result.CostUSD)
+	}
+	if result.InputTokens != 18000 {
+		t.Errorf("input_tokens = %d, want 18000", result.InputTokens)
+	}
+	if result.OutputTokens != 120 {
+		t.Errorf("output_tokens = %d, want 120", result.OutputTokens)
+	}
+}
+
+// TestReadStreamJSONOpencode_BashTool confirms `bash` tool's `command` input
+// key is recognized by extractFirstArg (shared with claude convention).
+func TestReadStreamJSONOpencode_BashTool(t *testing.T) {
+	input := `{"type":"tool_use","sessionID":"ses_x","part":{"type":"tool","tool":"bash","callID":"call_b","state":{"status":"completed","input":{"command":"echo hello-bash","description":"Print hello"}}}}`
+
+	r := strings.NewReader(input)
+	eventCh := make(chan StreamEvent, 10)
+	ReadStreamJSONOpencode(r, eventCh)
+	close(eventCh)
+
+	var got StreamEvent
+	for e := range eventCh {
+		if e.Type == "tool_use" {
+			got = e
+			break
+		}
+	}
+	if got.ToolName != "Bash" {
+		t.Errorf("ToolName = %q, want Bash", got.ToolName)
+	}
+	if got.ToolInputFirstArg != "echo hello-bash" {
+		t.Errorf("ToolInputFirstArg = %q, want 'echo hello-bash'", got.ToolInputFirstArg)
+	}
+}
+
+// TestReadStreamJSONOpencode_GrepTool confirms `grep` tool's `pattern` key
+// (shared with claude convention).
+func TestReadStreamJSONOpencode_GrepTool(t *testing.T) {
+	input := `{"type":"tool_use","sessionID":"ses_x","part":{"type":"tool","tool":"grep","callID":"call_c","state":{"status":"completed","input":{"pattern":"TODO"}}}}`
+
+	r := strings.NewReader(input)
+	eventCh := make(chan StreamEvent, 10)
+	ReadStreamJSONOpencode(r, eventCh)
+	close(eventCh)
+
+	var got StreamEvent
+	for e := range eventCh {
+		if e.Type == "tool_use" {
+			got = e
+			break
+		}
+	}
+	if got.ToolName != "Grep" {
+		t.Errorf("ToolName = %q, want Grep", got.ToolName)
+	}
+	if got.ToolInputFirstArg != "TODO" {
+		t.Errorf("ToolInputFirstArg = %q, want TODO", got.ToolInputFirstArg)
+	}
+}
+
+// TestReadStreamJSONOpencode_TokenAccumulation confirms tokens summed across
+// multiple step_finish events (opencode emits one per step, not one terminal
+// total like claude).
+func TestReadStreamJSONOpencode_TokenAccumulation(t *testing.T) {
+	input := `{"type":"step_finish","part":{"tokens":{"input":1000,"output":50},"cost":0.01}}
+{"type":"step_finish","part":{"tokens":{"input":200,"output":30},"cost":0.005}}`
+
+	r := strings.NewReader(input)
+	eventCh := make(chan StreamEvent, 10)
+	ReadStreamJSONOpencode(r, eventCh)
+	close(eventCh)
+
+	var result StreamEvent
+	for e := range eventCh {
+		if e.Type == "result" {
+			result = e
+		}
+	}
+	if result.InputTokens != 1200 {
+		t.Errorf("input_tokens = %d, want 1200 (1000+200)", result.InputTokens)
+	}
+	if result.OutputTokens != 80 {
+		t.Errorf("output_tokens = %d, want 80 (50+30)", result.OutputTokens)
+	}
+	if result.CostUSD != 0.015 {
+		t.Errorf("cost = %f, want 0.015 (0.01+0.005)", result.CostUSD)
+	}
+}
+
+// TestReadStreamJSONOpencode_TextReassembly confirms output text is built
+// from `text` events (opencode has no terminal result.result field).
+func TestReadStreamJSONOpencode_TextReassembly(t *testing.T) {
+	input := `{"type":"text","part":{"type":"text","text":"Hello "}}
+{"type":"text","part":{"type":"text","text":"World"}}`
+
+	r := strings.NewReader(input)
+	eventCh := make(chan StreamEvent, 10)
+	text := ReadStreamJSONOpencode(r, eventCh)
+	close(eventCh)
+
+	if text != "Hello World" {
+		t.Errorf("text = %q, want 'Hello World'", text)
 	}
 }
 
@@ -116,7 +261,8 @@ func TestExtractFirstArg_RecognizedKeys(t *testing.T) {
 		in   map[string]any
 		want string
 	}{
-		{"file_path (Read)", map[string]any{"file_path": "src/foo.go"}, "src/foo.go"},
+		{"file_path (claude Read)", map[string]any{"file_path": "src/foo.go"}, "src/foo.go"},
+		{"filePath (opencode read)", map[string]any{"filePath": "src/foo.go"}, "src/foo.go"},
 		{"command (Bash)", map[string]any{"command": "git status"}, "git status"},
 		{"pattern (Grep)", map[string]any{"pattern": "TODO"}, "TODO"},
 		{"path (LS)", map[string]any{"path": "/tmp"}, "/tmp"},
@@ -132,7 +278,7 @@ func TestExtractFirstArg_RecognizedKeys(t *testing.T) {
 }
 
 func TestExtractFirstArg_PriorityOrder(t *testing.T) {
-	// file_path takes priority over command and others. Real claude tool_use
+	// file_path takes priority over command and others. Real tool_use
 	// objects only carry one of these at a time, but ordering guards future
 	// shape drift.
 	in := map[string]any{
@@ -142,6 +288,20 @@ func TestExtractFirstArg_PriorityOrder(t *testing.T) {
 	}
 	if got := extractFirstArg(in); got != "src/foo.go" {
 		t.Errorf("got %q, want file_path winner", got)
+	}
+}
+
+// TestExtractFirstArg_SnakeBeatsCamel guards the snake-vs-camel priority. If
+// a tool input ever carries BOTH file_path and filePath (extremely
+// unlikely), claude's snake form wins because claude is the more
+// widely-tested upstream.
+func TestExtractFirstArg_SnakeBeatsCamel(t *testing.T) {
+	in := map[string]any{
+		"filePath":  "camel.go",
+		"file_path": "snake.go",
+	}
+	if got := extractFirstArg(in); got != "snake.go" {
+		t.Errorf("got %q, want snake.go (file_path wins)", got)
 	}
 }
 
@@ -171,6 +331,25 @@ func TestExtractFirstArg_Truncated(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "…") {
 		t.Errorf("truncated value should end with marker: got %q", got)
+	}
+}
+
+func TestTitleCaseTool(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"read", "Read"},
+		{"bash", "Bash"},
+		{"grep", "Grep"},
+		{"webfetch", "Webfetch"}, // simple cap; not "WebFetch" — that's a known cosmetic loss
+		{"Read", "Read"},         // already title-cased
+		{"", ""},                 // empty pass-through
+		{"中文", "中文"},             // non-ASCII pass-through
+	}
+	for _, c := range cases {
+		if got := titleCaseTool(c.in); got != c.want {
+			t.Errorf("titleCaseTool(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 

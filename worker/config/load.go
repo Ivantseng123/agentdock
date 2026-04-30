@@ -93,7 +93,7 @@ func mergeBuiltinAgents(cfg *Config) {
 			continue
 		}
 		// Partial entry: user wrote `extra_args` (and/or `timeout`, `skill_dir`,
-		// `stream`) but NOT `command` or `args`. Treat as layered override.
+		// `stream_format`) but NOT `command` or `args`. Treat as layered override.
 		if user.Command == "" && len(user.Args) == 0 {
 			merged := builtin
 			if user.Timeout > 0 {
@@ -102,9 +102,9 @@ func mergeBuiltinAgents(cfg *Config) {
 			if user.SkillDir != "" {
 				merged.SkillDir = user.SkillDir
 			}
-			// Stream is a bool; only override if user explicitly set something
-			// non-zero. We can't distinguish "false" from "unset" here, so
-			// stream stays at the built-in unless the user also set command/args.
+			if user.StreamFormat != "" {
+				merged.StreamFormat = user.StreamFormat
+			}
 			merged.ExtraArgs = user.ExtraArgs
 			cfg.Agents[name] = merged
 			continue
