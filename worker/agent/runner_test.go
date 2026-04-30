@@ -415,3 +415,136 @@ func TestRunner_CancelShortCircuitsProviderChain(t *testing.T) {
 		t.Errorf("err = %q, want \"cancelled\" (chain must not try the second agent)", err.Error())
 	}
 }
+
+func TestTailStderr(t *testing.T) {
+	if got := tailStderr("short"); got != "short" {
+		t.Errorf("tailStderr(short) = %q, want %q", got, "short")
+	}
+	if got := tailStderr("  trim  "); got != "trim" {
+		t.Errorf("tailStderr did not trim whitespace: got %q", got)
+	}
+	long := strings.Repeat("x", stderrTailLen+100)
+	got := tailStderr(long)
+	if !strings.HasPrefix(got, "…") {
+		t.Errorf("tailStderr did not prefix with marker: got prefix %q", got[:6])
+	}
+	if len(got) != stderrTailLen+len("…") {
+		t.Errorf("tailStderr len = %d, want %d", len(got), stderrTailLen+len("…"))
+	}
+}
+
+func TestDetectBlockedArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"empty", []string{}, nil},
+		{"clean", []string{"--print", "-p", "hi"}, nil},
+		{"exact match", []string{"--dangerously-skip-permissions"}, []string{"--dangerously-skip-permissions"}},
+		{"with value", []string{"--dangerously-skip-permissions=yes"}, []string{"--dangerously-skip-permissions=yes"}},
+		{"substring no match", []string{"--mention-dangerously-skip-permissions"}, nil},
+		{"mixed", []string{"--print", "--dangerously-skip-permissions", "-p"}, []string{"--dangerously-skip-permissions"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := detectBlockedArgs(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilterClaudeCodeEnv(t *testing.T) {
+	in := []string{
+		"PATH=/usr/bin",
+		"CLAUDE_CODE_NO_FLICKER=1",
+		"CLAUDE_CODE_RESIDUE=oops",
+		"HOME=/home/me",
+		"CLAUDE_CODE_BAD_FORMAT", // no = sign, malformed
+	}
+	got := filterClaudeCodeEnv(in)
+	want := []string{
+		"PATH=/usr/bin",
+		"CLAUDE_CODE_NO_FLICKER=1",
+		"HOME=/home/me",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRunner_BlockedArgsRejected(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "should-not-run")
+	os.WriteFile(script, []byte("#!/bin/sh\necho should not run\n"), 0755)
+
+	runner := NewRunner([]config.AgentConfig{{
+		Command:   script,
+		Args:      []string{"{extra_args}", "{prompt}"},
+		ExtraArgs: []string{"--dangerously-skip-permissions"},
+		Timeout:   5 * time.Second,
+	}})
+	_, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err == nil {
+		t.Fatal("expected error when blocked arg present")
+	}
+	if !strings.Contains(err.Error(), "blocked args rejected") {
+		t.Errorf("err = %q, want substring \"blocked args rejected\"", err.Error())
+	}
+}
+
+func TestRunner_StderrTailTruncated(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "noisy-failer")
+	// Print > stderrTailLen bytes to stderr then exit non-zero. yes |head gives
+	// repeatable bulk content without depending on /dev/urandom.
+	os.WriteFile(script, []byte(`#!/bin/sh
+yes "spam-line-content-padding-padding-padding-padding-padding" | head -n 200 >&2
+exit 1
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{{
+		Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
+	}})
+	_, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err == nil {
+		t.Fatal("expected non-zero exit error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "…") {
+		t.Errorf("err message missing truncation marker: %q", msg)
+	}
+	// Sanity bound: even with 200 lines of spam, total error message stays
+	// within stderrTailLen + a small wrapper budget.
+	if len(msg) > stderrTailLen+500 {
+		t.Errorf("err message too long: %d bytes (stderrTailLen=%d)", len(msg), stderrTailLen)
+	}
+}
+
+func TestRunner_ClaudeCodeEnvStripped(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_RESIDUE", "should-be-stripped")
+	t.Setenv("CLAUDE_CODE_NO_FLICKER", "1")
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "env-probe")
+	os.WriteFile(script, []byte(`#!/bin/sh
+env | grep '^CLAUDE_CODE_' | sort
+echo "padding padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{{
+		Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
+	}})
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if strings.Contains(output, "CLAUDE_CODE_RESIDUE") {
+		t.Errorf("CLAUDE_CODE_RESIDUE leaked into agent env: %q", output)
+	}
+	if !strings.Contains(output, "CLAUDE_CODE_NO_FLICKER=1") {
+		t.Errorf("CLAUDE_CODE_NO_FLICKER did not pass through: %q", output)
+	}
+}

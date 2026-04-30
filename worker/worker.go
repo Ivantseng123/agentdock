@@ -60,6 +60,7 @@ func Run(cfg *config.Config) error {
 	}
 
 	agentRunner := agent.NewRunnerFromConfig(cfg)
+	agentRunner.LogVersions(context.Background(), appLogger)
 
 	secretKey, err := crypto.DecodeSecretKey(cfg.SecretKey)
 	if err != nil {

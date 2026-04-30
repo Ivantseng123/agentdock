@@ -109,6 +109,10 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	// touch one place.
 	expanded := expandExtraArgs(agent.Args, agent.ExtraArgs)
 
+	if blocked := detectBlockedArgs(expanded); len(blocked) > 0 {
+		return "", fmt.Errorf("blocked args rejected: %s", strings.Join(blocked, ", "))
+	}
+
 	var args []string
 	if useStdin && hasPromptPlaceholder {
 		// Prompt too large for args — drop the prompt arg, use stdin instead.
@@ -136,8 +140,10 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 
-	// Inject secrets as environment variables.
-	env := os.Environ()
+	// Inject secrets as environment variables. Filter inherited env to drop
+	// residual CLAUDE_CODE_* vars from the worker host that could pollute
+	// agent behavior across deployments.
+	env := filterClaudeCodeEnv(os.Environ())
 	if len(opts.Secrets) > 0 {
 		for k, v := range opts.Secrets {
 			env = append(env, fmt.Sprintf("%s=%s", k, v))
@@ -186,7 +192,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 			return "", fmt.Errorf("timeout after %s", timeout)
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("exit %d: %s", exitErr.ExitCode(), strings.TrimSpace(stderr.String()))
+			return "", fmt.Errorf("exit %d: %s", exitErr.ExitCode(), tailStderr(stderr.String()))
 		}
 		return "", err
 	}
@@ -203,11 +209,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	// kubectl exec'ing into the worker.
 	trimmed := strings.TrimSpace(output)
 	if trimmed == "" {
-		stderrTail := strings.TrimSpace(stderr.String())
-		if len(stderrTail) > 2000 {
-			stderrTail = "…" + stderrTail[len(stderrTail)-2000:]
-		}
-		logger.Warn("Agent exit 0 但 stdout 空", "phase", "失敗", "command", agent.Command, "stderr_tail", stderrTail)
+		logger.Warn("Agent exit 0 但 stdout 空", "phase", "失敗", "command", agent.Command, "stderr_tail", tailStderr(stderr.String()))
 	}
 	return trimmed, nil
 }
@@ -281,4 +283,75 @@ func substituteStringPlaceholders(args []string, values map[string]string) []str
 		result = append(result, a)
 	}
 	return result
+}
+
+// blockedArgs is the set of CLI flags that bypass the agent's host sandbox.
+// Memory feedback_worker_deployment_unknown rationale: workers may run on a
+// user's real machine, not an isolated pod, so allowing these would let the
+// agent touch $HOME, /etc, SSH keys, etc.
+var blockedArgs = []string{
+	"--dangerously-skip-permissions",
+}
+
+// claudeCodeEnvWhitelist is the set of CLAUDE_CODE_* env vars that pass
+// through to agent processes. Anything else with the CLAUDE_CODE_ prefix
+// inherited from the worker host is stripped to keep agent behavior
+// deterministic across deployment environments. Add entries when a new var
+// becomes load-bearing.
+var claudeCodeEnvWhitelist = map[string]bool{
+	"CLAUDE_CODE_NO_FLICKER": true, // see project_cmux_claude_flicker_workaround
+}
+
+// stderrTailLen caps how much of an agent's stderr survives into error
+// messages and warn logs. Large stderr blobs (e.g. claude SDK's every-event
+// JSON dumps) otherwise spam the logger and crowd out other signal.
+const stderrTailLen = 2000
+
+// tailStderr returns the trailing stderrTailLen bytes of s, prefixed with a
+// "…" marker when truncation occurred. Single truncation site so tail size
+// stays consistent across error and log surfaces.
+func tailStderr(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= stderrTailLen {
+		return s
+	}
+	return "…" + s[len(s)-stderrTailLen:]
+}
+
+// detectBlockedArgs returns any blockedArgs entries present in args. The flag
+// must stand alone or appear as `--flag=value`; substring matches inside
+// other args are NOT detected. Caller surfaces the result; this function has
+// no side effects.
+func detectBlockedArgs(args []string) []string {
+	var found []string
+	for _, a := range args {
+		for _, blocked := range blockedArgs {
+			if a == blocked || strings.HasPrefix(a, blocked+"=") {
+				found = append(found, a)
+			}
+		}
+	}
+	return found
+}
+
+// filterClaudeCodeEnv strips CLAUDE_CODE_* vars from env unless the key is
+// in claudeCodeEnvWhitelist. Non-CLAUDE_CODE_* entries pass through unchanged.
+// Output preserves input ordering for deterministic env substitution under
+// exec.Command.
+func filterClaudeCodeEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, "CLAUDE_CODE_") {
+			out = append(out, e)
+			continue
+		}
+		i := strings.IndexByte(e, '=')
+		if i < 0 {
+			continue
+		}
+		if claudeCodeEnvWhitelist[e[:i]] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
