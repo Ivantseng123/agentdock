@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.4.0](https://github.com/Ivantseng123/agentdock/compare/v3.3.0...v3.4.0) (2026-04-30)
+
+
+### Features
+
+* **worker:** Issue multi-repo backend prep — JobResult.RefViolations + ref-guard simplify ([#217](https://github.com/Ivantseng123/agentdock/issues/217) PR 1) ([7ce4094](https://github.com/Ivantseng123/agentdock/commit/7ce4094dce7ec4c2ce7c3a2ce499afd562baa645))
+* **worker:** Issue multi-repo backend prep — JobResult.RefViolations + ref-guard simplify ([#217](https://github.com/Ivantseng123/agentdock/issues/217) PR 1) ([662982e](https://github.com/Ivantseng123/agentdock/commit/662982e031c384749dbcf407c746302ab3a3ad66))
+* **workflow/issue:** multi-repo frontend (Slack phases, output_rules, pipeline, SKILL) ([#217](https://github.com/Ivantseng123/agentdock/issues/217) PR 2) ([ebef6f2](https://github.com/Ivantseng123/agentdock/commit/ebef6f273536972c7960a7d0fcba03eae99bb7ff))
+* **workflow/issue:** multi-repo frontend (Slack phases, output_rules, pipeline, SKILL) ([#217](https://github.com/Ivantseng123/agentdock/issues/217) PR 2) ([6f1219f](https://github.com/Ivantseng123/agentdock/commit/6f1219fb3e6e5ac436fc80f72ed08cb5add0d868))
+
 ## [3.3.0](https://github.com/Ivantseng123/agentdock/compare/v3.2.0...v3.3.0) (2026-04-29)
 
 
