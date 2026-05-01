@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.5.0](https://github.com/Ivantseng123/agentdock/compare/v3.4.0...v3.5.0) (2026-05-01)
+
+
+### Features
+
+* **worker/agent:** hygiene bundle ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 1) ([0652965](https://github.com/Ivantseng123/agentdock/commit/06529653eae6c90e39739c69af8ebe18b6659bdb))
+* **worker/agent:** hygiene bundle ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 1) ([142fdc6](https://github.com/Ivantseng123/agentdock/commit/142fdc6e2366b27eab1b2b3bc00d989c0e3e5579))
+* **worker/agent:** inactivity timeout for streaming agents ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 2) ([e4144ec](https://github.com/Ivantseng123/agentdock/commit/e4144ec1b316d8fc690aeb2175d57c9f3e912d2a))
+* **worker/agent:** inactivity timeout for streaming agents ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 2) ([3c66d0a](https://github.com/Ivantseng123/agentdock/commit/3c66d0a459d2b7f70c586137698df2f316fe3389))
+* **worker+app:** tool-name visibility in Slack progress ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 3) ([e379d64](https://github.com/Ivantseng123/agentdock/commit/e379d64f7c7258fd84e636be07349560f54ace23))
+* **worker+app:** tool-name visibility in Slack progress ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 3) ([db91d40](https://github.com/Ivantseng123/agentdock/commit/db91d404c8e48b08d58d2a878eda993e4f1ec7f2))
+* **worker+shared:** tool-name visibility for opencode ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 4) ([a1c2a0b](https://github.com/Ivantseng123/agentdock/commit/a1c2a0b233e0abe6390b5176dd43e592dd74caa4))
+* **worker+shared:** tool-name visibility for opencode ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 4) ([0a39635](https://github.com/Ivantseng123/agentdock/commit/0a396359045d336f9011c8906ac7b119bbd9cadc))
+
+
+### Bug Fixes
+
+* **app/config:** dedup ask prompt + ban XML mirror in replies ([#228](https://github.com/Ivantseng123/agentdock/issues/228) PR 4) ([6a4955b](https://github.com/Ivantseng123/agentdock/commit/6a4955b14fd93a9e919469cb57c86f9af324990d))
+
 ## [3.4.0](https://github.com/Ivantseng123/agentdock/compare/v3.3.0...v3.4.0) (2026-04-30)
 
 
