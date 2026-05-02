@@ -75,7 +75,11 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
 	agentLogger := logging.ComponentLogger(slog.Default(), logging.CompAgent)
 
-	tokenSource, err := githubapp.NewFromConfig(cfg.GitHub, githubAppLogger)
+	tokenSource, err := githubapp.NewFromConfig(cfg.GitHub.Token, githubapp.AppCredentials{
+		AppID:          cfg.GitHub.App.AppID,
+		InstallationID: cfg.GitHub.App.InstallationID,
+		PrivateKeyPath: cfg.GitHub.App.PrivateKeyPath,
+	}, githubAppLogger)
 	if err != nil {
 		return nil, fmt.Errorf("init github auth: %w", err)
 	}
