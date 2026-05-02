@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -22,9 +23,13 @@ type RepoDiscovery struct {
 	logger  *slog.Logger
 }
 
-func NewRepoDiscovery(token string, logger *slog.Logger) *RepoDiscovery {
+// NewRepoDiscovery builds a discovery client. tokenFn is invoked per
+// outbound request via tokenTransport so the underlying gh.Client can
+// keep up with installation-token rotation without rebuilding.
+func NewRepoDiscovery(tokenFn func() (string, error), logger *slog.Logger) *RepoDiscovery {
+	httpClient := &http.Client{Transport: newTokenTransport(tokenFn, nil)}
 	return &RepoDiscovery{
-		client: gh.NewClient(nil).WithAuthToken(token),
+		client: gh.NewClient(httpClient),
 		ttl:    5 * time.Minute,
 		logger: logger,
 	}

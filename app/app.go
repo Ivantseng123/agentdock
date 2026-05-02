@@ -14,6 +14,7 @@ import (
 
 	"github.com/Ivantseng123/agentdock/app/bot"
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/app/githubapp"
 	"github.com/Ivantseng123/agentdock/app/skill"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/app/workflow"
@@ -68,15 +69,21 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
+	githubAppLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHubApp)
 	slackLogger := logging.ComponentLogger(slog.Default(), logging.CompSlack)
 	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
 	agentLogger := logging.ComponentLogger(slog.Default(), logging.CompAgent)
 
+	tokenSource, err := githubapp.NewFromConfig(cfg.GitHub, githubAppLogger)
+	if err != nil {
+		return nil, fmt.Errorf("init github auth: %w", err)
+	}
+
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken, slackLogger)
 
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
-	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token, githubLogger)
+	repoDiscovery := ghclient.NewRepoDiscovery(tokenSource.Get, githubLogger)
 
 	if cfg.AutoBind {
 		go func() {
@@ -192,8 +199,8 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}
 	}
 
-	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
-	githubClient := ghclient.NewClient(cfg.GitHub.Token)
+	issueClient := ghclient.NewIssueClient(tokenSource.Get, githubLogger)
+	githubClient := ghclient.NewClient(tokenSource.Get)
 
 	// Build workflow registry + dispatcher. The slack adapter owns the bot
 	// identity so FetchThreadContext always drops our own posts regardless of
