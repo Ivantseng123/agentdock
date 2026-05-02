@@ -17,7 +17,11 @@ slack:
   app_token: xapp-...                 # REQUIRED
 
 github:
-  token: ghp-...                      # REQUIRED: list repos, create issues
+  token: ghp-...                      # Required in PAT mode; optional in App mode (both → App-priority + PAT fallback)
+  app:                                # GitHub App mode: all three required to activate; missing any → preflight fails
+    app_id: 123456                    # From the top of the App settings page
+    installation_id: 7890123          # Trailing segment of the install URL
+    private_key_path: /etc/agentdock/app-key.pem  # Path only; private key never crosses app/worker boundary
 
 channels:
   C0123456789:
@@ -194,6 +198,8 @@ In Redis mode, app owns all secrets and ships them encrypted to workers:
 4. Worker decrypts and injects the values as env vars on the agent subprocess.
 
 `github.token` is auto-merged into `secrets["GH_TOKEN"]`. `AGENTDOCK_SECRET_<NAME>` env vars are also slurped into `secrets`.
+
+In GitHub App mode (`github.app.*` all three set), each job mints a fresh 60min-TTL installation token via `MintFresh()` at dispatch time, overlays it on `GH_TOKEN`, and ships the encrypted bundle to the worker. `secret_key` is required in this mode — preflight blocks startup when it's missing. Setup steps in [github-app-setup.en.md](github-app-setup.en.md); switching from PAT in [MIGRATION-github-app.en.md](MIGRATION-github-app.en.md).
 
 ## Mantis (optional)
 

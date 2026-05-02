@@ -7,7 +7,11 @@ AgentDock v2 splits config into two files:
 - [App configuration (configuration-app.en.md)](configuration-app.en.md) — Slack bot, channels, rate limiting, Mantis, prompt assembly
 - [Worker configuration (configuration-worker.en.md)](configuration-worker.en.md) — agents, providers, worker count, repo cache
 
-Upgrading from v1? See [MIGRATION-v2.en.md](MIGRATION-v2.en.md).
+External system setup:
+- [Slack App setup](slack-setup.en.md) — create the Slack App, scopes, socket mode
+- [GitHub App setup](github-app-setup.en.md) — create the GitHub App, permissions, private key (PAT also works)
+
+Upgrading from v1? See [MIGRATION-v2.en.md](MIGRATION-v2.en.md). Switching from PAT to GitHub App? See [MIGRATION-github-app.en.md](MIGRATION-github-app.en.md).
 
 ## Quick start
 

@@ -17,7 +17,11 @@ slack:
   app_token: xapp-...                 # REQUIRED
 
 github:
-  token: ghp-...                      # REQUIRED：列出 repos、建 issues
+  token: ghp-...                      # PAT 模式必填；App 模式可省（並存則 App 優先 + PAT fallback）
+  app:                                # GitHub App 模式：三欄齊全才啟用，缺一被 preflight 擋下
+    app_id: 123456                    # App 設定頁右上 App ID
+    installation_id: 7890123          # 安裝完成 URL 末段
+    private_key_path: /etc/agentdock/app-key.pem  # 路徑 only；私鑰不過 app/worker boundary
 
 channels:
   C0123456789:
@@ -194,6 +198,8 @@ Redis 模式下，app 集中管理 secrets 並加密傳給 worker：
 4. Worker 解密後把值注入 agent 子進程的環境變數。
 
 `github.token` 會自動 merge 進 `secrets["GH_TOKEN"]`。`AGENTDOCK_SECRET_<NAME>` 環境變數也會被收進 `secrets`。
+
+GitHub App 模式（`github.app.*` 三欄齊全）下，每個 job 在 dispatch 時透過 `MintFresh()` 鑄出一個全新 60min TTL 的 installation token 覆蓋 `GH_TOKEN`，再加密推給 worker。`secret_key` 在此模式為硬性要求（preflight 會擋下未設的情況）。設定步驟見 [github-app-setup.md](github-app-setup.md)；從 PAT 切換見 [MIGRATION-github-app.md](MIGRATION-github-app.md)。
 
 ## Mantis（選用）
 
