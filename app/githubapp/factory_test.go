@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/Ivantseng123/agentdock/app/config"
 )
 
 func writePEMKey(t *testing.T, key *rsa.PrivateKey) string {
@@ -33,16 +31,9 @@ func discardLogger() *slog.Logger {
 func TestNewFromConfig_AppPriority(t *testing.T) {
 	key := generateTestKey(t)
 	path := writePEMKey(t, key)
-	cfg := config.GitHubConfig{
-		Token: "ghp_pat",
-		App: config.GitHubAppConfig{
-			AppID:          1,
-			InstallationID: 2,
-			PrivateKeyPath: path,
-		},
-	}
+	app := AppCredentials{AppID: 1, InstallationID: 2, PrivateKeyPath: path}
 
-	src, err := NewFromConfig(cfg, discardLogger())
+	src, err := NewFromConfig("ghp_pat", app, discardLogger())
 	if err != nil {
 		t.Fatalf("NewFromConfig: %v", err)
 	}
@@ -54,14 +45,8 @@ func TestNewFromConfig_AppPriority(t *testing.T) {
 func TestNewFromConfig_AppOnly(t *testing.T) {
 	key := generateTestKey(t)
 	path := writePEMKey(t, key)
-	cfg := config.GitHubConfig{
-		App: config.GitHubAppConfig{
-			AppID:          1,
-			InstallationID: 2,
-			PrivateKeyPath: path,
-		},
-	}
-	src, err := NewFromConfig(cfg, discardLogger())
+	app := AppCredentials{AppID: 1, InstallationID: 2, PrivateKeyPath: path}
+	src, err := NewFromConfig("", app, discardLogger())
 	if err != nil {
 		t.Fatalf("NewFromConfig: %v", err)
 	}
@@ -71,8 +56,7 @@ func TestNewFromConfig_AppOnly(t *testing.T) {
 }
 
 func TestNewFromConfig_PATOnly(t *testing.T) {
-	cfg := config.GitHubConfig{Token: "ghp_only"}
-	src, err := NewFromConfig(cfg, discardLogger())
+	src, err := NewFromConfig("ghp_only", AppCredentials{}, discardLogger())
 	if err != nil {
 		t.Fatalf("NewFromConfig: %v", err)
 	}
@@ -86,7 +70,7 @@ func TestNewFromConfig_PATOnly(t *testing.T) {
 }
 
 func TestNewFromConfig_NeitherSet(t *testing.T) {
-	src, err := NewFromConfig(config.GitHubConfig{}, discardLogger())
+	src, err := NewFromConfig("", AppCredentials{}, discardLogger())
 	if err == nil {
 		t.Fatal("expected error when neither PAT nor App is set")
 	}
@@ -102,23 +86,14 @@ func TestNewFromConfig_PartialAppFallsToError(t *testing.T) {
 	// Partial App config (AppID set but no key path) is not "configured"
 	// per IsConfigured, and there's no PAT, so factory returns an error.
 	// Preflight is responsible for the field-specific error message.
-	cfg := config.GitHubConfig{
-		App: config.GitHubAppConfig{AppID: 1},
-	}
-	if _, err := NewFromConfig(cfg, discardLogger()); err == nil {
+	if _, err := NewFromConfig("", AppCredentials{AppID: 1}, discardLogger()); err == nil {
 		t.Fatal("expected error for partial App config without PAT")
 	}
 }
 
 func TestNewFromConfig_BadKeyPath(t *testing.T) {
-	cfg := config.GitHubConfig{
-		App: config.GitHubAppConfig{
-			AppID:          1,
-			InstallationID: 2,
-			PrivateKeyPath: "/nonexistent/key.pem",
-		},
-	}
-	_, err := NewFromConfig(cfg, discardLogger())
+	app := AppCredentials{AppID: 1, InstallationID: 2, PrivateKeyPath: "/nonexistent/key.pem"}
+	_, err := NewFromConfig("", app, discardLogger())
 	if err == nil {
 		t.Fatal("expected error for nonexistent key path")
 	}
@@ -133,14 +108,8 @@ func TestNewFromConfig_BadPEMContent(t *testing.T) {
 	if err := os.WriteFile(path, []byte("this is not a PEM"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	cfg := config.GitHubConfig{
-		App: config.GitHubAppConfig{
-			AppID:          1,
-			InstallationID: 2,
-			PrivateKeyPath: path,
-		},
-	}
-	_, err := NewFromConfig(cfg, discardLogger())
+	app := AppCredentials{AppID: 1, InstallationID: 2, PrivateKeyPath: path}
+	_, err := NewFromConfig("", app, discardLogger())
 	if err == nil {
 		t.Fatal("expected error for bad PEM")
 	}

@@ -3,15 +3,28 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/Ivantseng123/agentdock/app/githubapp"
 	"github.com/Ivantseng123/agentdock/shared/connectivity"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
+	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/prompt"
 )
 
 const maxRetries = 3
+
+// anyAppFieldSet returns true when at least one GitHub App config
+// field is non-zero, indicating the operator intended to use App
+// auth. Used to distinguish "partial config (probably a typo)" from
+// "PAT-only deployment (App fields legitimately empty)".
+func anyAppFieldSet(c GitHubAppConfig) bool {
+	return c.AppID != 0 || c.InstallationID != 0 || c.PrivateKeyPath != ""
+}
 
 // RunPreflight validates tokens / redis / secret key and, when running on a
 // terminal with missing values, prompts for them. Returns the set of keys the
@@ -131,7 +144,59 @@ func preflightSlackApp(cfg *Config, interactive bool, prompted map[string]any) e
 	return fmt.Errorf("unreachable")
 }
 
+// githubAppPreflightFn is the App-side preflight callback. Tests
+// override to mock the GitHub-API legs without an httptest server in
+// every case.
+var githubAppPreflightFn = githubapp.PreflightApp
+
 func preflightGitHub(cfg *Config, interactive bool, prompted map[string]any) error {
+	appCfg := cfg.GitHub.App
+
+	// AC-4: detect partial App config and surface field-specific message.
+	if anyAppFieldSet(appCfg) && !appCfg.IsConfigured() {
+		var missing []string
+		if appCfg.AppID == 0 {
+			missing = append(missing, "github.app.app_id")
+		}
+		if appCfg.InstallationID == 0 {
+			missing = append(missing, "github.app.installation_id")
+		}
+		if appCfg.PrivateKeyPath == "" {
+			missing = append(missing, "github.app.private_key_path")
+		}
+		msg := fmt.Sprintf("github app config partial: missing %s", strings.Join(missing, ", "))
+		prompt.Fail("%s", msg)
+		return errors.New(msg)
+	}
+
+	if appCfg.IsConfigured() {
+		// AC-18: token only crosses app/worker boundary via EncryptedSecrets,
+		// so an App without secret_key has no way to deliver the token.
+		if cfg.SecretKey == "" {
+			msg := "github app mode requires secret_key (token cannot cross app/worker boundary unencrypted)"
+			prompt.Fail("%s", msg)
+			return errors.New(msg)
+		}
+		appLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHubApp)
+		creds := githubapp.AppCredentials{
+			AppID:          appCfg.AppID,
+			InstallationID: appCfg.InstallationID,
+			PrivateKeyPath: appCfg.PrivateKeyPath,
+		}
+		if err := githubAppPreflightFn(creds, appLogger); err != nil {
+			prompt.Fail("GitHub App preflight failed: %v", err)
+			return err
+		}
+		prompt.OK("GitHub App preflight passed (installation_id=%d)", appCfg.InstallationID)
+
+		// AC-19: 50min is the conservative TTL boundary. Long jobs may hit
+		// 401 mid-run as the App installation token rotates. Warn, don't
+		// block — not every long job actually crosses the boundary.
+		if cfg.Queue.JobTimeout > 50*time.Minute {
+			prompt.Warn("queue.job_timeout=%s exceeds GitHub App installation token TTL boundary (50min); long jobs may hit 401 mid-run. See docs/MIGRATION-github-app.md.", cfg.Queue.JobTimeout)
+		}
+	}
+
 	if cfg.GitHub.Token != "" {
 		username, err := connectivity.CheckGitHubToken(cfg.GitHub.Token)
 		if err != nil {
@@ -141,8 +206,14 @@ func preflightGitHub(cfg *Config, interactive bool, prompted map[string]any) err
 		prompt.OK("Token valid (user: %s)", username)
 		return nil
 	}
+
+	if appCfg.IsConfigured() {
+		// App configured + no PAT — that's a complete config, return.
+		return nil
+	}
+
 	if !interactive {
-		return fmt.Errorf("GITHUB_TOKEN is required")
+		return errors.New("github auth not configured: set github.token or github.app.*")
 	}
 	fmt.Fprintln(prompt.Stderr)
 	fmt.Fprintln(prompt.Stderr, "  GitHub token (ghp_... or github_pat_...):")
