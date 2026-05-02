@@ -1,4 +1,4 @@
-package app
+package dispatch
 
 import (
 	"crypto/rand"
@@ -52,9 +52,9 @@ func TestBuildEncryptedSecrets_OverlaysGHTokenFromMint(t *testing.T) {
 	src := &fakeTokenSource{token: "ghs_fresh"}
 	key := newSecretKey(t)
 
-	encrypted, err := buildEncryptedSecrets(cfg, src, key)
+	encrypted, err := BuildEncryptedSecrets(cfg, src, key)
 	if err != nil {
-		t.Fatalf("buildEncryptedSecrets: %v", err)
+		t.Fatalf("BuildEncryptedSecrets: %v", err)
 	}
 
 	plain, err := crypto.Decrypt(key, encrypted)
@@ -86,8 +86,8 @@ func TestBuildEncryptedSecrets_DoesNotMutateCfgSecrets(t *testing.T) {
 	src := &fakeTokenSource{token: "minted"}
 	key := newSecretKey(t)
 
-	if _, err := buildEncryptedSecrets(cfg, src, key); err != nil {
-		t.Fatalf("buildEncryptedSecrets: %v", err)
+	if _, err := BuildEncryptedSecrets(cfg, src, key); err != nil {
+		t.Fatalf("BuildEncryptedSecrets: %v", err)
 	}
 	if got := cfg.Secrets["GH_TOKEN"]; got != "original-pat" {
 		t.Errorf("cfg.Secrets[GH_TOKEN] = %q, want original-pat (unchanged)", got)
@@ -100,7 +100,7 @@ func TestBuildEncryptedSecrets_MintErrorPropagates(t *testing.T) {
 	src := &fakeTokenSource{mintErr: wantErr}
 	key := newSecretKey(t)
 
-	_, err := buildEncryptedSecrets(cfg, src, key)
+	_, err := BuildEncryptedSecrets(cfg, src, key)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -119,9 +119,9 @@ func TestBuildEncryptedSecrets_PATModeEquivalentToAutomerge(t *testing.T) {
 	src := &fakeTokenSource{token: pat}
 	key := newSecretKey(t)
 
-	encrypted, err := buildEncryptedSecrets(cfg, src, key)
+	encrypted, err := BuildEncryptedSecrets(cfg, src, key)
 	if err != nil {
-		t.Fatalf("buildEncryptedSecrets: %v", err)
+		t.Fatalf("BuildEncryptedSecrets: %v", err)
 	}
 	plain, _ := crypto.Decrypt(key, encrypted)
 	var got map[string]string
@@ -142,7 +142,7 @@ func TestBuildEncryptedSecrets_ConcurrentCallsNoRace(t *testing.T) {
 	for range n {
 		go func() {
 			defer wg.Done()
-			if _, err := buildEncryptedSecrets(cfg, src, key); err != nil {
+			if _, err := BuildEncryptedSecrets(cfg, src, key); err != nil {
 				t.Errorf("concurrent call: %v", err)
 			}
 		}()

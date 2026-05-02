@@ -13,6 +13,7 @@ import (
 
 	"github.com/Ivantseng123/agentdock/app/bot"
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/app/dispatch"
 	"github.com/Ivantseng123/agentdock/app/githubapp"
 	"github.com/Ivantseng123/agentdock/app/skill"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
@@ -388,7 +389,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		// inline marshal/encrypt path; in App mode it ensures the worker
 		// receives a token close to the full 60min TTL.
 		if len(secretKey) > 0 {
-			encrypted, eErr := buildEncryptedSecrets(cfg, jobSource, secretKey)
+			encrypted, eErr := dispatch.BuildEncryptedSecrets(cfg, jobSource, secretKey)
 			if eErr != nil {
 				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to prepare secrets: %v", eErr), p.ThreadTS)
 				if handler != nil {
@@ -474,7 +475,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}, agentLogger)
 	go resultListener.Listen(context.Background())
 
-	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger)
+	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger, cfg, tokenSource, secretKey)
 
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore, slackClient, queueLogger)
 	go statusListener.Listen(context.Background())

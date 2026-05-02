@@ -1,4 +1,8 @@
-package app
+// Package dispatch holds the per-job secret-encryption helper shared by
+// the submitJob flow in app/app.go and the retry handler in app/bot.
+// The helper lives here (not in app/) so app/bot can import it without
+// creating an app→bot→app cycle.
+package dispatch
 
 import (
 	"encoding/json"
@@ -23,7 +27,7 @@ import (
 // retry_handler.go (T12) reuses this helper so retry jobs also get a
 // fresh token rather than a stale 50min+ snapshot from the original
 // EncryptedSecrets bundle.
-func buildEncryptedSecrets(cfg *config.Config, source githubapp.TokenSource, secretKey []byte) ([]byte, error) {
+func BuildEncryptedSecrets(cfg *config.Config, source githubapp.TokenSource, secretKey []byte) ([]byte, error) {
 	perJob := make(map[string]string, len(cfg.Secrets)+1)
 	for k, v := range cfg.Secrets {
 		perJob[k] = v
