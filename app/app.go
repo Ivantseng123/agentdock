@@ -82,7 +82,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken, slackLogger)
 
-	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
+	repoCache := ghclient.NewRepoCacheWithTokenFn(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, tokenSource.Get, githubLogger)
 	repoDiscovery := ghclient.NewRepoDiscovery(tokenSource.Get, githubLogger)
 
 	if cfg.AutoBind {

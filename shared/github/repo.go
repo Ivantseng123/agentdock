@@ -70,15 +70,30 @@ func runGitWithAuth(token string, args ...string) ([]byte, error) {
 }
 
 type RepoCache struct {
-	dir       string
-	maxAge    time.Duration
-	githubPAT string
-	mu        sync.Mutex
-	lastPull  map[string]time.Time
-	logger    *slog.Logger
+	dir      string
+	maxAge   time.Duration
+	tokenFn  func() (string, error)
+	mu       sync.Mutex
+	lastPull map[string]time.Time
+	logger   *slog.Logger
 }
 
+// NewRepoCache builds a RepoCache that always uses the given PAT. Worker
+// processes call this — they receive a per-job token via secrets rather
+// than rotating one in place.
 func NewRepoCache(dir string, maxAge time.Duration, githubPAT string, logger *slog.Logger) *RepoCache {
+	return newRepoCacheImpl(dir, maxAge, func() (string, error) { return githubPAT, nil }, logger)
+}
+
+// NewRepoCacheWithTokenFn builds a RepoCache that resolves its auth token
+// per call via tokenFn. App-side callers wire githubapp.TokenSource.Get
+// here so the cache stays current across installation-token rotations
+// without holding onto a stale string.
+func NewRepoCacheWithTokenFn(dir string, maxAge time.Duration, tokenFn func() (string, error), logger *slog.Logger) *RepoCache {
+	return newRepoCacheImpl(dir, maxAge, tokenFn, logger)
+}
+
+func newRepoCacheImpl(dir string, maxAge time.Duration, tokenFn func() (string, error), logger *slog.Logger) *RepoCache {
 	// Abs-resolve so relative paths don't leak clones into the worker's cwd.
 	if dir != "" {
 		if abs, err := filepath.Abs(dir); err == nil {
@@ -86,23 +101,38 @@ func NewRepoCache(dir string, maxAge time.Duration, githubPAT string, logger *sl
 		}
 	}
 	return &RepoCache{
-		dir:       dir,
-		maxAge:    maxAge,
-		githubPAT: githubPAT,
-		lastPull:  make(map[string]time.Time),
-		logger:    logger,
+		dir:      dir,
+		maxAge:   maxAge,
+		tokenFn:  tokenFn,
+		lastPull: make(map[string]time.Time),
+		logger:   logger,
 	}
 }
 
+// currentToken resolves tokenFn into a token at call time. tokenFn errors
+// log a warning and return "" so the outer git operation surfaces a clean
+// 401 instead of a manufactured wrapper error.
+func (rc *RepoCache) currentToken() string {
+	if rc.tokenFn == nil {
+		return ""
+	}
+	tok, err := rc.tokenFn()
+	if err != nil {
+		rc.logger.Warn("Token 取得失敗，將以無認證方式 fetch", "phase", "降級", "error", err)
+		return ""
+	}
+	return tok
+}
+
 // resolveURLWithToken builds a clone URL. Uses perCallToken if non-empty,
-// otherwise falls back to rc.githubPAT. For bare slugs (owner/repo), builds a
-// github.com HTTPS URL and injects the token. For full github.com HTTPS URLs
-// without userinfo, injects the token in place. URLs that already carry
-// credentials, non-github hosts, git@ SSH, and file:// all pass through.
+// otherwise falls back to the cache's tokenFn. For bare slugs (owner/repo),
+// builds a github.com HTTPS URL and injects the token. For full github.com
+// HTTPS URLs without userinfo, injects the token in place. URLs that already
+// carry credentials, non-github hosts, git@ SSH, and file:// all pass through.
 func (rc *RepoCache) resolveURLWithToken(repoRef, perCallToken string) string {
 	token := perCallToken
 	if token == "" {
-		token = rc.githubPAT
+		token = rc.currentToken()
 	}
 	if strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
 		return repoRef
@@ -128,13 +158,13 @@ func (rc *RepoCache) getRemoteURL(repoPath string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// effectiveToken picks the per-call token over rc.githubPAT when both exist.
-// Kept tiny and local so call sites stay linear.
+// effectiveToken picks the per-call token over the cache's tokenFn-resolved
+// token when both exist. Kept tiny and local so call sites stay linear.
 func (rc *RepoCache) effectiveToken(perCall string) string {
 	if perCall != "" {
 		return perCall
 	}
-	return rc.githubPAT
+	return rc.currentToken()
 }
 
 // clonePath bare-clones cleanURL into localPath. Auth flows through gitAuthEnv
@@ -276,7 +306,7 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 
 	// Pull latest for this branch. Token flows through env (#179) so the
 	// remote URL stored in this worktree's config stays credential-free.
-	_, _ = runGitWithAuth(rc.githubPAT, "-C", repoPath, "pull", "--ff-only") // best-effort
+	_, _ = runGitWithAuth(rc.currentToken(), "-C", repoPath, "pull", "--ff-only") // best-effort
 	return nil
 }
 
@@ -306,10 +336,10 @@ func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
 	}
 
 	// Auth is supplied per-op via env so the token never sits in .git/config
-	// (#179). Uses rc.githubPAT because AddWorktree doesn't carry a per-call
-	// token today; that's acceptable since the bare clone was already prepared
-	// with the correct credential by EnsureRepo.
-	fetchOut, fetchErr := runGitWithAuth(rc.githubPAT, "-C", barePath, "fetch", "origin", ref)
+	// (#179). Uses rc.currentToken() because AddWorktree doesn't carry a per-call
+	// token today (T8 of the GitHub App auth plan adds that param); the bare
+	// clone was already prepared with the correct credential by EnsureRepo.
+	fetchOut, fetchErr := runGitWithAuth(rc.currentToken(), "-C", barePath, "fetch", "origin", ref)
 	if fetchErr != nil {
 		return fmt.Errorf("git worktree add failed: %w; git fetch origin %s also failed: %v\n%s",
 			addErr, ref, fetchErr, fetchOut)
@@ -369,8 +399,8 @@ func (rc *RepoCache) ResolveURL(repoRef string) string {
 	if strings.HasPrefix(repoRef, "http") || strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
 		return repoRef
 	}
-	if rc.githubPAT != "" {
-		return fmt.Sprintf("https://%s@github.com/%s.git", rc.githubPAT, repoRef)
+	if tok := rc.currentToken(); tok != "" {
+		return fmt.Sprintf("https://%s@github.com/%s.git", tok, repoRef)
 	}
 	return fmt.Sprintf("https://github.com/%s.git", repoRef)
 }
