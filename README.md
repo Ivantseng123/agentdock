@@ -25,12 +25,14 @@ Go 單一 binary（`agentdock` with `app` / `worker` 兩個子命令）。Transp
 | 主題 | 檔案 |
 |------|------|
 | Slack App 設定（含 Manifest） | [docs/slack-setup.md](docs/slack-setup.md) |
+| GitHub App 設定（單一 installation） | [docs/github-app-setup.md](docs/github-app-setup.md) |
 | App 設定（`app.yaml`） | [docs/configuration-app.md](docs/configuration-app.md) |
 | Worker 設定（`worker.yaml`） | [docs/configuration-worker.md](docs/configuration-worker.md) |
 | 設定總覽 / Quick Start | [docs/configuration.md](docs/configuration.md) |
 | 部署（Local / Redis / Docker / K8s / CI） | [docs/deployment.md](docs/deployment.md) |
 | 監控與管理、Agent 行為、HTTP endpoints | [docs/operations.md](docs/operations.md) |
 | v1 → v2 Migration | [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md) |
+| PAT → GitHub App Migration | [docs/MIGRATION-github-app.md](docs/MIGRATION-github-app.md) |
 
 ## Quick Start
 
