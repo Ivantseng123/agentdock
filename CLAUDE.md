@@ -24,29 +24,24 @@ This is a **structuring tool, not a diagnosis tool.** The core value is turning 
 
 ## Commit hygiene
 
-CI 跑 `wagoid/commitlint-github-action@v6`（`@commitlint/config-conventional` 預設規則），任何 PR 的 commit 訊息違規會擋下 merge。常踩到的點：
+CI runs `wagoid/commitlint-github-action@v6` (`@commitlint/config-conventional`) and blocks merge on violations. Two pitfalls bite often:
 
-- `subject-case`：subject 不能是 sentence-case / start-case / pascal-case / upper-case。專有名詞如 `GitHub App` 出現在 subject 開頭會中招——用祈使句開頭（`add GitHub App preflight at startup` ✓，`GitHub App preflight at startup` ✗）。
-- `footer-leading-blank`：trailer 行（`Closes:`、`Co-Authored-By:` 等）前要空一行。
+- `subject-case`: imperative-lowercase only. Proper nouns at the subject's start (e.g. `GitHub App preflight ...`) trip start-case — prefix a verb (`add GitHub App preflight ...`).
+- `footer-leading-blank`: trailers (`Closes:`, `Co-Authored-By:`, etc.) need a blank line before them.
 
-Push 前 local 驗證（一次性設定 + 後續單行）：
+Validate locally before push:
 
 ```bash
-# 一次性
+# one-time
 mkdir -p /tmp/commitlint && cd /tmp/commitlint && npm init -y >/dev/null
 npm install @commitlint/cli @commitlint/config-conventional
 echo "module.exports = { extends: ['@commitlint/config-conventional'] };" > commitlint.config.js
 
-# 檢查最新一個 commit
-git log -1 --format="%B" | (cd /tmp/commitlint && ./node_modules/.bin/commitlint)
-
-# 檢查整條 branch（main..HEAD）
+# check main..HEAD
 git log main..HEAD --format="%H" | while read sha; do
   git log -1 --format="%B" "$sha" | (cd /tmp/commitlint && ./node_modules/.bin/commitlint) || echo "↑ $sha"
 done
 ```
-
-Exit 0 = 過。violation 修法：要嘛尚未 push 之前 `git commit --amend`，要嘛之後 `git rebase` + force-push（force-push 屬於不可逆，請先確認分支沒被別人 fork）。
 
 ## Routing
 
