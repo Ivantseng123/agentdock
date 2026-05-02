@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,18 @@ import (
 	workerconfig "github.com/Ivantseng123/agentdock/worker/config"
 	"gopkg.in/yaml.v3"
 )
+
+func TestPrintAppGitHubPromptHeader_IncludesMigrationHint(t *testing.T) {
+	var buf bytes.Buffer
+	printAppGitHubPromptHeader(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "GitHub token") {
+		t.Errorf("output missing PAT prompt header: %q", out)
+	}
+	if !strings.Contains(out, "MIGRATION-github-app.md") {
+		t.Errorf("output missing migration hint: %q", out)
+	}
+}
 
 func TestInitApp_YAML(t *testing.T) {
 	dir := t.TempDir()

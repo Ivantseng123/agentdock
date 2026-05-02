@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -236,8 +237,7 @@ func promptAppInit(cfg *appconfig.Config) error {
 		break
 	}
 
-	fmt.Fprintln(prompt.Stderr)
-	fmt.Fprintln(prompt.Stderr, "  GitHub token (ghp_... or github_pat_...):")
+	printAppGitHubPromptHeader(prompt.Stderr)
 	for attempt := 1; attempt <= 3; attempt++ {
 		tok := prompt.Hidden("Token: ")
 		if tok == "" {
@@ -414,4 +414,15 @@ func promptWorkerInit(cfg *workerconfig.Config) error {
 		break
 	}
 	return nil
+}
+
+// printAppGitHubPromptHeader writes the PAT prompt heading plus the
+// hint pointing operators at the GitHub App migration doc. Init is
+// purely interactive — it does not run preflight or validate App
+// config, so the hint is plain text rather than a follow-up prompt
+// (per spec §4.14).
+func printAppGitHubPromptHeader(w io.Writer) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  GitHub token (ghp_... or github_pat_...):")
+	fmt.Fprintln(w, "  Tip: 改用 GitHub App auth → 見 docs/MIGRATION-github-app.md")
 }
