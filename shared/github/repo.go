@@ -288,8 +288,10 @@ func (rc *RepoCache) ListBranches(repoPath string) ([]string, error) {
 	return rest, nil
 }
 
-// Checkout switches the repo to the specified branch.
-func (rc *RepoCache) Checkout(repoPath, branch string) error {
+// Checkout switches the repo to the specified branch. token is the
+// per-call auth that the caller wants used for the post-checkout pull;
+// pass "" to fall back to the cache's tokenFn.
+func (rc *RepoCache) Checkout(repoPath, branch, token string) error {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
@@ -306,7 +308,7 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 
 	// Pull latest for this branch. Token flows through env (#179) so the
 	// remote URL stored in this worktree's config stays credential-free.
-	_, _ = runGitWithAuth(rc.currentToken(), "-C", repoPath, "pull", "--ff-only") // best-effort
+	_, _ = runGitWithAuth(rc.effectiveToken(token), "-C", repoPath, "pull", "--ff-only") // best-effort
 	return nil
 }
 
@@ -321,7 +323,7 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 // the ref directly from origin and retries once. GitHub enables
 // uploadpack.allowReachableSHA1InWant, so a direct fetch-by-SHA works even
 // when no remote ref still points at the SHA.
-func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
+func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath, token string) error {
 	pruneCmd := exec.Command("git", "-C", barePath, "worktree", "prune")
 	_, _ = pruneCmd.CombinedOutput() // best-effort
 
@@ -336,10 +338,10 @@ func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
 	}
 
 	// Auth is supplied per-op via env so the token never sits in .git/config
-	// (#179). Uses rc.currentToken() because AddWorktree doesn't carry a per-call
-	// token today (T8 of the GitHub App auth plan adds that param); the bare
-	// clone was already prepared with the correct credential by EnsureRepo.
-	fetchOut, fetchErr := runGitWithAuth(rc.currentToken(), "-C", barePath, "fetch", "origin", ref)
+	// (#179). Caller (worker/pool/adapters.go) plumbs the per-job token from
+	// merged secrets; if empty, fall back to the cache's tokenFn so app-side
+	// callers in App mode still get a fresh installation token.
+	fetchOut, fetchErr := runGitWithAuth(rc.effectiveToken(token), "-C", barePath, "fetch", "origin", ref)
 	if fetchErr != nil {
 		return fmt.Errorf("git worktree add failed: %w; git fetch origin %s also failed: %v\n%s",
 			addErr, ref, fetchErr, fetchOut)

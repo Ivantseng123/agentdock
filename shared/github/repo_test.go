@@ -132,7 +132,7 @@ func TestRepoCache_BareCloneAndWorktree(t *testing.T) {
 
 	// AddWorktree should create a working directory.
 	wtPath := filepath.Join(t.TempDir(), "wt1")
-	if err := cache.AddWorktree(barePath, "", wtPath); err != nil {
+	if err := cache.AddWorktree(barePath, "", wtPath, ""); err != nil {
 		t.Fatalf("AddWorktree failed: %v", err)
 	}
 
@@ -184,11 +184,11 @@ func TestRepoCache_AddWorktree_SameBranchTwice(t *testing.T) {
 	branch := strings.TrimSpace(string(out))
 
 	wt1 := filepath.Join(t.TempDir(), "wt1")
-	if err := cache.AddWorktree(barePath, branch, wt1); err != nil {
+	if err := cache.AddWorktree(barePath, branch, wt1, ""); err != nil {
 		t.Fatalf("first AddWorktree(%q) failed: %v", branch, err)
 	}
 	wt2 := filepath.Join(t.TempDir(), "wt2")
-	if err := cache.AddWorktree(barePath, branch, wt2); err != nil {
+	if err := cache.AddWorktree(barePath, branch, wt2, ""); err != nil {
 		t.Fatalf("second AddWorktree(%q) failed: %v", branch, err)
 	}
 }
@@ -218,7 +218,7 @@ func TestRepoCache_AddWorktree_PrunesStaleAdminRecord(t *testing.T) {
 	// Simulate a crashed worker: create worktree, then rm working dir but
 	// leave the admin record at <bare>/worktrees/NAME behind.
 	doomed := filepath.Join(t.TempDir(), "doomed")
-	if err := cache.AddWorktree(barePath, "", doomed); err != nil {
+	if err := cache.AddWorktree(barePath, "", doomed, ""); err != nil {
 		t.Fatalf("AddWorktree(doomed) failed: %v", err)
 	}
 	if err := os.RemoveAll(doomed); err != nil {
@@ -230,7 +230,7 @@ func TestRepoCache_AddWorktree_PrunesStaleAdminRecord(t *testing.T) {
 	}
 
 	fresh := filepath.Join(t.TempDir(), "fresh")
-	if err := cache.AddWorktree(barePath, "", fresh); err != nil {
+	if err := cache.AddWorktree(barePath, "", fresh, ""); err != nil {
 		t.Fatalf("AddWorktree(fresh) after stale admin: %v", err)
 	}
 }
@@ -286,7 +286,7 @@ func TestRepoCache_AddWorktree_RetriesAfterFetchOnUnknownRef(t *testing.T) {
 
 	// AddWorktree by SHA should fetch-retry and succeed.
 	wt := filepath.Join(t.TempDir(), "wt")
-	if err := cache.AddWorktree(barePath, featureSHA, wt); err != nil {
+	if err := cache.AddWorktree(barePath, featureSHA, wt, ""); err != nil {
 		t.Fatalf("AddWorktree(%s) failed: %v", featureSHA, err)
 	}
 
@@ -328,7 +328,7 @@ func TestRepoCache_AddWorktree_PropagatesErrorWhenFetchAlsoFails(t *testing.T) {
 
 	bogusSHA := "deadbeef00000000000000000000000000000beef"
 	wt := filepath.Join(t.TempDir(), "wt")
-	err = cache.AddWorktree(barePath, bogusSHA, wt)
+	err = cache.AddWorktree(barePath, bogusSHA, wt, "")
 	if err == nil {
 		t.Fatal("expected error when ref is unknown to both cache and remote, got nil")
 	}
