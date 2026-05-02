@@ -29,18 +29,11 @@ CI runs `wagoid/commitlint-github-action@v6` (`@commitlint/config-conventional`)
 - `subject-case`: imperative-lowercase only. Proper nouns at the subject's start (e.g. `GitHub App preflight ...`) trip start-case — prefix a verb (`add GitHub App preflight ...`).
 - `footer-leading-blank`: trailers (`Closes:`, `Co-Authored-By:`, etc.) need a blank line before them.
 
-Validate locally before push:
+Validate `main..HEAD` locally before push (no setup required):
 
 ```bash
-# one-time
-mkdir -p /tmp/commitlint && cd /tmp/commitlint && npm init -y >/dev/null
-npm install @commitlint/cli @commitlint/config-conventional
-echo "module.exports = { extends: ['@commitlint/config-conventional'] };" > commitlint.config.js
-
-# check main..HEAD
-git log main..HEAD --format="%H" | while read sha; do
-  git log -1 --format="%B" "$sha" | (cd /tmp/commitlint && ./node_modules/.bin/commitlint) || echo "↑ $sha"
-done
+npx --yes -p @commitlint/cli -p @commitlint/config-conventional \
+  commitlint --from main --to HEAD --extends @commitlint/config-conventional
 ```
 
 ## Routing
