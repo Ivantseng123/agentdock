@@ -24,12 +24,7 @@ This is a **structuring tool, not a diagnosis tool.** The core value is turning 
 
 ## Commit hygiene
 
-CI runs `wagoid/commitlint-github-action@v6` (`@commitlint/config-conventional`) and blocks merge on violations. Two pitfalls bite often:
-
-- `subject-case`: imperative-lowercase only. Proper nouns at the subject's start (e.g. `GitHub App preflight ...`) trip start-case — prefix a verb (`add GitHub App preflight ...`).
-- `footer-leading-blank`: trailers (`Closes:`, `Co-Authored-By:`, etc.) need a blank line before them.
-
-Validate `main..HEAD` locally before push (no setup required):
+CI runs `wagoid/commitlint-github-action@v6` (`@commitlint/config-conventional`) and blocks merge on violations. Validate `main..HEAD` locally before push (no setup required):
 
 ```bash
 npx --yes -p @commitlint/cli -p @commitlint/config-conventional \
