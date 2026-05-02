@@ -4,7 +4,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -353,19 +352,14 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		job.Attachments = attachMeta
 		job.Skills = loadSkills(ctx, skillLoader, appLogger)
 
-		// Encrypt secrets if configured.
-		if len(secretKey) > 0 && len(cfg.Secrets) > 0 {
-			secretsJSON, mErr := json.Marshal(cfg.Secrets)
-			if mErr != nil {
-				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to marshal secrets: %v", mErr), p.ThreadTS)
-				if handler != nil {
-					handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
-				}
-				return
-			}
-			encrypted, eErr := crypto.Encrypt(secretKey, secretsJSON)
+		// Per-job secrets: fork cfg.Secrets, MintFresh GH_TOKEN, encrypt.
+		// In PAT mode this is byte-for-byte equivalent to the legacy
+		// inline marshal/encrypt path; in App mode it ensures the worker
+		// receives a token close to the full 60min TTL.
+		if len(secretKey) > 0 {
+			encrypted, eErr := buildEncryptedSecrets(cfg, tokenSource, secretKey)
 			if eErr != nil {
-				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to encrypt secrets: %v", eErr), p.ThreadTS)
+				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to prepare secrets: %v", eErr), p.ThreadTS)
 				if handler != nil {
 					handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
 				}
