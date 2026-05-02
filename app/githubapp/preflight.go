@@ -138,11 +138,13 @@ func checkPermissionsOnce(src *appInstallationSource) error {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	// Redact: see mint.go's note. Same proxy echo risk applies here.
+	bodyExcerpt := redactGitHubBody(strings.TrimSpace(string(body)))
 	if resp.StatusCode >= 500 {
-		return fmt.Errorf("%w: status=%d body=%s", errMintTransient, resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("%w: status=%d body=%s", errMintTransient, resp.StatusCode, bodyExcerpt)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("github app permissions check status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("github app permissions check status=%d body=%s", resp.StatusCode, bodyExcerpt)
 	}
 
 	var details installationDetails

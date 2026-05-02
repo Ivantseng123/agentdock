@@ -1,6 +1,7 @@
 package githubapp
 
 import (
+	"context"
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
@@ -56,10 +57,11 @@ type appInstallationSource struct {
 	logger         *slog.Logger
 	now            func() time.Time
 
-	mu              sync.Mutex
-	cached          string
-	expiresAt       time.Time
-	accessibleRepos map[string]struct{} // lower-cased "owner/repo"; nil = uninitialized
+	mu                   sync.Mutex
+	cached               string
+	expiresAt            time.Time
+	accessibleRepos      map[string]struct{} // lower-cased "owner/repo"
+	accessibleReposReady bool                // true once listInstallationRepos has succeeded at least once
 }
 
 // minCachedTTL is the floor TTL that Get is allowed to hand back. With a
@@ -105,15 +107,23 @@ func (s *appInstallationSource) mintLocked() (string, error) {
 
 	repos, repoErr := listInstallationRepos(s.httpClient, s.baseURL, token)
 	if repoErr != nil {
-		// Don't fail the mint — IsAccessible degrades to "let through"
-		// when the set is unset, and the worker-side fetch error
-		// surfaces the underlying scope problem regardless.
-		s.logger.Warn("installation repository list failed; cross-installation guard disabled",
-			"phase", "降級",
-			"error", repoErr,
-		)
+		// Two failure shapes; treat them differently:
+		//   * already-ready: keep the last good set, just warn — the
+		//     refresh blipped, IsAccessible stays authoritative on the
+		//     stale-but-recent data.
+		//   * never-ready: log Error so operators see the gap; cross-
+		//     installation guard remains permissive (returns true) so
+		//     dispatch can still flow against worker-side 401s.
+		level := slog.LevelWarn
+		msg := "installation repository list refresh failed; using last-known set"
+		if !s.accessibleReposReady {
+			level = slog.LevelError
+			msg = "installation repository list never populated; cross-installation guard disabled until next successful mint"
+		}
+		s.logger.Log(context.Background(), level, msg, "phase", "降級", "error", repoErr)
 	} else {
 		s.accessibleRepos = repos
+		s.accessibleReposReady = true
 		s.logger.Info("installation repository list refreshed",
 			"phase", "完成",
 			"count", len(repos),
@@ -123,13 +133,14 @@ func (s *appInstallationSource) mintLocked() (string, error) {
 }
 
 // IsAccessible reports whether the source can authenticate against
-// the given owner/repo slug. Returns true when the set is uninitialized
-// so the very first dispatch (before preflight has a chance to mint)
-// is not blocked.
+// the given owner/repo slug. Until at least one successful list-repos
+// call has run (accessibleReposReady), returns true so the very first
+// dispatch isn't reflexively blocked — that degraded mode is
+// observable in logs (Error-level on each failed refresh).
 func (s *appInstallationSource) IsAccessible(ownerRepo string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.accessibleRepos == nil {
+	if !s.accessibleReposReady {
 		return true
 	}
 	_, ok := s.accessibleRepos[strings.ToLower(ownerRepo)]
@@ -166,7 +177,7 @@ func listInstallationRepos(httpClient *http.Client, baseURL, installationToken s
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("list-repos status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+			return nil, fmt.Errorf("list-repos status=%d body=%s", resp.StatusCode, redactGitHubBody(strings.TrimSpace(string(body))))
 		}
 		var parsed installationReposResponse
 		if err := json.Unmarshal(body, &parsed); err != nil {

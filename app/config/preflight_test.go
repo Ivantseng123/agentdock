@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"log/slog"
 	"strings"
@@ -8,7 +9,20 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/githubapp"
+	"github.com/Ivantseng123/agentdock/shared/prompt"
 )
+
+// withCapturedPromptStderr swaps prompt.Stderr for a bytes.Buffer so a
+// test can assert what prompt.Warn / prompt.OK / prompt.Fail wrote.
+func withCapturedPromptStderr(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	prev := prompt.Stderr
+	buf := &bytes.Buffer{}
+	prompt.Stderr = buf
+	t.Cleanup(func() { prompt.Stderr = prev })
+	return buf
+}
+
 
 // withMockedAppPreflight swaps githubAppPreflightFn for the test and
 // restores it on cleanup. Lets each test pin App-side preflight to a
@@ -67,6 +81,48 @@ func TestPreflightGitHub_AppMissingSecretKey_AC18(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "boundary") {
 		t.Errorf("error should explain why secret_key matters (boundary); got %v", err)
+	}
+}
+
+func TestPreflightGitHub_AppJobTimeoutOver50Min_AC19EmitsWarn(t *testing.T) {
+	withMockedAppPreflight(t, func(githubapp.AppCredentials, *slog.Logger) error { return nil })
+	buf := withCapturedPromptStderr(t)
+
+	cfg := &Config{
+		GitHub: GitHubConfig{
+			App: GitHubAppConfig{AppID: 1, InstallationID: 2, PrivateKeyPath: "/k.pem"},
+		},
+		SecretKey: "deadbeef",
+		Queue:     QueueConfig{JobTimeout: 90 * time.Minute},
+	}
+	if err := preflightGitHub(cfg, false, map[string]any{}); err != nil {
+		t.Fatalf("preflightGitHub: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "50min") {
+		t.Errorf("expected warn mentioning 50min boundary; got %q", out)
+	}
+	if !strings.Contains(out, "MIGRATION-github-app.md") {
+		t.Errorf("expected warn pointing at migration doc; got %q", out)
+	}
+}
+
+func TestPreflightGitHub_AppJobTimeoutUnder50Min_NoWarn(t *testing.T) {
+	withMockedAppPreflight(t, func(githubapp.AppCredentials, *slog.Logger) error { return nil })
+	buf := withCapturedPromptStderr(t)
+
+	cfg := &Config{
+		GitHub: GitHubConfig{
+			App: GitHubAppConfig{AppID: 1, InstallationID: 2, PrivateKeyPath: "/k.pem"},
+		},
+		SecretKey: "deadbeef",
+		Queue:     QueueConfig{JobTimeout: 30 * time.Minute},
+	}
+	if err := preflightGitHub(cfg, false, map[string]any{}); err != nil {
+		t.Fatalf("preflightGitHub: %v", err)
+	}
+	if strings.Contains(buf.String(), "50min") {
+		t.Errorf("unexpected 50min warn for sub-boundary timeout: %q", buf.String())
 	}
 }
 

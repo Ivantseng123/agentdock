@@ -357,35 +357,27 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		job.Attachments = attachMeta
 		job.Skills = loadSkills(ctx, skillLoader, appLogger)
 
-		// Cross-installation guard: if the App isn't installed at the
-		// primary repo's owner, fall back to PAT for this job (warn) or
-		// fail loudly (no PAT). PAT mode's IsAccessible always returns
-		// true, so this branch is a no-op outside App mode.
-		jobSource := tokenSource
-		if !tokenSource.IsAccessible(job.Repo) {
-			if cfg.GitHub.Token == "" {
-				owner := job.Repo
-				if i := strings.Index(owner, "/"); i > 0 {
-					owner = owner[:i]
-				}
-				appLogger.Error("App not installed at owner and no PAT configured",
-					"phase", "失敗",
-					"owner", owner,
-					"repo", job.Repo,
-				)
-				_ = slackPort.PostMessage(p.ChannelID,
-					fmt.Sprintf(":x: GitHub App not installed at owner=%s; install at the org or set github.token", owner),
-					p.ThreadTS)
-				if handler != nil {
-					handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
-				}
-				return
+		// Cross-installation guard: route the job to the App source, the
+		// PAT source, or fail. dispatch.ChooseJobSource encodes the
+		// 3-branch policy so submitJob and retry_handler stay in sync.
+		jobSource, fallback, csErr := dispatch.ChooseJobSource(cfg.GitHub.Token, tokenSource, job.Repo)
+		if csErr != nil {
+			appLogger.Error("dispatch blocked: app not installed and no PAT",
+				"phase", "失敗",
+				"repo", job.Repo,
+				"error", csErr,
+			)
+			_ = slackPort.PostMessage(p.ChannelID, ":x: "+csErr.Error(), p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
 			}
+			return
+		}
+		if fallback {
 			appLogger.Warn("App not installed at owner, falling back to PAT",
 				"phase", "降級",
 				"repo", job.Repo,
 			)
-			jobSource = githubapp.NewPATSource(cfg.GitHub.Token)
 		}
 
 		// Per-job secrets: fork cfg.Secrets, MintFresh GH_TOKEN, encrypt.

@@ -54,7 +54,10 @@ func postInstallationToken(httpClient *http.Client, baseURL, jwt string, install
 	}
 
 	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	bodyExcerpt := strings.TrimSpace(string(bodyBytes))
+	// Redact: a misbehaving proxy can echo our Authorization header
+	// back into a 5xx body. Status code is enough to diagnose mint
+	// failures; the body is for context, not credentials.
+	bodyExcerpt := redactGitHubBody(strings.TrimSpace(string(bodyBytes)))
 
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:

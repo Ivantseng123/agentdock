@@ -195,6 +195,39 @@ func TestAppInstallationSource_ConcurrentGetMintFreshNoRace(t *testing.T) {
 	wg.Wait()
 }
 
+// TestAppInstallationSource_ConcurrentMintFresh_SerializedNoRace forces
+// every goroutine to actually contend on mintLocked (rather than mostly
+// hitting the cache) so the mutex is exercised under -race. All 16
+// goroutines call MintFresh, which always bypasses the cache.
+func TestAppInstallationSource_ConcurrentMintFresh_SerializedNoRace(t *testing.T) {
+	hits := &atomic.Int32{}
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	srv := httptest.NewServer(mintHandler(func() time.Time { return now }, hits))
+	defer srv.Close()
+
+	src := newTestSource(t, srv, generateTestKey(t), func() time.Time { return now })
+
+	const goroutines = 16
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			if _, err := src.MintFresh(); err != nil {
+				t.Errorf("MintFresh: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// All MintFresh calls must have actually hit the mint endpoint —
+	// proving the mutex serialized contended mintLocked rather than
+	// short-circuiting through the cache.
+	if got := hits.Load(); got != int32(goroutines) {
+		t.Errorf("hits = %d, want %d (every MintFresh must reach mint endpoint)", got, goroutines)
+	}
+}
+
 func TestStaticPATSource_IsAccessibleAlwaysTrue(t *testing.T) {
 	s := &staticPATSource{token: "p"}
 	if !s.IsAccessible("any/repo") {
@@ -292,6 +325,80 @@ func TestListInstallationRepos_NonOKReturnsError(t *testing.T) {
 	_, err := listInstallationRepos(srv.Client(), srv.URL, "tok")
 	if err == nil {
 		t.Fatal("expected error on 403")
+	}
+}
+
+func TestAppInstallationSource_ListReposFails_KeepsLastGoodSet(t *testing.T) {
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	listShouldFail := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			expires := now.Add(60 * time.Minute).UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"token":"ghs_x","expires_at":%q}`, expires)))
+			return
+		}
+		if listShouldFail {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"repositories":[{"full_name":"acme/svc"}]}`))
+	}))
+	defer srv.Close()
+
+	currentNow := now
+	src := newTestSource(t, srv, generateTestKey(t), func() time.Time { return currentNow })
+
+	// First mint: list-repos succeeds, set populated.
+	if _, err := src.Get(); err != nil {
+		t.Fatalf("first Get: %v", err)
+	}
+	if !src.IsAccessible("acme/svc") {
+		t.Error("acme/svc should be accessible after successful list")
+	}
+
+	// Force re-mint by advancing past 50min remaining.
+	currentNow = currentNow.Add(11 * time.Minute)
+	listShouldFail = true
+	if _, err := src.Get(); err != nil {
+		t.Fatalf("second Get: %v", err)
+	}
+
+	// List failed on the refresh, but the prior good set must still be authoritative.
+	if !src.IsAccessible("acme/svc") {
+		t.Error("acme/svc should remain accessible after refresh failure (last-good-set)")
+	}
+	if src.IsAccessible("other/repo") {
+		t.Error("other/repo should still NOT be accessible — set is stale, not nuked")
+	}
+}
+
+func TestAppInstallationSource_FirstListFails_DegradesPermissive(t *testing.T) {
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			expires := now.Add(60 * time.Minute).UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"token":"ghs_x","expires_at":%q}`, expires)))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	src := newTestSource(t, srv, generateTestKey(t), func() time.Time { return now })
+
+	if _, err := src.Get(); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// Never-ready: IsAccessible returns true (degraded mode), worker-side
+	// will surface 401s if the repo really isn't accessible.
+	if !src.IsAccessible("any-org/any-repo") {
+		t.Error("with never-populated set, IsAccessible should return true (degraded mode)")
 	}
 }
 

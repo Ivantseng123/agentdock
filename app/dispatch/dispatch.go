@@ -7,11 +7,37 @@ package dispatch
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Ivantseng123/agentdock/app/config"
 	"github.com/Ivantseng123/agentdock/app/githubapp"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 )
+
+// ChooseJobSource resolves the TokenSource that should mint the GH_TOKEN
+// for a given primary repo. Three branches encode the cross-installation
+// policy from spec §4.12:
+//
+//   - source covers the repo                  → return source, fallback=false
+//   - source doesn't cover it but PAT is set  → return staticPAT, fallback=true
+//   - source doesn't cover it and no PAT      → return nil, fallback=false, err
+//
+// submitJob and the retry handler both call this so retried jobs honor
+// the same routing as their original — without it, a job that succeeded
+// via PAT-fallback would be retried with the App and 401 on fetch.
+func ChooseJobSource(patToken string, source githubapp.TokenSource, repo string) (githubapp.TokenSource, bool, error) {
+	if source.IsAccessible(repo) {
+		return source, false, nil
+	}
+	owner := repo
+	if i := strings.Index(owner, "/"); i > 0 {
+		owner = owner[:i]
+	}
+	if patToken == "" {
+		return nil, false, fmt.Errorf("github app not installed at owner=%s; install at the org or set github.token", owner)
+	}
+	return githubapp.NewPATSource(patToken), true, nil
+}
 
 // buildEncryptedSecrets forks cfg.Secrets into a per-job map, overlays
 // GH_TOKEN with a fresh App installation token (or the static PAT, in

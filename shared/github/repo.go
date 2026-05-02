@@ -110,15 +110,21 @@ func newRepoCacheImpl(dir string, maxAge time.Duration, tokenFn func() (string, 
 }
 
 // currentToken resolves tokenFn into a token at call time. tokenFn errors
-// log a warning and return "" so the outer git operation surfaces a clean
-// 401 instead of a manufactured wrapper error.
+// log at Error level and return "" so the outer git operation surfaces a
+// clean 401 (private repos) instead of a manufactured wrapper error.
+//
+// Error level — not Warn — because falling through to unauthenticated
+// fetches against public mirrors silently succeeds and returns stale
+// data, which can mask token-rotation bugs for hours. Operators should
+// see this in alerts.
 func (rc *RepoCache) currentToken() string {
 	if rc.tokenFn == nil {
 		return ""
 	}
 	tok, err := rc.tokenFn()
 	if err != nil {
-		rc.logger.Warn("Token 取得失敗，將以無認證方式 fetch", "phase", "降級", "error", err)
+		rc.logger.Error("Token 取得失敗，將以無認證方式 fetch（公開 repo 可能取得過期資料）",
+			"phase", "降級", "error", err)
 		return ""
 	}
 	return tok

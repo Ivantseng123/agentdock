@@ -196,6 +196,105 @@ func TestRetryHandler_MintsFreshSecretsOnRetry(t *testing.T) {
 	}
 }
 
+type fakeAccessRetrySource struct {
+	*fakeRetrySource
+	accessible bool
+}
+
+func (f *fakeAccessRetrySource) IsAccessible(_ string) bool { return f.accessible }
+
+func TestRetryHandler_CrossInstallationFallsBackToPAT(t *testing.T) {
+	ctx := context.Background()
+	store := queue.NewMemJobStore()
+	original := &queue.Job{
+		ID:               "j1",
+		ChannelID:        "C1",
+		ThreadTS:         "T1",
+		Repo:             "outside-org/repo",
+		EncryptedSecrets: []byte("stale"),
+	}
+	store.Put(ctx, original)
+	store.UpdateStatus(ctx, "j1", queue.JobFailed)
+
+	q := &mockJobQueue{}
+	slackMock := &mockSlackPoster{}
+	// Repo is OUTSIDE the App's accessible set.
+	src := &fakeAccessRetrySource{
+		fakeRetrySource: &fakeRetrySource{token: "ghs_app"},
+		accessible:      false,
+	}
+	cfg := &config.Config{
+		GitHub:  config.GitHubConfig{Token: "ghp_pat_for_outside"},
+		Secrets: map[string]string{},
+	}
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	handler := NewRetryHandler(store, q, slackMock, slog.Default(), cfg, src, key)
+	handler.Handle("C1", "j1", "msg-ts-1")
+
+	if len(q.submitted) != 1 {
+		t.Fatalf("expected 1 submit, got %d", len(q.submitted))
+	}
+	// MintFresh should NOT have been called on the App source — fallback uses PAT.
+	if calls := src.mintCalls.Load(); calls != 0 {
+		t.Errorf("App source MintFresh = %d, want 0 (fallback to PAT)", calls)
+	}
+
+	// Decrypt and verify GH_TOKEN is the PAT, not the App token.
+	plain, err := crypto.Decrypt(key, q.submitted[0].EncryptedSecrets)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	var got map[string]string
+	_ = json.Unmarshal(plain, &got)
+	if got["GH_TOKEN"] != "ghp_pat_for_outside" {
+		t.Errorf("retry GH_TOKEN = %q, want ghp_pat_for_outside (PAT fallback)", got["GH_TOKEN"])
+	}
+}
+
+func TestRetryHandler_CrossInstallationNoPATFails(t *testing.T) {
+	ctx := context.Background()
+	store := queue.NewMemJobStore()
+	original := &queue.Job{
+		ID:        "j1",
+		ChannelID: "C1",
+		ThreadTS:  "T1",
+		Repo:      "outside-org/repo",
+	}
+	store.Put(ctx, original)
+	store.UpdateStatus(ctx, "j1", queue.JobFailed)
+
+	q := &mockJobQueue{}
+	slackMock := &mockSlackPoster{}
+	src := &fakeAccessRetrySource{
+		fakeRetrySource: &fakeRetrySource{token: "ghs_app"},
+		accessible:      false,
+	}
+	cfg := &config.Config{Secrets: map[string]string{}} // no PAT
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	handler := NewRetryHandler(store, q, slackMock, slog.Default(), cfg, src, key)
+	handler.Handle("C1", "j1", "msg-ts-1")
+
+	if len(q.submitted) != 0 {
+		t.Errorf("expected no submit when App not installed and no PAT; got %d", len(q.submitted))
+	}
+	slackMock.mu.Lock()
+	defer slackMock.mu.Unlock()
+	foundFailMsg := false
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "重試失敗") && strings.Contains(msg, "outside-org") {
+			foundFailMsg = true
+			break
+		}
+	}
+	if !foundFailMsg {
+		t.Errorf("expected '重試失敗' slack message naming the owner; got %v", slackMock.messages)
+	}
+}
+
 func TestRetryHandler_MintFailureBlocksSubmit(t *testing.T) {
 	ctx := context.Background()
 	store := queue.NewMemJobStore()

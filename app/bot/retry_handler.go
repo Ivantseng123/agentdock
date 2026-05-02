@@ -69,12 +69,22 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 	h.slack.UpdateMessage(channelID, msgTS, ":arrows_counterclockwise: 已重新排入佇列")
 
 	// Mint a fresh per-job secrets bundle so the retry doesn't ride on
-	// a 50min+ stale token from the original. PAT mode reuses the
-	// static token (byte-equivalent to copying original.EncryptedSecrets);
-	// App mode pulls a fresh installation token close to full TTL.
+	// a 50min+ stale token from the original. ChooseJobSource ensures
+	// that if the original job took the PAT-fallback branch (App not
+	// installed at the owner), the retry takes the same branch — without
+	// this, a retry would mint with the App and 401 on fetch.
 	encryptedSecrets := original.EncryptedSecrets
 	if h.source != nil && h.cfg != nil && len(h.secretKey) > 0 {
-		fresh, encErr := dispatch.BuildEncryptedSecrets(h.cfg, h.source, h.secretKey)
+		jobSource, fallback, csErr := dispatch.ChooseJobSource(h.cfg.GitHub.Token, h.source, original.Repo)
+		if csErr != nil {
+			h.logger.Error("重試：dispatch 拒絕（App 未涵蓋 + 無 PAT）", "phase", "重試", "job_id", original.ID, "error", csErr)
+			h.slack.PostMessage(channelID, ":x: 重試失敗: "+csErr.Error(), original.ThreadTS)
+			return
+		}
+		if fallback {
+			h.logger.Warn("重試：App 未涵蓋 owner，改用 PAT", "phase", "降級", "repo", original.Repo)
+		}
+		fresh, encErr := dispatch.BuildEncryptedSecrets(h.cfg, jobSource, h.secretKey)
 		if encErr != nil {
 			h.logger.Error("重試：secrets 重新加密失敗", "phase", "重試", "job_id", original.ID, "error", encErr)
 			h.slack.PostMessage(channelID, ":x: 重試失敗: "+encErr.Error(), original.ThreadTS)

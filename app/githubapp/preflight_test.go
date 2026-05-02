@@ -185,6 +185,22 @@ func TestPreflightApp_Mint5xxThenSuccess_RetryWorks(t *testing.T) {
 	}
 }
 
+// TestPreflightRetryDelays_MatchesSpec pins the retry schedule from
+// spec §7. Other preflight tests override preflightRetryDelays via
+// fastDelays() to keep the suite under a second; without this pin a
+// typo in the production schedule would slip through unnoticed.
+func TestPreflightRetryDelays_MatchesSpec(t *testing.T) {
+	want := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
+	if len(preflightRetryDelays) != len(want) {
+		t.Fatalf("preflightRetryDelays has %d entries, want %d (spec §7)", len(preflightRetryDelays), len(want))
+	}
+	for i, d := range want {
+		if preflightRetryDelays[i] != d {
+			t.Errorf("preflightRetryDelays[%d] = %v, want %v", i, preflightRetryDelays[i], d)
+		}
+	}
+}
+
 func TestPermissionSatisfies(t *testing.T) {
 	cases := []struct {
 		actual, required string
