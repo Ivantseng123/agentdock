@@ -132,7 +132,7 @@ func TestRepoCache_BareCloneAndWorktree(t *testing.T) {
 
 	// AddWorktree should create a working directory.
 	wtPath := filepath.Join(t.TempDir(), "wt1")
-	if err := cache.AddWorktree(barePath, "", wtPath); err != nil {
+	if err := cache.AddWorktree(barePath, "", wtPath, ""); err != nil {
 		t.Fatalf("AddWorktree failed: %v", err)
 	}
 
@@ -184,11 +184,11 @@ func TestRepoCache_AddWorktree_SameBranchTwice(t *testing.T) {
 	branch := strings.TrimSpace(string(out))
 
 	wt1 := filepath.Join(t.TempDir(), "wt1")
-	if err := cache.AddWorktree(barePath, branch, wt1); err != nil {
+	if err := cache.AddWorktree(barePath, branch, wt1, ""); err != nil {
 		t.Fatalf("first AddWorktree(%q) failed: %v", branch, err)
 	}
 	wt2 := filepath.Join(t.TempDir(), "wt2")
-	if err := cache.AddWorktree(barePath, branch, wt2); err != nil {
+	if err := cache.AddWorktree(barePath, branch, wt2, ""); err != nil {
 		t.Fatalf("second AddWorktree(%q) failed: %v", branch, err)
 	}
 }
@@ -218,7 +218,7 @@ func TestRepoCache_AddWorktree_PrunesStaleAdminRecord(t *testing.T) {
 	// Simulate a crashed worker: create worktree, then rm working dir but
 	// leave the admin record at <bare>/worktrees/NAME behind.
 	doomed := filepath.Join(t.TempDir(), "doomed")
-	if err := cache.AddWorktree(barePath, "", doomed); err != nil {
+	if err := cache.AddWorktree(barePath, "", doomed, ""); err != nil {
 		t.Fatalf("AddWorktree(doomed) failed: %v", err)
 	}
 	if err := os.RemoveAll(doomed); err != nil {
@@ -230,7 +230,7 @@ func TestRepoCache_AddWorktree_PrunesStaleAdminRecord(t *testing.T) {
 	}
 
 	fresh := filepath.Join(t.TempDir(), "fresh")
-	if err := cache.AddWorktree(barePath, "", fresh); err != nil {
+	if err := cache.AddWorktree(barePath, "", fresh, ""); err != nil {
 		t.Fatalf("AddWorktree(fresh) after stale admin: %v", err)
 	}
 }
@@ -286,7 +286,7 @@ func TestRepoCache_AddWorktree_RetriesAfterFetchOnUnknownRef(t *testing.T) {
 
 	// AddWorktree by SHA should fetch-retry and succeed.
 	wt := filepath.Join(t.TempDir(), "wt")
-	if err := cache.AddWorktree(barePath, featureSHA, wt); err != nil {
+	if err := cache.AddWorktree(barePath, featureSHA, wt, ""); err != nil {
 		t.Fatalf("AddWorktree(%s) failed: %v", featureSHA, err)
 	}
 
@@ -328,7 +328,7 @@ func TestRepoCache_AddWorktree_PropagatesErrorWhenFetchAlsoFails(t *testing.T) {
 
 	bogusSHA := "deadbeef00000000000000000000000000000beef"
 	wt := filepath.Join(t.TempDir(), "wt")
-	err = cache.AddWorktree(barePath, bogusSHA, wt)
+	err = cache.AddWorktree(barePath, bogusSHA, wt, "")
 	if err == nil {
 		t.Fatal("expected error when ref is unknown to both cache and remote, got nil")
 	}
@@ -554,6 +554,74 @@ func TestRepoCache_EnsureRepo_HealsLegacyTokenInConfig(t *testing.T) {
 	}
 	if strings.Contains(string(cfg), "ghp_legacy_token") {
 		t.Errorf("legacy token still present after heal:\n%s", cfg)
+	}
+}
+
+// TestRepoCache_EnsureRepo_HealsRotatedInstallationTokenInConfig verifies that
+// when tokenFn returns a different token on each call (the App-mode
+// rotation pattern), .git/config never accumulates any of those tokens.
+// Each EnsureRepo cycle either keeps the URL credential-free (env-based
+// auth) or heals a poisoned URL back to the clean form before the next
+// fetch.
+func TestRepoCache_EnsureRepo_HealsRotatedInstallationTokenInConfig(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	sourceDir := t.TempDir()
+	run(t, sourceDir, "git", "init", "--bare")
+	workDir := t.TempDir()
+	run(t, workDir, "git", "clone", sourceDir, ".")
+	os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main"), 0644)
+	run(t, workDir, "git", "add", ".")
+	run(t, workDir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init")
+	run(t, workDir, "git", "push")
+
+	tokens := []string{"ghs_install_t1", "ghs_install_t2", "ghs_install_t3"}
+	idx := 0
+	tokenFn := func() (string, error) {
+		tok := tokens[idx]
+		if idx < len(tokens)-1 {
+			idx++
+		}
+		return tok, nil
+	}
+
+	cacheDir := t.TempDir()
+	cache := NewRepoCacheWithTokenFn(cacheDir, 0, tokenFn, slog.Default())
+
+	// First EnsureRepo: cold clone with t1.
+	barePath, err := cache.EnsureRepo("file://"+sourceDir, "")
+	if err != nil {
+		t.Fatalf("first EnsureRepo: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(barePath, "config"))
+	for _, tok := range tokens {
+		if strings.Contains(string(cfg), tok) {
+			t.Errorf("after first EnsureRepo, config contains token %q:\n%s", tok, cfg)
+		}
+	}
+
+	// Poison the config with t1 (simulating a pre-#179 binary write).
+	poisoned := "https://" + tokens[0] + "@github.com/owner/repo.git"
+	run(t, barePath, "git", "remote", "set-url", "origin", poisoned)
+	cfg, _ = os.ReadFile(filepath.Join(barePath, "config"))
+	if !strings.Contains(string(cfg), tokens[0]) {
+		t.Fatalf("test setup: token not embedded after poison")
+	}
+
+	// Second EnsureRepo: tokenFn now returns t2 (or later). Heal should run
+	// before fetch and rewrite back to the clean file:// URL, regardless of
+	// which rotation slot tokenFn lands on.
+	_, _ = cache.EnsureRepo("file://"+sourceDir, "")
+	cfg, err = os.ReadFile(filepath.Join(barePath, "config"))
+	if err != nil {
+		t.Fatalf("read config after rotation heal: %v", err)
+	}
+	for _, tok := range tokens {
+		if strings.Contains(string(cfg), tok) {
+			t.Errorf("after rotation heal, config still contains token %q:\n%s", tok, cfg)
+		}
 	}
 }
 

@@ -5,6 +5,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/app/dispatch"
+	"github.com/Ivantseng123/agentdock/app/githubapp"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
@@ -16,14 +19,31 @@ type JobSubmitter interface {
 }
 
 type RetryHandler struct {
-	store  queue.JobStore
-	queue  JobSubmitter
-	slack  SlackPoster
-	logger *slog.Logger
+	store     queue.JobStore
+	queue     JobSubmitter
+	slack     SlackPoster
+	logger    *slog.Logger
+	cfg       *config.Config
+	source    githubapp.TokenSource
+	secretKey []byte
 }
 
-func NewRetryHandler(store queue.JobStore, q JobSubmitter, slack SlackPoster, logger *slog.Logger) *RetryHandler {
-	return &RetryHandler{store: store, queue: q, slack: slack, logger: logger}
+// NewRetryHandler builds a RetryHandler. cfg, source, and secretKey
+// drive per-retry MintFresh + encrypt so retry jobs don't reuse a
+// stale 50min+ EncryptedSecrets bundle from the original. Pass nil
+// source / empty secretKey to fall back to legacy behavior (reuse
+// original.EncryptedSecrets) — useful for tests that don't exercise
+// secrets.
+func NewRetryHandler(store queue.JobStore, q JobSubmitter, slack SlackPoster, logger *slog.Logger, cfg *config.Config, source githubapp.TokenSource, secretKey []byte) *RetryHandler {
+	return &RetryHandler{
+		store:     store,
+		queue:     q,
+		slack:     slack,
+		logger:    logger,
+		cfg:       cfg,
+		source:    source,
+		secretKey: secretKey,
+	}
 }
 
 func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
@@ -48,6 +68,31 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 	// Update old message to indicate retry is queued.
 	h.slack.UpdateMessage(channelID, msgTS, ":arrows_counterclockwise: 已重新排入佇列")
 
+	// Mint a fresh per-job secrets bundle so the retry doesn't ride on
+	// a 50min+ stale token from the original. ChooseJobSource ensures
+	// that if the original job took the PAT-fallback branch (App not
+	// installed at the owner), the retry takes the same branch — without
+	// this, a retry would mint with the App and 401 on fetch.
+	encryptedSecrets := original.EncryptedSecrets
+	if h.source != nil && h.cfg != nil && len(h.secretKey) > 0 {
+		jobSource, fallback, csErr := dispatch.ChooseJobSource(h.cfg.GitHub.Token, h.source, original.Repo)
+		if csErr != nil {
+			h.logger.Error("重試：dispatch 拒絕（App 未涵蓋 + 無 PAT）", "phase", "重試", "job_id", original.ID, "error", csErr)
+			h.slack.PostMessage(channelID, ":x: 重試失敗: "+csErr.Error(), original.ThreadTS)
+			return
+		}
+		if fallback {
+			h.logger.Warn("重試：App 未涵蓋 owner，改用 PAT", "phase", "降級", "repo", original.Repo)
+		}
+		fresh, encErr := dispatch.BuildEncryptedSecrets(h.cfg, jobSource, h.secretKey)
+		if encErr != nil {
+			h.logger.Error("重試：secrets 重新加密失敗", "phase", "重試", "job_id", original.ID, "error", encErr)
+			h.slack.PostMessage(channelID, ":x: 重試失敗: "+encErr.Error(), original.ThreadTS)
+			return
+		}
+		encryptedSecrets = fresh
+	}
+
 	// Create new job copying relevant fields.
 	newJob := &queue.Job{
 		ID:               logging.NewRequestID(),
@@ -65,7 +110,7 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 		RetryCount:       original.RetryCount + 1,
 		RetryOfJobID:     original.ID,
 		SubmittedAt:      time.Now(),
-		EncryptedSecrets: original.EncryptedSecrets,
+		EncryptedSecrets: encryptedSecrets,
 	}
 
 	// Put in store before posting button (so cancel_job can find it).

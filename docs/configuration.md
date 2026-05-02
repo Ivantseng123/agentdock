@@ -7,7 +7,11 @@ AgentDock v2 的 config 拆成兩個檔案：
 - [App 設定（configuration-app.md）](configuration-app.md) — Slack bot、channels、rate limit、Mantis、prompt 指示
 - [Worker 設定（configuration-worker.md）](configuration-worker.md) — agents、providers、worker count、repo cache
 
-如果你從 v1 升級，請看 [MIGRATION-v2.md](MIGRATION-v2.md)。
+外部系統設定步驟：
+- [Slack App 設定](slack-setup.md) — 建 Slack App、scopes、socket mode
+- [GitHub App 設定](github-app-setup.md) — 建 GitHub App、permissions、private key（PAT 也可）
+
+如果你從 v1 升級，請看 [MIGRATION-v2.md](MIGRATION-v2.md)。從 PAT 切換到 GitHub App 請看 [MIGRATION-github-app.md](MIGRATION-github-app.md)。
 
 ## 快速開始
 

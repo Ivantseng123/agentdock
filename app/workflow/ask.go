@@ -345,11 +345,11 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 	if len(channelCfg.Branches) > 0 {
 		branches = channelCfg.Branches
 	} else if w.repoCache != nil {
-		ghToken := ""
-		if w.cfg.Secrets != nil {
-			ghToken = w.cfg.Secrets["GH_TOKEN"]
-		}
-		if repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, ghToken); err == nil {
+		// Empty token → RepoCache falls through to its tokenFn (PAT mode:
+		// staticPATSource.Get; App mode: appInstallationSource.Get).
+		// Reading cfg.Secrets here would risk a stale dispatch-time token
+		// in App mode (issue #212).
+		if repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, ""); err == nil {
 			if lb, listErr := w.repoCache.ListBranches(repoPath); listErr == nil {
 				branches = lb
 			}
@@ -575,11 +575,8 @@ func (w *AskWorkflow) nextRefBranchStep(p *Pending) NextStep {
 	if len(cc.Branches) > 0 {
 		branches = cc.Branches
 	} else if w.repoCache != nil {
-		ghToken := ""
-		if w.cfg.Secrets != nil {
-			ghToken = w.cfg.Secrets["GH_TOKEN"]
-		}
-		if rp, err := w.repoCache.EnsureRepo(target, ghToken); err == nil {
+		// See note above on EnsureRepo(..., "") + tokenFn fallback.
+		if rp, err := w.repoCache.EnsureRepo(target, ""); err == nil {
 			if lb, lerr := w.repoCache.ListBranches(rp); lerr == nil {
 				branches = lb
 			}

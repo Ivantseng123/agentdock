@@ -4,7 +4,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,8 @@ import (
 
 	"github.com/Ivantseng123/agentdock/app/bot"
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/app/dispatch"
+	"github.com/Ivantseng123/agentdock/app/githubapp"
 	"github.com/Ivantseng123/agentdock/app/skill"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/app/workflow"
@@ -68,15 +69,25 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
+	githubAppLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHubApp)
 	slackLogger := logging.ComponentLogger(slog.Default(), logging.CompSlack)
 	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
 	agentLogger := logging.ComponentLogger(slog.Default(), logging.CompAgent)
 
+	tokenSource, err := githubapp.NewFromConfig(cfg.GitHub.Token, githubapp.AppCredentials{
+		AppID:          cfg.GitHub.App.AppID,
+		InstallationID: cfg.GitHub.App.InstallationID,
+		PrivateKeyPath: cfg.GitHub.App.PrivateKeyPath,
+	}, githubAppLogger)
+	if err != nil {
+		return nil, fmt.Errorf("init github auth: %w", err)
+	}
+
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken, slackLogger)
 
-	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
-	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token, githubLogger)
+	repoCache := ghclient.NewRepoCacheWithTokenFn(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, tokenSource.Get, githubLogger)
+	repoDiscovery := ghclient.NewRepoDiscovery(tokenSource.Get, githubLogger)
 
 	if cfg.AutoBind {
 		go func() {
@@ -192,8 +203,8 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}
 	}
 
-	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
-	githubClient := ghclient.NewClient(cfg.GitHub.Token)
+	issueClient := ghclient.NewIssueClient(tokenSource.Get, githubLogger)
+	githubClient := ghclient.NewClient(tokenSource.Get)
 
 	// Build workflow registry + dispatcher. The slack adapter owns the bot
 	// identity so FetchThreadContext always drops our own posts regardless of
@@ -346,19 +357,37 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		job.Attachments = attachMeta
 		job.Skills = loadSkills(ctx, skillLoader, appLogger)
 
-		// Encrypt secrets if configured.
-		if len(secretKey) > 0 && len(cfg.Secrets) > 0 {
-			secretsJSON, mErr := json.Marshal(cfg.Secrets)
-			if mErr != nil {
-				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to marshal secrets: %v", mErr), p.ThreadTS)
-				if handler != nil {
-					handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
-				}
-				return
+		// Cross-installation guard: route the job to the App source, the
+		// PAT source, or fail. dispatch.ChooseJobSource encodes the
+		// 3-branch policy so submitJob and retry_handler stay in sync.
+		jobSource, fallback, csErr := dispatch.ChooseJobSource(cfg.GitHub.Token, tokenSource, job.Repo)
+		if csErr != nil {
+			appLogger.Error("dispatch blocked: app not installed and no PAT",
+				"phase", "失敗",
+				"repo", job.Repo,
+				"error", csErr,
+			)
+			_ = slackPort.PostMessage(p.ChannelID, ":x: "+csErr.Error(), p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
 			}
-			encrypted, eErr := crypto.Encrypt(secretKey, secretsJSON)
+			return
+		}
+		if fallback {
+			appLogger.Warn("App not installed at owner, falling back to PAT",
+				"phase", "降級",
+				"repo", job.Repo,
+			)
+		}
+
+		// Per-job secrets: fork cfg.Secrets, MintFresh GH_TOKEN, encrypt.
+		// In PAT mode this is byte-for-byte equivalent to the legacy
+		// inline marshal/encrypt path; in App mode it ensures the worker
+		// receives a token close to the full 60min TTL.
+		if len(secretKey) > 0 {
+			encrypted, eErr := dispatch.BuildEncryptedSecrets(cfg, jobSource, secretKey)
 			if eErr != nil {
-				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to encrypt secrets: %v", eErr), p.ThreadTS)
+				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to prepare secrets: %v", eErr), p.ThreadTS)
 				if handler != nil {
 					handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
 				}
@@ -442,7 +471,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		}, agentLogger)
 	go resultListener.Listen(context.Background())
 
-	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger)
+	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger, cfg, tokenSource, secretKey)
 
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore, slackClient, queueLogger)
 	go statusListener.Listen(context.Background())

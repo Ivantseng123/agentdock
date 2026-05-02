@@ -19,6 +19,7 @@ func clearAppEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
 		"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "GITHUB_TOKEN",
+		"GITHUB_APP_APP_ID", "GITHUB_APP_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY_PATH",
 		"MANTIS_API_TOKEN", "REDIS_ADDR", "REDIS_PASSWORD", "SECRET_KEY",
 	} {
 		t.Setenv(k, "")

@@ -17,18 +17,21 @@ import (
 // Extend this by adding endpoint-specific methods in sibling files; keep
 // IssueClient for go-github-backed issue flows.
 type Client struct {
-	token string
-	http  *http.Client
+	http *http.Client
 }
 
-// NewClient builds a Client. token is the GitHub PAT used for Authorization;
-// pass an empty string for unauthenticated requests (rate-limited). Uses a
-// dedicated http.Client with a 10s timeout — never share http.DefaultClient
-// because callers mutating its Timeout would affect unrelated packages.
-func NewClient(token string) *Client {
+// NewClient builds a Client. tokenFn is invoked per outbound request via
+// tokenTransport so the client keeps up with installation-token rotation
+// without rebuilding. Pass a tokenFn that returns "" for unauthenticated
+// requests (rate-limited). Uses a dedicated http.Client with a 10s timeout —
+// never share http.DefaultClient because callers mutating its Timeout would
+// affect unrelated packages.
+func NewClient(tokenFn func() (string, error)) *Client {
 	return &Client{
-		token: token,
-		http:  &http.Client{Timeout: 10 * time.Second},
+		http: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: newTokenTransport(tokenFn, nil),
+		},
 	}
 }
 
@@ -43,9 +46,6 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
