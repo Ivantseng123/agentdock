@@ -1,5 +1,32 @@
 # Changelog
 
+## [3.6.0](https://github.com/Ivantseng123/agentdock/compare/v3.5.0...v3.6.0) (2026-05-04)
+
+
+### Features
+
+* **app/bot,app/dispatch:** mint fresh secrets on retry, not stale reuse ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([69e9c8f](https://github.com/Ivantseng123/agentdock/commit/69e9c8f015e26fd341ed6305e3a7682e8c3d8369))
+* **app/config,app/githubapp:** add GitHub App preflight at startup ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([f45b62d](https://github.com/Ivantseng123/agentdock/commit/f45b62d40a5fb62fa37db688a577c9ba9b3bd542))
+* **app/config,shared/logging:** add GitHub App config schema ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([a3df74c](https://github.com/Ivantseng123/agentdock/commit/a3df74c8a6b2bc635b54fb6d706f926e71201762))
+* **app/githubapp,app:** cross-installation guard at dispatch time ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([98ca248](https://github.com/Ivantseng123/agentdock/commit/98ca2486ed37bf58b396372b8bb72c9db8bacde9))
+* **app/githubapp:** add JWT signing and installation-token mint client ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([51abb03](https://github.com/Ivantseng123/agentdock/commit/51abb035c1c3791b551dec406a4c999e43756866))
+* **app/githubapp:** add NewFromConfig dispatcher ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([307e3d4](https://github.com/Ivantseng123/agentdock/commit/307e3d4536aae177334845aa8bf4de2c338e9d49))
+* **app/githubapp:** add TokenSource with cached App-installation mints ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([d290347](https://github.com/Ivantseng123/agentdock/commit/d290347b0d34bfa5c88aa93da7d08cc532c83d94))
+* **app/workflow:** drop cfg.Secrets[GH_TOKEN] reads in branch picker ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([69c8d17](https://github.com/Ivantseng123/agentdock/commit/69c8d17eeee90c62c128f6c29d76c01d9d1bd5b8))
+* **app:** mint per-job GH_TOKEN at dispatch via TokenSource ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([4a1573e](https://github.com/Ivantseng123/agentdock/commit/4a1573e253d6752dcb2cbb717e433857329f68fe))
+* **cmd/agentdock:** add migration-doc hint to init PAT prompt ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([5b473f6](https://github.com/Ivantseng123/agentdock/commit/5b473f6c348c07951f08fa1b41d40435af28c15d))
+* GitHub App auth (single installation, coexists with PAT) ([b4bca1e](https://github.com/Ivantseng123/agentdock/commit/b4bca1e0f0c48549f0880576dfbcf95ac990c342))
+* **shared/github,app:** add RepoCache tokenFn variant for rotated tokens ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([a3e7252](https://github.com/Ivantseng123/agentdock/commit/a3e7252d6efccc125982b37934a58f138a3f275a))
+* **shared/github,app:** switch app-side gh clients to tokenFn ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([4302356](https://github.com/Ivantseng123/agentdock/commit/4302356944e78808e3200735678c6148332182bc))
+* **shared/github,worker/pool:** plumb per-call token through worktree ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([167552c](https://github.com/Ivantseng123/agentdock/commit/167552c84710dc706e69b30c9f05a560d87fff20))
+* **shared/github:** add tokenTransport for per-request bearer rotation ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([3c5c67c](https://github.com/Ivantseng123/agentdock/commit/3c5c67c391b97f26e2c0e79b6615caaea7e17400))
+
+
+### Bug Fixes
+
+* **app/githubapp:** use time.Now() in JWT round-trip test ([#212](https://github.com/Ivantseng123/agentdock/issues/212)) ([de41d38](https://github.com/Ivantseng123/agentdock/commit/de41d38c04519b9dab7990c43a8c07566183e87e))
+* **github:** route app discovery through installation repos ([df0a7ef](https://github.com/Ivantseng123/agentdock/commit/df0a7efdda1587aaf993fd3b24b09350d3430e99))
+
 ## [3.5.0](https://github.com/Ivantseng123/agentdock/compare/v3.4.0...v3.5.0) (2026-05-01)
 
 
