@@ -213,9 +213,9 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	// identity so FetchThreadContext always drops our own posts regardless of
 	// which workflow fires it.
 	slackPort := &slackAdapterPort{client: slackClient, logger: slackLogger, identity: identity}
-	issueWorkflow := workflow.NewIssueWorkflow(cfg, slackPort, issueClient, repoCache, repoDiscovery, agentLogger)
-	askWorkflow := workflow.NewAskWorkflow(cfg, slackPort, repoCache, agentLogger)
-	prReviewWorkflow := workflow.NewPRReviewWorkflow(cfg, slackPort, githubClient, repoCache, agentLogger)
+	issueWorkflow := workflow.NewIssueWorkflow(cfg, tokenSource, slackPort, issueClient, repoCache, repoDiscovery, agentLogger)
+	askWorkflow := workflow.NewAskWorkflow(cfg, tokenSource, slackPort, repoCache, agentLogger)
+	prReviewWorkflow := workflow.NewPRReviewWorkflow(cfg, tokenSource, slackPort, githubClient, repoCache, agentLogger)
 	reg := workflow.NewRegistry()
 	reg.Register(issueWorkflow)
 	reg.Register(askWorkflow)

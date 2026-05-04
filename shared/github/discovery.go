@@ -35,7 +35,7 @@ type RepoDiscovery struct {
 // outbound request via tokenTransport so the underlying gh.Client can
 // keep up with installation-token rotation without rebuilding.
 func NewRepoDiscovery(tokenFn func() (string, error), logger *slog.Logger) *RepoDiscovery {
-	httpClient := &http.Client{Transport: newTokenTransport(tokenFn, nil)}
+	httpClient := NewHTTPClientWithTokenFn(tokenFn, ProfileBackground)
 	return &RepoDiscovery{
 		client: gh.NewClient(httpClient),
 		ttl:    5 * time.Minute,
@@ -52,7 +52,7 @@ func NewInstallationRepoDiscovery(tokenFn func() (string, error), logger *slog.L
 
 func newInstallationRepoDiscoveryWithBaseURL(tokenFn func() (string, error), logger *slog.Logger, baseURL string) *RepoDiscovery {
 	return &RepoDiscovery{
-		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		httpClient:   NewHTTPClient(ProfileBackground),
 		tokenFn:      tokenFn,
 		baseURL:      strings.TrimRight(baseURL, "/"),
 		installation: true,

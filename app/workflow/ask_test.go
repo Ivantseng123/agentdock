@@ -45,7 +45,7 @@ func newTestAskWorkflow(t *testing.T) (*AskWorkflow, *fakeSlackPort) {
 	cfg := &config.Config{}
 	config.ApplyDefaults(cfg)
 	slack := newFakeSlackPort()
-	return NewAskWorkflow(cfg, slack, nil, slog.Default()), slack
+	return NewAskWorkflow(cfg, nil, slack, nil, slog.Default()), slack
 }
 
 func TestAskWorkflow_Selection_SkipRoutesToDescriptionPrompt(t *testing.T) {

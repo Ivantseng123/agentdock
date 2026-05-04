@@ -283,11 +283,12 @@ func createReview(ctx context.Context, apiBase, prURL, token string, payload *Cr
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(bodyBytes)), nil
-	}
 
-	resp, err := httpCallWithRetry(ctx, req, maxWallTime)
+	// Creating a review is a non-idempotent write. If GitHub accepts the first
+	// POST but the response is lost or times out locally, retrying would create
+	// a duplicate review with the same summary and inline comments.
+	client := &http.Client{Timeout: minDuration(10 * time.Second, maxWallTime)}
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
 	}

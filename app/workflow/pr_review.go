@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/app/githubapp"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
@@ -22,8 +24,10 @@ import (
 //   - D-path modal: scan miss → open modal asking for URL.
 type PRReviewWorkflow struct {
 	cfg       *config.Config
+	source    githubapp.TokenSource
 	slack     SlackPort
 	github    GitHubPR
+	newGitHub func(func() (string, error)) GitHubPR
 	repoCache *ghclient.RepoCache
 	logger    *slog.Logger
 }
@@ -45,11 +49,19 @@ type prReviewState struct {
 
 // NewPRReviewWorkflow constructs a workflow instance. cfg/slack/logger are
 // required; github and repoCache may be nil (tests / degraded env).
-func NewPRReviewWorkflow(cfg *config.Config, slack SlackPort, gh GitHubPR, repoCache *ghclient.RepoCache, logger *slog.Logger) *PRReviewWorkflow {
+func NewPRReviewWorkflow(cfg *config.Config, source githubapp.TokenSource, slack SlackPort, gh GitHubPR, repoCache *ghclient.RepoCache, logger *slog.Logger) *PRReviewWorkflow {
 	if cfg == nil || slack == nil || logger == nil {
 		panic("workflow: NewPRReviewWorkflow missing required dep")
 	}
-	return &PRReviewWorkflow{cfg: cfg, slack: slack, github: gh, repoCache: repoCache, logger: logger}
+	return &PRReviewWorkflow{
+		cfg:       cfg,
+		source:    source,
+		slack:     slack,
+		github:    gh,
+		newGitHub: func(tokenFn func() (string, error)) GitHubPR { return ghclient.NewClient(tokenFn) },
+		repoCache: repoCache,
+		logger:    logger,
+	}
 }
 
 // Type returns the TaskType discriminator.
@@ -146,11 +158,32 @@ func (w *PRReviewWorkflow) validateAndBuild(ctx context.Context, ev TriggerEvent
 		return NextStep{Kind: NextStepError, ErrorText: "請貼完整 PR URL"}, nil
 	}
 
-	if w.github == nil {
+	client := w.github
+	authSource := ""
+	if w.source != nil {
+		choice, authErr := chooseRepoAuth(parts.Owner+"/"+parts.Repo, w.cfg.GitHub.Token, w.source)
+		if authErr != nil {
+			return NextStep{Kind: NextStepError, ErrorText: repoAccessError(parts.Owner + "/" + parts.Repo)}, nil
+		}
+		authSource = choice.authSource
+		if w.newGitHub != nil {
+			client = w.newGitHub(choice.source.Get)
+		}
+	}
+
+	if client == nil {
 		return NextStep{Kind: NextStepError, ErrorText: "GitHub client not configured"}, nil
 	}
 
-	pr, err := w.github.GetPullRequest(ctx, parts.Owner, parts.Repo, parts.Number)
+	if authSource != "" {
+		w.logger.Info("pr review validation auth selected",
+			"phase", "validation",
+			"repo", parts.Owner+"/"+parts.Repo,
+			"auth_source", authSource,
+		)
+	}
+
+	pr, err := client.GetPullRequest(ctx, parts.Owner, parts.Repo, parts.Number)
 	if err != nil {
 		msg := mapGitHubErrorToSlack(err)
 		return NextStep{Kind: NextStepError, ErrorText: msg}, nil
@@ -188,13 +221,17 @@ func (w *PRReviewWorkflow) validateAndBuild(ctx context.Context, ev TriggerEvent
 // check would misclassify a 500 whose body happens to contain "404". Network
 // errors (dial/timeout) stay on Contains since they have no structured prefix.
 func mapGitHubErrorToSlack(err error) string {
+	if errors.Is(err, ghclient.ErrGitHubUnavailable) {
+		return "GitHub 不可達，請稍後重試"
+	}
 	msg := err.Error()
+	msgLower := strings.ToLower(msg)
 	switch {
 	case strings.HasPrefix(msg, "404"):
 		return "找不到 PR"
 	case strings.HasPrefix(msg, "403"):
 		return "沒權限存取 PR"
-	case strings.Contains(msg, "dial"), strings.Contains(msg, "timeout"):
+	case strings.Contains(msgLower, "dial"), strings.Contains(msgLower, "timeout"), strings.Contains(msgLower, "deadline exceeded"):
 		return "GitHub 不可達，請稍後重試"
 	default:
 		return "GitHub API 錯誤: " + msg
@@ -249,6 +286,11 @@ func (w *PRReviewWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job
 
 	if st.HeadRepo == "" {
 		return nil, "", fmt.Errorf("empty repo reference")
+	}
+	if w.source != nil {
+		if _, err := chooseRepoAuth(st.HeadRepo, w.cfg.GitHub.Token, w.source); err != nil {
+			return nil, "", headRepoAccessError(st.HeadRepo)
+		}
 	}
 
 	reqID := p.RequestID
