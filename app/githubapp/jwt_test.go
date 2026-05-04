@@ -20,7 +20,7 @@ func generateTestKey(t *testing.T) *rsa.PrivateKey {
 
 func TestSignJWT_RoundTripWithSameKey(t *testing.T) {
 	key := generateTestKey(t)
-	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	now := time.Now()
 
 	tokenStr, err := signJWT(key, 123456, now)
 	if err != nil {
