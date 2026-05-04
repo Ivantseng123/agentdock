@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.6.1](https://github.com/Ivantseng123/agentdock/compare/v3.6.0...v3.6.1) (2026-05-04)
+
+
+### Bug Fixes
+
+* harden GitHub App workflow auth and PR review posting ([ef16cdb](https://github.com/Ivantseng123/agentdock/commit/ef16cdb985fd7dba80d0ccb039caab34f225aacd))
+
 ## [3.6.0](https://github.com/Ivantseng123/agentdock/compare/v3.5.0...v3.6.0) (2026-05-04)
 
 
