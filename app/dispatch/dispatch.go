@@ -58,6 +58,22 @@ func BuildEncryptedSecrets(cfg *config.Config, source githubapp.TokenSource, sec
 	for k, v := range cfg.Secrets {
 		perJob[k] = v
 	}
+	// PAT-shaped sources preserve an explicit worker GH_TOKEN override. App
+	// sources always mint and overlay below so workers receive a fresh
+	// installation token.
+	if githubapp.IsPATSource(source) {
+		if _, exists := perJob["GH_TOKEN"]; exists {
+			secretsJSON, err := json.Marshal(perJob)
+			if err != nil {
+				return nil, fmt.Errorf("marshal secrets: %w", err)
+			}
+			encrypted, err := crypto.Encrypt(secretKey, secretsJSON)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt secrets: %w", err)
+			}
+			return encrypted, nil
+		}
+	}
 	token, err := source.MintFresh()
 	if err != nil {
 		return nil, fmt.Errorf("mint installation token: %w", err)

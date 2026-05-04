@@ -88,6 +88,9 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 
 	repoCache := ghclient.NewRepoCacheWithTokenFn(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, tokenSource.Get, githubLogger)
 	repoDiscovery := ghclient.NewRepoDiscovery(tokenSource.Get, githubLogger)
+	if cfg.GitHub.App.IsConfigured() {
+		repoDiscovery = ghclient.NewInstallationRepoDiscovery(tokenSource.Get, githubLogger)
+	}
 
 	if cfg.AutoBind {
 		go func() {

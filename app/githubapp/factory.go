@@ -40,6 +40,14 @@ func NewPATSource(token string) TokenSource {
 	return &staticPATSource{token: token}
 }
 
+// IsPATSource reports whether source is backed by a static PAT. Dispatch uses
+// this to preserve explicit worker GH_TOKEN overrides in PAT-shaped paths while
+// still forcing App mode to mint and overlay fresh installation tokens.
+func IsPATSource(source TokenSource) bool {
+	_, ok := source.(*staticPATSource)
+	return ok
+}
+
 // NewFromConfig returns the TokenSource matching the provided config.
 // App credentials take priority when fully populated; partial App
 // config is treated as not-set so preflight can surface a field-level

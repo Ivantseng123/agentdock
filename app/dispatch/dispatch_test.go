@@ -47,9 +47,9 @@ func newSecretKey(t *testing.T) []byte {
 func TestBuildEncryptedSecrets_OverlaysGHTokenFromMint(t *testing.T) {
 	cfg := &config.Config{
 		Secrets: map[string]string{
-			"GH_TOKEN":          "stale-pre-mint",
-			"MANTIS_API_TOKEN":  "mantis-tok",
-			"OTHER":             "kept",
+			"GH_TOKEN":         "stale-pre-mint",
+			"MANTIS_API_TOKEN": "mantis-tok",
+			"OTHER":            "kept",
 		},
 	}
 	src := &fakeTokenSource{token: "ghs_fresh"}
@@ -180,6 +180,54 @@ func TestBuildEncryptedSecrets_PATMode_BlobMatchesLegacyAutomerge(t *testing.T) 
 	}
 	if !maps.Equal(legacyMap, newMap) {
 		t.Errorf("PAT-mode plaintext divergence:\n  legacy = %v\n  new    = %v", legacyMap, newMap)
+	}
+}
+
+func TestBuildEncryptedSecrets_PATModePreservesExplicitGHToken(t *testing.T) {
+	cfg := &config.Config{Secrets: map[string]string{
+		"GH_TOKEN": "ghp_worker_explicit",
+		"OTHER":    "kept",
+	}}
+	key := newSecretKey(t)
+
+	encrypted, err := BuildEncryptedSecrets(cfg, githubapp.NewPATSource("ghp_config_token"), key)
+	if err != nil {
+		t.Fatalf("BuildEncryptedSecrets: %v", err)
+	}
+	plain, err := crypto.Decrypt(key, encrypted)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(plain, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got["GH_TOKEN"] != "ghp_worker_explicit" {
+		t.Errorf("GH_TOKEN = %q, want explicit worker token", got["GH_TOKEN"])
+	}
+	if got["OTHER"] != "kept" {
+		t.Errorf("OTHER = %q, want kept", got["OTHER"])
+	}
+}
+
+func TestBuildEncryptedSecrets_PATModeAddsTokenWhenMissing(t *testing.T) {
+	cfg := &config.Config{Secrets: map[string]string{"OTHER": "kept"}}
+	key := newSecretKey(t)
+
+	encrypted, err := BuildEncryptedSecrets(cfg, githubapp.NewPATSource("ghp_config_token"), key)
+	if err != nil {
+		t.Fatalf("BuildEncryptedSecrets: %v", err)
+	}
+	plain, err := crypto.Decrypt(key, encrypted)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(plain, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got["GH_TOKEN"] != "ghp_config_token" {
+		t.Errorf("GH_TOKEN = %q, want PAT token when missing", got["GH_TOKEN"])
 	}
 }
 
