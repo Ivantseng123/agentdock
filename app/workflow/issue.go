@@ -697,11 +697,11 @@ func (w *IssueWorkflow) afterRepoSelected(p *Pending, channelCfg config.ChannelC
 	if len(channelCfg.Branches) > 0 {
 		branches = channelCfg.Branches
 	} else if w.repoCache != nil {
-		ghToken := ""
-		if w.cfg.Secrets != nil {
-			ghToken = w.cfg.Secrets["GH_TOKEN"]
-		}
-		repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, ghToken)
+		// Empty token → RepoCache falls through to its tokenFn, which is
+		// staticPATSource.Get in PAT mode and appInstallationSource.Get in
+		// App mode. Reading cfg.Secrets here would steal a stale token from
+		// the dispatch-time encrypted blob in App mode (issue #212).
+		repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, "")
 		if err != nil {
 			// Surface the error so operators know repo access failed.
 			return NextStep{
@@ -1038,11 +1038,8 @@ func (w *IssueWorkflow) nextRefBranchStep(p *Pending) NextStep {
 	if len(cc.Branches) > 0 {
 		branches = cc.Branches
 	} else if w.repoCache != nil {
-		ghToken := ""
-		if w.cfg.Secrets != nil {
-			ghToken = w.cfg.Secrets["GH_TOKEN"]
-		}
-		if rp, err := w.repoCache.EnsureRepo(target, ghToken); err == nil {
+		// See note above on EnsureRepo(..., "") + tokenFn fallback.
+		if rp, err := w.repoCache.EnsureRepo(target, ""); err == nil {
 			if lb, lerr := w.repoCache.ListBranches(rp); lerr == nil {
 				branches = lb
 			}

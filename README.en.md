@@ -25,12 +25,14 @@ Single Go binary (`agentdock` with `app` / `worker` subcommands). Redis is the o
 | Topic | File |
 |-------|------|
 | Slack App setup (incl. Manifest) | [docs/slack-setup.en.md](docs/slack-setup.en.md) |
+| GitHub App setup (single installation) | [docs/github-app-setup.en.md](docs/github-app-setup.en.md) |
 | App config (`app.yaml`) | [docs/configuration-app.en.md](docs/configuration-app.en.md) |
 | Worker config (`worker.yaml`) | [docs/configuration-worker.en.md](docs/configuration-worker.en.md) |
 | Config overview / quick start | [docs/configuration.en.md](docs/configuration.en.md) |
 | Deployment (Local / Redis / Docker / K8s / CI) | [docs/deployment.en.md](docs/deployment.en.md) |
 | Monitoring, agent behavior, HTTP endpoints | [docs/operations.en.md](docs/operations.en.md) |
 | v1 → v2 migration | [docs/MIGRATION-v2.en.md](docs/MIGRATION-v2.en.md) |
+| PAT → GitHub App migration | [docs/MIGRATION-github-app.en.md](docs/MIGRATION-github-app.en.md) |
 
 ## Quick Start
 

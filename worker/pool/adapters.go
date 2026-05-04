@@ -40,7 +40,7 @@ func (a *RepoCacheAdapter) Prepare(cloneURL, branch, token string) (string, erro
 	}
 	// MkdirTemp creates the dir; git worktree add needs it to not exist.
 	os.Remove(worktreePath)
-	if err := a.Cache.AddWorktree(barePath, branch, worktreePath); err != nil {
+	if err := a.Cache.AddWorktree(barePath, branch, worktreePath, token); err != nil {
 		return "", err
 	}
 	return worktreePath, nil
@@ -61,7 +61,7 @@ func (a *RepoCacheAdapter) PrepareAt(cloneURL, branch, token, targetPath string)
 	if err := os.RemoveAll(targetPath); err != nil {
 		return fmt.Errorf("clear ref target %s: %w", targetPath, err)
 	}
-	return a.Cache.AddWorktree(barePath, branch, targetPath)
+	return a.Cache.AddWorktree(barePath, branch, targetPath, token)
 }
 
 func (a *RepoCacheAdapter) RemoveWorktree(path string) error { return a.Cache.RemoveWorktree(path) }

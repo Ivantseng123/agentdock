@@ -22,6 +22,17 @@ Overview, architecture, build/run, tests, and release flow live in `README.md` a
 
 This is a **structuring tool, not a diagnosis tool.** The core value is turning Slack threads into well-formatted GitHub issues. AI triage (file pointers, confidence scoring) is a bonus — do not sacrifice thread-capture reliability to improve diagnostic quality.
 
+## Commit hygiene
+
+CI runs `wagoid/commitlint-github-action@v6` (`@commitlint/config-conventional`) and blocks merge on violations. Validate HEAD's message locally **right after every `git commit`** (no setup required):
+
+```bash
+npx --yes -p @commitlint/cli -p @commitlint/config-conventional \
+  commitlint --last --extends @commitlint/config-conventional
+```
+
+On failure, fix with `git commit --amend -m "<corrected message>"` and re-run — only before the commit is pushed.
+
 ## Routing
 
 - Logging conventions (component/phase taxonomy, attribute names, Chinese message format): `shared/logging/GUIDE.md`

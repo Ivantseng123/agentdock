@@ -57,7 +57,24 @@ type SlackConfig struct {
 }
 
 type GitHubConfig struct {
-	Token string `yaml:"token"`
+	Token string          `yaml:"token"`
+	App   GitHubAppConfig `yaml:"app"`
+}
+
+// GitHubAppConfig configures GitHub App auth (single installation). When all
+// three fields are set, the app boots in App-priority mode and mints
+// per-job installation tokens; partial config is rejected by preflight.
+type GitHubAppConfig struct {
+	AppID          int64  `yaml:"app_id"`
+	InstallationID int64  `yaml:"installation_id"`
+	PrivateKeyPath string `yaml:"private_key_path"`
+}
+
+// IsConfigured reports whether all three App fields are non-zero. Used by
+// the TokenSource factory to pick App vs PAT mode; partial config returns
+// false and preflight surfaces the missing-field error.
+func (c GitHubAppConfig) IsConfigured() bool {
+	return c.AppID != 0 && c.InstallationID != 0 && c.PrivateKeyPath != ""
 }
 
 // WorkflowsConfig groups the three workflows (issue / ask / pr_review) under

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/metrics"
@@ -17,10 +18,13 @@ type IssueClient struct {
 	logger *slog.Logger
 }
 
-// NewIssueClient creates a new GitHub issue client.
-func NewIssueClient(token string, logger *slog.Logger) *IssueClient {
+// NewIssueClient creates a new GitHub issue client. tokenFn is invoked
+// per outbound request via tokenTransport so the underlying gh.Client
+// can keep up with installation-token rotation without rebuilding.
+func NewIssueClient(tokenFn func() (string, error), logger *slog.Logger) *IssueClient {
+	httpClient := &http.Client{Transport: newTokenTransport(tokenFn, nil)}
 	return &IssueClient{
-		client: gh.NewClient(nil).WithAuthToken(token),
+		client: gh.NewClient(httpClient),
 		logger: logger,
 	}
 }
