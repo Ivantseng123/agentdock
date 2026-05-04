@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/app/githubapp"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
@@ -25,6 +26,7 @@ const AskPriorAnswerOptIn = "帶上次回覆"
 // bot message in the thread.
 type AskWorkflow struct {
 	cfg       *config.Config
+	source    githubapp.TokenSource
 	slack     SlackPort
 	repoCache *ghclient.RepoCache
 	logger    *slog.Logger
@@ -89,11 +91,11 @@ func (s *askState) RefExclusions() []string {
 }
 
 // NewAskWorkflow constructs a workflow instance.
-func NewAskWorkflow(cfg *config.Config, slack SlackPort, repoCache *ghclient.RepoCache, logger *slog.Logger) *AskWorkflow {
+func NewAskWorkflow(cfg *config.Config, source githubapp.TokenSource, slack SlackPort, repoCache *ghclient.RepoCache, logger *slog.Logger) *AskWorkflow {
 	if cfg == nil || slack == nil || logger == nil {
 		panic("workflow: NewAskWorkflow missing required dep")
 	}
-	return &AskWorkflow{cfg: cfg, slack: slack, repoCache: repoCache, logger: logger}
+	return &AskWorkflow{cfg: cfg, source: source, slack: slack, repoCache: repoCache, logger: logger}
 }
 
 // Type returns the TaskType discriminator.
@@ -345,11 +347,15 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 	if len(channelCfg.Branches) > 0 {
 		branches = channelCfg.Branches
 	} else if w.repoCache != nil {
-		// Empty token → RepoCache falls through to its tokenFn (PAT mode:
-		// staticPATSource.Get; App mode: appInstallationSource.Get).
-		// Reading cfg.Secrets here would risk a stale dispatch-time token
-		// in App mode (issue #212).
-		if repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, ""); err == nil {
+		choice, err := chooseRepoAuth(st.SelectedRepo, w.cfg.GitHub.Token, w.source)
+		if err != nil {
+			return NextStep{
+				Kind:      NextStepError,
+				ErrorText: repoAccessError(st.SelectedRepo),
+				Pending:   p,
+			}
+		}
+		if repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, choice.perCallToken); err == nil {
 			if lb, listErr := w.repoCache.ListBranches(repoPath); listErr == nil {
 				branches = lb
 			}
@@ -575,8 +581,15 @@ func (w *AskWorkflow) nextRefBranchStep(p *Pending) NextStep {
 	if len(cc.Branches) > 0 {
 		branches = cc.Branches
 	} else if w.repoCache != nil {
-		// See note above on EnsureRepo(..., "") + tokenFn fallback.
-		if rp, err := w.repoCache.EnsureRepo(target, ""); err == nil {
+		choice, err := chooseRepoAuth(target, w.cfg.GitHub.Token, w.source)
+		if err != nil {
+			return NextStep{
+				Kind:      NextStepError,
+				ErrorText: repoAccessError(target),
+				Pending:   p,
+			}
+		}
+		if rp, err := w.repoCache.EnsureRepo(target, choice.perCallToken); err == nil {
 			if lb, lerr := w.repoCache.ListBranches(rp); lerr == nil {
 				branches = lb
 			}

@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"time"
 
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -75,7 +75,7 @@ func newAppInstallationSourceFromCredentials(app AppCredentials, logger *slog.Lo
 		appID:          app.AppID,
 		installationID: app.InstallationID,
 		privateKey:     key,
-		httpClient:     http.DefaultClient,
+		httpClient:     ghclient.NewHTTPClient(ghclient.ProfileBackground),
 		baseURL:        productionMintBaseURL,
 		logger:         logger,
 		now:            time.Now,

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 )
 
 // Client is a thin GitHub REST client for endpoints that need precise HTTP
@@ -23,15 +22,12 @@ type Client struct {
 // NewClient builds a Client. tokenFn is invoked per outbound request via
 // tokenTransport so the client keeps up with installation-token rotation
 // without rebuilding. Pass a tokenFn that returns "" for unauthenticated
-// requests (rate-limited). Uses a dedicated http.Client with a 10s timeout —
-// never share http.DefaultClient because callers mutating its Timeout would
-// affect unrelated packages.
+// requests (rate-limited). Uses the shared interactive GitHub transport policy
+// so timeout / retry behavior stays aligned with other app-side GitHub REST
+// callers.
 func NewClient(tokenFn func() (string, error)) *Client {
 	return &Client{
-		http: &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: newTokenTransport(tokenFn, nil),
-		},
+		http: NewHTTPClientWithTokenFn(tokenFn, ProfileInteractive),
 	}
 }
 

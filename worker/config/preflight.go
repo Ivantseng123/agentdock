@@ -42,6 +42,9 @@ func RunPreflight(cfg *Config) (map[string]any, error) {
 			return prompted, err
 		}
 	}
+	if err := preflightWorkerGHTokenOverride(cfg); err != nil {
+		return prompted, err
+	}
 
 	if err := preflightGitHub(cfg, interactive, prompted); err != nil {
 		return prompted, err
@@ -70,6 +73,20 @@ func preflightGit() error {
 		return err
 	}
 	prompt.OK("Git binary supports env-based auth")
+	return nil
+}
+
+func preflightWorkerGHTokenOverride(cfg *Config) error {
+	token, ok := cfg.Secrets["GH_TOKEN"]
+	if !ok || token == "" {
+		return nil
+	}
+	if cfg.Queue.Transport == "redis" && cfg.SecretKey != "" && cfg.GitHub.Token == "" {
+		err := fmt.Errorf("worker secrets.GH_TOKEN overrides app-minted per-job token; remove secrets.GH_TOKEN for GitHub App deployments")
+		prompt.Fail("%v", err)
+		return err
+	}
+	prompt.Warn("worker secrets.GH_TOKEN overrides app-provided GH_TOKEN; keep this only for PAT-only or deliberate worker-local override deployments")
 	return nil
 }
 

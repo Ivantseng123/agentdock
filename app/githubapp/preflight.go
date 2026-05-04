@@ -9,7 +9,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
+
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 )
 
 // requiredPermissions encodes the App permission set this codebase
@@ -22,15 +23,6 @@ var requiredPermissions = map[string]string{
 	"pull_requests": "write",
 }
 
-// preflightRetryDelays implements §7's transient-error retry schedule:
-// 3 retries with 500ms / 1s / 2s back-off. 4xx errors fail fast (no
-// retry); 5xx and network errors retry through the full schedule.
-var preflightRetryDelays = []time.Duration{
-	500 * time.Millisecond,
-	1 * time.Second,
-	2 * time.Second,
-}
-
 // PreflightApp validates that the configured GitHub App can mint
 // installation tokens with the required permissions and is reachable.
 // Maps every failure mode to a user-facing error string per spec §4.13.
@@ -39,6 +31,7 @@ func PreflightApp(app AppCredentials, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	src.httpClient = ghclient.NewHTTPClient(ghclient.ProfilePreflight)
 	return preflightAppWithSource(src)
 }
 
@@ -46,10 +39,10 @@ func PreflightApp(app AppCredentials, logger *slog.Logger) error {
 // already-built source so tests can wire an httptest server without
 // going through the production base-URL constant.
 func preflightAppWithSource(src *appInstallationSource) error {
-	if _, err := mintWithRetry(src); err != nil {
+	if _, err := src.MintFresh(); err != nil {
 		return classifyMintError(err, src.installationID)
 	}
-	if err := checkPermissionsWithRetry(src); err != nil {
+	if err := checkPermissionsOnce(src); err != nil {
 		return err
 	}
 	src.logger.Info("github app preflight passed",
@@ -60,34 +53,14 @@ func preflightAppWithSource(src *appInstallationSource) error {
 	return nil
 }
 
-// mintWithRetry calls MintFresh with the retry schedule. Transient
-// errors (5xx, network) retry through; 4xx fail-fast.
-func mintWithRetry(src *appInstallationSource) (string, error) {
-	var lastErr error
-	for attempt := 0; attempt <= len(preflightRetryDelays); attempt++ {
-		token, err := src.MintFresh()
-		if err == nil {
-			return token, nil
-		}
-		lastErr = err
-		if !errors.Is(err, errMintTransient) {
-			return "", err
-		}
-		if attempt < len(preflightRetryDelays) {
-			time.Sleep(preflightRetryDelays[attempt])
-		}
-	}
-	return "", lastErr
-}
-
 func classifyMintError(err error, installationID int64) error {
 	switch {
 	case errors.Is(err, errInvalidAppCredentials):
 		return fmt.Errorf("github app credentials rejected: check github.app.app_id and private_key_path match")
 	case errors.Is(err, errInstallationNotFound):
 		return fmt.Errorf("github app installation not found: id=%d; verify github.app.installation_id", installationID)
-	case errors.Is(err, errMintTransient):
-		return fmt.Errorf("github api unavailable during preflight (after %d retries): %w; this is an infrastructure issue, not a config issue", len(preflightRetryDelays), err)
+	case errors.Is(err, errMintTransient), errors.Is(err, ghclient.ErrGitHubUnavailable):
+		return fmt.Errorf("github api unavailable during preflight: %w; this is an infrastructure issue, not a config issue", err)
 	default:
 		return err
 	}
@@ -95,24 +68,6 @@ func classifyMintError(err error, installationID int64) error {
 
 type installationDetails struct {
 	Permissions map[string]string `json:"permissions"`
-}
-
-func checkPermissionsWithRetry(src *appInstallationSource) error {
-	var lastErr error
-	for attempt := 0; attempt <= len(preflightRetryDelays); attempt++ {
-		err := checkPermissionsOnce(src)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !errors.Is(err, errMintTransient) {
-			return err
-		}
-		if attempt < len(preflightRetryDelays) {
-			time.Sleep(preflightRetryDelays[attempt])
-		}
-	}
-	return lastErr
 }
 
 func checkPermissionsOnce(src *appInstallationSource) error {

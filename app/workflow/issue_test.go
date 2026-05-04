@@ -585,7 +585,7 @@ func newTestIssueWorkflow(t *testing.T, opts ...issueOpt) (*IssueWorkflow, *fake
 	}
 	slack := newFakeSlackPort()
 	ic := &fakeIssueCreator{}
-	w := NewIssueWorkflow(cfg, slack, ic, nil, nil, slog.Default())
+	w := NewIssueWorkflow(cfg, nil, slack, ic, nil, nil, slog.Default())
 	return w, slack, ic
 }
 

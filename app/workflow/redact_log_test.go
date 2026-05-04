@@ -37,7 +37,7 @@ func TestIssueHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 	const fakeSecret = "supersecret-ghp-abc123"
 	cfg := cfgWithSecret(fakeSecret)
 	var buf bytes.Buffer
-	w := NewIssueWorkflow(cfg, newFakeSlackPort(), &fakeIssueCreator{}, nil, nil, captureLogger(&buf))
+	w := NewIssueWorkflow(cfg, nil, newFakeSlackPort(), &fakeIssueCreator{}, nil, nil, captureLogger(&buf))
 
 	state := &queue.JobState{Job: &queue.Job{TaskType: "issue"}}
 	result := &queue.JobResult{
@@ -58,7 +58,7 @@ func TestIssueHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 func TestIssueHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 	cfg := cfgWithSecret("supersecret-ghp-abc123")
 	var buf bytes.Buffer
-	w := NewIssueWorkflow(cfg, newFakeSlackPort(), &fakeIssueCreator{}, nil, nil, captureLogger(&buf))
+	w := NewIssueWorkflow(cfg, nil, newFakeSlackPort(), &fakeIssueCreator{}, nil, nil, captureLogger(&buf))
 
 	const harmlessOutput = "not valid json at all - totally normal debug text"
 	state := &queue.JobState{Job: &queue.Job{TaskType: "issue"}}
@@ -86,7 +86,7 @@ func TestAskHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 	const fakeSecret = "ASKXYZ"
 	cfg := cfgWithSecret(fakeSecret)
 	var buf bytes.Buffer
-	w := NewAskWorkflow(cfg, newFakeSlackPort(), nil, captureLogger(&buf))
+	w := NewAskWorkflow(cfg, nil, newFakeSlackPort(), nil, captureLogger(&buf))
 
 	state := &queue.JobState{Job: &queue.Job{TaskType: "ask"}}
 	result := &queue.JobResult{
@@ -107,7 +107,7 @@ func TestAskHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 func TestAskHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 	cfg := cfgWithSecret("ASKXYZ")
 	var buf bytes.Buffer
-	w := NewAskWorkflow(cfg, newFakeSlackPort(), nil, captureLogger(&buf))
+	w := NewAskWorkflow(cfg, nil, newFakeSlackPort(), nil, captureLogger(&buf))
 
 	// Short stdout with no secret. Same gate constraint as the redaction test
 	// above: the parse-fail path is now reserved for sub-min-length stdout.
@@ -140,7 +140,7 @@ func TestPRReviewHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 	cfg := cfgWithSecretPRReview(fakeSecret)
 
 	var buf bytes.Buffer
-	w := NewPRReviewWorkflow(cfg, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
+	w := NewPRReviewWorkflow(cfg, nil, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
 
 	state := &queue.JobState{Job: &queue.Job{TaskType: "pr_review", WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/1"}}}
 	result := &queue.JobResult{
@@ -166,7 +166,7 @@ func TestPRReviewHandleResult_ParseFail_RedactsSecretPastTruncation(t *testing.T
 	cfg := cfgWithSecretPRReview(fakeSecret)
 
 	var buf bytes.Buffer
-	w := NewPRReviewWorkflow(cfg, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
+	w := NewPRReviewWorkflow(cfg, nil, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
 
 	padding := strings.Repeat("a", 2500) // push secret past the 2000-byte cut
 	state := &queue.JobState{Job: &queue.Job{TaskType: "pr_review", WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/1"}}}
@@ -186,7 +186,7 @@ func TestPRReviewHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 	cfg := cfgWithSecretPRReview("supersecret-pr-review-qwe456")
 
 	var buf bytes.Buffer
-	w := NewPRReviewWorkflow(cfg, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
+	w := NewPRReviewWorkflow(cfg, nil, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
 
 	const harmlessOutput = "plain output string with no secrets inside"
 	state := &queue.JobState{Job: &queue.Job{TaskType: "pr_review", WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/1"}}}
