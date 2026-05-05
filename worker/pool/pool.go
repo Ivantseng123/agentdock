@@ -245,10 +245,14 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		logger.Error("failed to publish result", "error", err)
 	}
 
+	// Use *Context variants here so trace_id (set by runWorker via
+	// WithTraceID) lands on the terminal log lines. The rest of the worker
+	// code path still uses non-Context variants — full migration is folded
+	// into the OTel rollout (#46).
 	if result.Status == "cancelled" {
-		logger.Info("工作已取消", "phase", "完成")
+		logger.InfoContext(ctx, "工作已取消", "phase", "完成")
 	} else {
-		logger.Info("工作完成", "phase", "完成", "status", result.Status)
+		logger.InfoContext(ctx, "工作完成", "phase", "完成", "status", result.Status)
 	}
 }
 

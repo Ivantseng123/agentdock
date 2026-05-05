@@ -14,14 +14,14 @@
 15:03:22 INFO  [Slack][接收] 收到觸發事件 channel_id=C0123 thread_ts=1234.5678
 ```
 
-K8s + log aggregator 部署可切到 JSON：設 `logging.stderr_format: json`（YAML）或 `--log-format=json`（CLI）。JSON 模式下每筆 record 自動帶 base attrs `app_name` / `app_version` / `app_commit`，若 `POD_NAME` 環境變數存在則加上 `pod_name`。
+K8s + log aggregator 部署可切到 JSON：設 `logging.stderr_format: json`（YAML）或 `--log-format=json`（CLI）。JSON 模式下 stderr 每筆 record 帶 base attrs `app_name` / `app_version` / `app_commit`，若 `POD_NAME` 環境變數存在則加上 `pod_name`。styled 模式 stderr 不帶 base attrs（避免污染人類可讀 prefix）。
 
 ### File (JSON)
 
-檔案恆為 JSON，不受 `stderr_format` 影響：
+檔案恆為 JSON，不受 `stderr_format` 影響。**File 與 stderr 不同**：base attrs（`app_name` / `app_version` / `app_commit` / `pod_name`）在檔案 record 上**無條件附加**，因為 post-mortem 分析需要 build identity，跟 operator 是否切 stderr 為 JSON 無關。
 
 ```json
-{"time":"...","level":"INFO","msg":"收到觸發事件","component":"Slack","phase":"接收","channel_id":"C0123"}
+{"time":"...","level":"INFO","msg":"收到觸發事件","component":"Slack","phase":"接收","channel_id":"C0123","app_name":"agentdock","app_version":"3.6.0","app_commit":"abc123"}
 ```
 
 ## Trace 串接（trace_id）

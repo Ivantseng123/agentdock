@@ -56,7 +56,14 @@ func (h *Handle) Wait() error {
 func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	stderrHandler := logging.BuildStderrHandler(cfg.Logging.StderrFormat, logging.ParseLevel(cfg.LogLevel))
+	// Stderr base attrs are gated on stderr_format ("json" only) so styled
+	// mode keeps the human-readable prefix uncluttered. File base attrs are
+	// applied unconditionally because the file handler is always JSON and
+	// post-mortem readers need build identity on every record.
+	var stderrHandler slog.Handler = logging.BuildStderrHandler(cfg.Logging.StderrFormat, logging.ParseLevel(cfg.LogLevel))
+	if attrs := logging.StderrBaseAttrs(cfg.Logging.StderrFormat, "agentdock", Version, Commit); len(attrs) > 0 {
+		stderrHandler = stderrHandler.WithAttrs(attrs)
+	}
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
@@ -64,11 +71,12 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	}
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
-	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
-	rootHandler := slog.Handler(logging.NewMultiHandler(stderrHandler, fileHandler))
-	if attrs := logging.BaseAttrs(cfg.Logging.StderrFormat, "agentdock", Version, Commit); len(attrs) > 0 {
-		rootHandler = rootHandler.WithAttrs(attrs)
+	var fileHandler slog.Handler = slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
+	if attrs := logging.FileBaseAttrs("agentdock", Version, Commit); len(attrs) > 0 {
+		fileHandler = fileHandler.WithAttrs(attrs)
 	}
+
+	rootHandler := slog.Handler(logging.NewMultiHandler(stderrHandler, fileHandler))
 	rootHandler = logging.NewTraceIDHandler(rootHandler)
 	slog.SetDefault(slog.New(rootHandler))
 
@@ -272,7 +280,10 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 
 		job, statusText, err := wfImpl.BuildJob(ctx, p)
 		if err != nil {
-			appLogger.Error("BuildJob failed", "phase", "失敗", "error", err)
+			// *Context variant so trace_id (injected above) lands on this
+			// failure-path record. Demonstrates the wiring; broader
+			// migration deferred to #46.
+			appLogger.ErrorContext(ctx, "BuildJob failed", "phase", "失敗", "error", err)
 			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: %v", err), p.ThreadTS)
 			if handler != nil {
 				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)

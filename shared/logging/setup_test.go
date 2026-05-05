@@ -31,21 +31,45 @@ func TestBuildStderrHandler_StyledFallback(t *testing.T) {
 	}
 }
 
-func TestBaseAttrs_StyledIsEmpty(t *testing.T) {
-	if attrs := BaseAttrs("styled", "agentdock", "1.0.0", "abc"); attrs != nil {
+func TestStderrBaseAttrs_StyledIsEmpty(t *testing.T) {
+	if attrs := StderrBaseAttrs("styled", "agentdock", "1.0.0", "abc"); attrs != nil {
 		t.Errorf("styled mode should not emit base attrs, got %v", attrs)
 	}
 }
 
-func TestBaseAttrs_JSONHasMappedKeys(t *testing.T) {
+func TestStderrBaseAttrs_JSONHasMappedKeys(t *testing.T) {
 	t.Setenv("POD_NAME", "agentdock-app-0")
-	attrs := BaseAttrs("json", "agentdock", "1.2.3", "deadbeef")
-	want := map[string]string{
+	assertAttrs(t, StderrBaseAttrs("json", "agentdock", "1.2.3", "deadbeef"), map[string]string{
 		KeyAppName:    "agentdock",
 		KeyAppVersion: "1.2.3",
 		KeyAppCommit:  "deadbeef",
 		KeyPodName:    "agentdock-app-0",
+	})
+}
+
+func TestFileBaseAttrs_AlwaysPopulated(t *testing.T) {
+	t.Setenv("POD_NAME", "agentdock-app-0")
+	// File handler should not gate on stderr_format — operator running in
+	// styled mode still needs build provenance on file records for
+	// post-mortem analysis.
+	assertAttrs(t, FileBaseAttrs("agentdock", "1.2.3", "deadbeef"), map[string]string{
+		KeyAppName:    "agentdock",
+		KeyAppVersion: "1.2.3",
+		KeyAppCommit:  "deadbeef",
+		KeyPodName:    "agentdock-app-0",
+	})
+}
+
+func TestBaseAttrs_OmitsBlanks(t *testing.T) {
+	t.Setenv("POD_NAME", "")
+	attrs := FileBaseAttrs("agentdock", "", "")
+	if len(attrs) != 1 || attrs[0].Key != KeyAppName {
+		t.Errorf("blank version/commit/pod should be omitted, got %v", attrs)
 	}
+}
+
+func assertAttrs(t *testing.T, attrs []slog.Attr, want map[string]string) {
+	t.Helper()
 	got := map[string]string{}
 	for _, a := range attrs {
 		got[a.Key] = a.Value.String()
@@ -54,13 +78,5 @@ func TestBaseAttrs_JSONHasMappedKeys(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("attr %q = %q, want %q", k, got[k], v)
 		}
-	}
-}
-
-func TestBaseAttrs_OmitsBlanks(t *testing.T) {
-	t.Setenv("POD_NAME", "")
-	attrs := BaseAttrs("json", "agentdock", "", "")
-	if len(attrs) != 1 || attrs[0].Key != KeyAppName {
-		t.Errorf("blank version/commit/pod should be omitted, got %v", attrs)
 	}
 }

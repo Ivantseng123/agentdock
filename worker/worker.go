@@ -33,7 +33,13 @@ var (
 // Run starts the worker process: initializes logging, connects Redis, builds
 // the pool, and waits for SIGTERM/SIGINT. Returns on clean shutdown or error.
 func Run(cfg *config.Config) error {
-	stderrHandler := logging.BuildStderrHandler(cfg.Logging.StderrFormat, logging.ParseLevel(cfg.LogLevel))
+	// Stderr base attrs gate on stderr_format; file base attrs apply always
+	// (file output is JSON regardless of stderr_format and post-mortem
+	// readers need build identity on every record).
+	var stderrHandler slog.Handler = logging.BuildStderrHandler(cfg.Logging.StderrFormat, logging.ParseLevel(cfg.LogLevel))
+	if attrs := logging.StderrBaseAttrs(cfg.Logging.StderrFormat, "agentdock", Version, Commit); len(attrs) > 0 {
+		stderrHandler = stderrHandler.WithAttrs(attrs)
+	}
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
@@ -41,11 +47,12 @@ func Run(cfg *config.Config) error {
 	}
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
-	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
-	rootHandler := slog.Handler(logging.NewMultiHandler(stderrHandler, fileHandler))
-	if attrs := logging.BaseAttrs(cfg.Logging.StderrFormat, "agentdock", Version, Commit); len(attrs) > 0 {
-		rootHandler = rootHandler.WithAttrs(attrs)
+	var fileHandler slog.Handler = slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
+	if attrs := logging.FileBaseAttrs("agentdock", Version, Commit); len(attrs) > 0 {
+		fileHandler = fileHandler.WithAttrs(attrs)
 	}
+
+	rootHandler := slog.Handler(logging.NewMultiHandler(stderrHandler, fileHandler))
 	rootHandler = logging.NewTraceIDHandler(rootHandler)
 	slog.SetDefault(slog.New(rootHandler))
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)

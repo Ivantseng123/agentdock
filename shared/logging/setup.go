@@ -21,15 +21,26 @@ func buildStderrHandler(w io.Writer, format string, level slog.Level) slog.Handl
 	return NewStyledTextHandler(w, &slog.HandlerOptions{Level: level})
 }
 
-// BaseAttrs returns the attribute set every record should carry when the
-// process is running in JSON-stderr mode. In styled mode the function returns
-// nil so the human-readable prefix layout stays uncluttered. Empty values are
-// dropped from the result. pod_name comes from the K8s downward API
-// (POD_NAME env var); when absent the attr is omitted.
-func BaseAttrs(format, appName, version, commit string) []slog.Attr {
+// StderrBaseAttrs returns the attribute set the stderr handler should carry
+// when the process runs in JSON-stderr mode. In styled mode the function
+// returns nil so the human-readable prefix layout stays uncluttered.
+func StderrBaseAttrs(format, appName, version, commit string) []slog.Attr {
 	if format != "json" {
 		return nil
 	}
+	return buildBaseAttrs(appName, version, commit)
+}
+
+// FileBaseAttrs returns the attribute set the file handler should carry. The
+// file handler is always JSON regardless of stderr_format, and post-mortem
+// analysis needs build identity on every record — so this returns the full
+// set unconditionally. Empty values are dropped; pod_name is added when the
+// POD_NAME env var (K8s downward API) is set.
+func FileBaseAttrs(appName, version, commit string) []slog.Attr {
+	return buildBaseAttrs(appName, version, commit)
+}
+
+func buildBaseAttrs(appName, version, commit string) []slog.Attr {
 	attrs := make([]slog.Attr, 0, 4)
 	if appName != "" {
 		attrs = append(attrs, slog.String(KeyAppName, appName))
