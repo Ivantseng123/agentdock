@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 )
@@ -96,27 +97,32 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				logger.Info("job channel closed")
 				return
 			}
+			// Tag every downstream log record with the job's RequestID as
+			// trace_id. Callers that emit via *Context slog variants pick up
+			// the attr automatically; legacy logger.Info calls remain
+			// unaffected (they continue to ignore ctx, see #46 follow-up).
+			jobCtx := logging.WithTraceID(ctx, job.RequestID)
 			// Check if cancelled while pending.
-			state, err := p.cfg.Store.Get(ctx, job.ID)
+			state, err := p.cfg.Store.Get(jobCtx, job.ID)
 			if err != nil {
-				p.cfg.Results.Publish(ctx, &queue.JobResult{
+				p.cfg.Results.Publish(jobCtx, &queue.JobResult{
 					JobID: job.ID, Status: "failed", Error: "state lookup failed",
 				})
 				continue
 			}
 			switch state.Status {
 			case queue.JobCancelled:
-				p.cfg.Results.Publish(ctx, &queue.JobResult{
+				p.cfg.Results.Publish(jobCtx, &queue.JobResult{
 					JobID: job.ID, Status: "cancelled",
 				})
 				continue
 			case queue.JobFailed:
-				p.cfg.Results.Publish(ctx, &queue.JobResult{
+				p.cfg.Results.Publish(jobCtx, &queue.JobResult{
 					JobID: job.ID, Status: "failed", Error: "terminated before execution",
 				})
 				continue
 			}
-			p.executeWithTracking(ctx, id, job)
+			p.executeWithTracking(jobCtx, id, job)
 		case <-ctx.Done():
 			logger.Info("worker shutting down")
 			return

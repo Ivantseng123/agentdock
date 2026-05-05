@@ -7,14 +7,26 @@
 ## 輸出格式
 
 ### Terminal (stderr)
+
+預設為 `styled`（人類可讀）：
+
 ```
 15:03:22 INFO  [Slack][接收] 收到觸發事件 channel_id=C0123 thread_ts=1234.5678
 ```
 
+K8s + log aggregator 部署可切到 JSON：設 `logging.stderr_format: json`（YAML）或 `--log-format=json`（CLI）。JSON 模式下每筆 record 自動帶 base attrs `app_name` / `app_version` / `app_commit`，若 `POD_NAME` 環境變數存在則加上 `pod_name`。
+
 ### File (JSON)
+
+檔案恆為 JSON，不受 `stderr_format` 影響：
+
 ```json
 {"time":"...","level":"INFO","msg":"收到觸發事件","component":"Slack","phase":"接收","channel_id":"C0123"}
 ```
+
+## Trace 串接（trace_id）
+
+`shared/logging/trace.go` 提供 `WithTraceID(ctx, id)` 與 `TraceIDHandler` slog middleware。entry point（app 的 `submitJob`、worker 的 `runWorker`）已注入 `Job.RequestID` 作 `trace_id`。callers 透過 `logger.InfoContext(ctx, ...)`（`*Context` 變體）發 log 才會自動帶 `trace_id`；非 `*Context` 變體不流經 ctx，OTel tracing（#46）落地後會把 `trace_id` 換成 OTel span 的 trace ID。
 
 ## Component 注入
 

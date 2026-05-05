@@ -56,7 +56,7 @@ func (h *Handle) Wait() error {
 func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
+	stderrHandler := logging.BuildStderrHandler(cfg.Logging.StderrFormat, logging.ParseLevel(cfg.LogLevel))
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
@@ -65,7 +65,12 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
 	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
-	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
+	rootHandler := slog.Handler(logging.NewMultiHandler(stderrHandler, fileHandler))
+	if attrs := logging.BaseAttrs(cfg.Logging.StderrFormat, "agentdock", Version, Commit); len(attrs) > 0 {
+		rootHandler = rootHandler.WithAttrs(attrs)
+	}
+	rootHandler = logging.NewTraceIDHandler(rootHandler)
+	slog.SetDefault(slog.New(rootHandler))
 
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
@@ -253,6 +258,11 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	// It mirrors the old Workflow.runTriage logic, now accepting a *workflow.Pending
 	// and calling BuildJob on the matching registered workflow.
 	submitJob := func(ctx context.Context, p *workflow.Pending) {
+		// Tag downstream ctx with the pending's RequestID so log records
+		// emitted via *Context slog variants pick up the trace_id attr.
+		// Legacy logger.Info calls in this closure remain unaffected; the
+		// migration is tracked in #46.
+		ctx = logging.WithTraceID(ctx, p.RequestID)
 		wfImpl, ok := reg.Get(p.TaskType)
 		if !ok {
 			appLogger.Error("submitJob: unknown task_type", "phase", "失敗", "task_type", p.TaskType)

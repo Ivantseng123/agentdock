@@ -218,6 +218,10 @@ type LoggingConfig struct {
 	Level          string `yaml:"level"`
 	RetentionDays  int    `yaml:"retention_days"`
 	AgentOutputDir string `yaml:"agent_output_dir"`
+	// StderrFormat controls how stderr is rendered: "styled" (human-readable
+	// default) or "json" (one JSON object per line for log aggregators). File
+	// output is always JSON regardless of this setting.
+	StderrFormat string `yaml:"stderr_format"`
 }
 
 type AttachmentsConfig struct {

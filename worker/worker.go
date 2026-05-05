@@ -21,10 +21,19 @@ import (
 	"github.com/Ivantseng123/agentdock/worker/pool"
 )
 
+// Build info propagated from cmd at link time. cmd/agentdock/worker.go copies
+// goreleaser-injected main.* values into these vars before Run executes so
+// startup logs and JSON base attrs report the correct build.
+var (
+	Version = "dev"
+	Commit  = "unknown"
+	Date    = "unknown"
+)
+
 // Run starts the worker process: initializes logging, connects Redis, builds
 // the pool, and waits for SIGTERM/SIGINT. Returns on clean shutdown or error.
 func Run(cfg *config.Config) error {
-	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
+	stderrHandler := logging.BuildStderrHandler(cfg.Logging.StderrFormat, logging.ParseLevel(cfg.LogLevel))
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
@@ -33,7 +42,12 @@ func Run(cfg *config.Config) error {
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
 	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
-	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
+	rootHandler := slog.Handler(logging.NewMultiHandler(stderrHandler, fileHandler))
+	if attrs := logging.BaseAttrs(cfg.Logging.StderrFormat, "agentdock", Version, Commit); len(attrs) > 0 {
+		rootHandler = rootHandler.WithAttrs(attrs)
+	}
+	rootHandler = logging.NewTraceIDHandler(rootHandler)
+	slog.SetDefault(slog.New(rootHandler))
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 
 	// Transport selection. Kept in sync with app/app.go so a future backend

@@ -31,6 +31,10 @@ var workerCmd = &cobra.Command{
 }
 
 func init() {
+	worker.Version = version
+	worker.Commit = commit
+	worker.Date = date
+
 	workerCmd.Flags().StringVarP(&workerCmdConfigPath, "config", "c", "", "path to worker config file (default ~/.config/agentdock/worker.yaml)")
 	workerconfig.RegisterFlags(workerCmd)
 	rootCmd.AddCommand(workerCmd)

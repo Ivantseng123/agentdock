@@ -25,6 +25,7 @@ var flagToKey = map[string]string{
 	"logging-level":            "logging.level",
 	"logging-retention-days":   "logging.retention_days",
 	"logging-agent-output-dir": "logging.agent_output_dir",
+	"log-format":               "logging.stderr_format",
 	"repo-cache-dir":           "repo_cache.dir",
 	"repo-cache-max-age":       "repo_cache.max_age",
 	"workers":                  "count",
@@ -64,6 +65,10 @@ func RegisterFlags(cmd *cobra.Command) {
 	}
 	f.Int("logging-retention-days", 0, "days to retain rotated log files")
 	f.String("logging-agent-output-dir", "", "directory for raw agent stdout/stderr")
+	{
+		var v stderrFormatFlag
+		f.Var(&v, "log-format", "stderr log format: styled|json")
+	}
 
 	f.String("repo-cache-dir", "", "directory for cached git clones")
 	f.Duration("repo-cache-max-age", 0, "max age before repo cache is refreshed")
@@ -102,7 +107,7 @@ func BuildFlagOverrideMap(cmd *cobra.Command) map[string]any {
 			if v, err := cmd.Flags().GetStringSlice(f.Name); err == nil {
 				out[key] = v
 			}
-		case "queue-transport", "log-level":
+		case "queue-transport", "log-level", "stderr-format":
 			out[key] = f.Value.String()
 		}
 	})
@@ -135,4 +140,19 @@ func (l *logLevelFlag) Set(v string) error {
 		return nil
 	}
 	return fmt.Errorf("must be one of [debug info warn error]")
+}
+
+// stderrFormatFlag narrows accepted stderr formats. Mirrors app/config — kept
+// in sync so operators see the same flag surface across modules.
+type stderrFormatFlag string
+
+func (s *stderrFormatFlag) String() string { return string(*s) }
+func (s *stderrFormatFlag) Type() string   { return "stderr-format" }
+func (s *stderrFormatFlag) Set(v string) error {
+	switch strings.ToLower(v) {
+	case "styled", "json":
+		*s = stderrFormatFlag(strings.ToLower(v))
+		return nil
+	}
+	return fmt.Errorf("must be one of [styled json]")
 }
