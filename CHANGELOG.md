@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.7.0](https://github.com/Ivantseng123/agentdock/compare/v3.6.1...v3.7.0) (2026-05-05)
+
+
+### Features
+
+* **logging:** add stderr JSON format, base attrs, and trace_id middleware ([2cd360e](https://github.com/Ivantseng123/agentdock/commit/2cd360e21ba2c0162782d14fc2ca973d7265c59c))
+* **logging:** stderr JSON format, base attrs, trace_id middleware ([5c3af98](https://github.com/Ivantseng123/agentdock/commit/5c3af989c2744fc254d7c5830e37f981c83b9d52))
+
+
+### Bug Fixes
+
+* **logging:** file handler always carries build attrs; trace_id reaches prod ([5c6b107](https://github.com/Ivantseng123/agentdock/commit/5c6b1070e6334859e85ab1f8a6143f58f59888bf))
+
 ## [3.6.1](https://github.com/Ivantseng123/agentdock/compare/v3.6.0...v3.6.1) (2026-05-04)
 
 
