@@ -26,15 +26,6 @@ func newPreflightSource(t *testing.T, srv *httptest.Server, key *rsa.PrivateKey)
 	}
 }
 
-// fastDelays overrides preflightRetryDelays for the duration of a test
-// so the suite isn't dragging out 3.5s on every retry case.
-func fastDelays(t *testing.T) {
-	t.Helper()
-	prev := preflightRetryDelays
-	preflightRetryDelays = []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 4 * time.Millisecond}
-	t.Cleanup(func() { preflightRetryDelays = prev })
-}
-
 func happyHandler(t *testing.T, fullPermissions bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -61,7 +52,6 @@ func happyHandler(t *testing.T, fullPermissions bool) http.HandlerFunc {
 }
 
 func TestPreflightApp_HappyPath(t *testing.T) {
-	fastDelays(t)
 	srv := httptest.NewServer(happyHandler(t, true))
 	defer srv.Close()
 
@@ -72,7 +62,6 @@ func TestPreflightApp_HappyPath(t *testing.T) {
 }
 
 func TestPreflightApp_MissingPermissions(t *testing.T) {
-	fastDelays(t)
 	srv := httptest.NewServer(happyHandler(t, false))
 	defer srv.Close()
 
@@ -94,7 +83,6 @@ func TestPreflightApp_MissingPermissions(t *testing.T) {
 }
 
 func TestPreflightApp_Mint401_CredentialsRejected(t *testing.T) {
-	fastDelays(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
@@ -112,7 +100,6 @@ func TestPreflightApp_Mint401_CredentialsRejected(t *testing.T) {
 }
 
 func TestPreflightApp_Mint404_InstallationNotFound(t *testing.T) {
-	fastDelays(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
@@ -133,7 +120,6 @@ func TestPreflightApp_Mint404_InstallationNotFound(t *testing.T) {
 }
 
 func TestPreflightApp_Mint5xxExhausted_InfrastructureError(t *testing.T) {
-	fastDelays(t)
 	hits := atomic.Int32{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -149,55 +135,8 @@ func TestPreflightApp_Mint5xxExhausted_InfrastructureError(t *testing.T) {
 	if !strings.Contains(err.Error(), "infrastructure") {
 		t.Errorf("error = %v, want 'infrastructure issue'", err)
 	}
-	// 1 initial + 3 retries = 4 calls
-	if got := hits.Load(); got != 4 {
-		t.Errorf("hits = %d, want 4 (initial + 3 retries)", got)
-	}
-}
-
-func TestPreflightApp_Mint5xxThenSuccess_RetryWorks(t *testing.T) {
-	fastDelays(t)
-	hits := atomic.Int32{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/access_tokens"):
-			n := hits.Add(1)
-			if n == 1 {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			w.WriteHeader(http.StatusCreated)
-			expires := time.Date(2026, 5, 2, 13, 0, 0, 0, time.UTC).Format(time.RFC3339)
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"token":"ghs_after_retry","expires_at":%q}`, expires)))
-		case strings.Contains(r.URL.Path, "/installation/repositories"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"repositories":[]}`))
-		case strings.Contains(r.URL.Path, "/app/installations/5678"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"permissions":{"issues":"write","contents":"read","metadata":"read","pull_requests":"write"}}`))
-		}
-	}))
-	defer srv.Close()
-
-	src := newPreflightSource(t, srv, generateTestKey(t))
-	if err := preflightAppWithSource(src); err != nil {
-		t.Fatalf("preflight should succeed after retry: %v", err)
-	}
-}
-
-// TestPreflightRetryDelays_MatchesSpec pins the retry schedule from
-// spec §7. Other preflight tests override preflightRetryDelays via
-// fastDelays() to keep the suite under a second; without this pin a
-// typo in the production schedule would slip through unnoticed.
-func TestPreflightRetryDelays_MatchesSpec(t *testing.T) {
-	want := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
-	if len(preflightRetryDelays) != len(want) {
-		t.Fatalf("preflightRetryDelays has %d entries, want %d (spec §7)", len(preflightRetryDelays), len(want))
-	}
-	for i, d := range want {
-		if preflightRetryDelays[i] != d {
-			t.Errorf("preflightRetryDelays[%d] = %v, want %v", i, preflightRetryDelays[i], d)
-		}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("hits = %d, want 1 in direct preflight unit test", got)
 	}
 }
 

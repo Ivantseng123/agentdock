@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +101,35 @@ github:
 `)
 	if cfg.Secrets["GH_TOKEN"] != "ghp-worker" {
 		t.Errorf("GH_TOKEN = %q", cfg.Secrets["GH_TOKEN"])
+	}
+}
+
+func TestPreflightWorkerGHTokenOverride_FailsWhenAppDeliversSecrets(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  transport: redis
+secret_key: abc
+secrets:
+  GH_TOKEN: ghp-worker-override
+`)
+	err := preflightWorkerGHTokenOverride(cfg)
+	if err == nil {
+		t.Fatal("expected override error")
+	}
+	if !strings.Contains(err.Error(), "overrides app-minted per-job token") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreflightWorkerGHTokenOverride_AllowsPATOnlyOverride(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  transport: redis
+secret_key: abc
+github:
+  token: ghp-worker
+`)
+	if err := preflightWorkerGHTokenOverride(cfg); err != nil {
+		t.Fatalf("expected PAT-shaped override warning only, got %v", err)
 	}
 }

@@ -54,6 +54,50 @@ func TestPRReviewWorkflow_TriggerAPath_Valid(t *testing.T) {
 	}
 }
 
+func TestPRReviewWorkflow_TriggerAPath_UsesPATFallbackForBaseRepo(t *testing.T) {
+	pr := &ghclient.PullRequest{Number: 7, State: "open", Title: "T"}
+	pr.Head.Ref = "feature-x"
+	pr.Head.SHA = "abc123"
+	pr.Head.Repo.FullName = "forker/bar"
+	pr.Base.Ref = "main"
+
+	w, _ := newTestPRReviewWorkflow(t)
+	w.cfg.GitHub.Token = "ghp_fallback"
+	w.source = &fakeTokenSource{token: "ghs_app", accessible: map[string]bool{"foo/bar": false}}
+	var seenToken string
+	w.newGitHub = func(tokenFn func() (string, error)) GitHubPR {
+		seenToken, _ = tokenFn()
+		return &fakeGitHubPR{pr: pr}
+	}
+
+	step, err := w.Trigger(context.Background(), TriggerEvent{ChannelID: "C1", ThreadTS: "1.0"}, "https://github.com/foo/bar/pull/7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepSubmit {
+		t.Fatalf("expected submit, got %v", step.Kind)
+	}
+	if seenToken != "ghp_fallback" {
+		t.Fatalf("validation token = %q, want ghp_fallback", seenToken)
+	}
+}
+
+func TestPRReviewWorkflow_TriggerAPath_NoPATFailsForBaseRepo(t *testing.T) {
+	w, _ := newTestPRReviewWorkflow(t)
+	w.source = &fakeTokenSource{token: "ghs_app", accessible: map[string]bool{"foo/bar": false}}
+
+	step, err := w.Trigger(context.Background(), TriggerEvent{ChannelID: "C1", ThreadTS: "1.0"}, "https://github.com/foo/bar/pull/7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Kind != NextStepError {
+		t.Fatalf("expected error, got %v", step.Kind)
+	}
+	if !strings.Contains(step.ErrorText, "GitHub App 未涵蓋此 repo") {
+		t.Fatalf("errorText = %q", step.ErrorText)
+	}
+}
+
 func TestPRReviewWorkflow_TriggerAPath_404(t *testing.T) {
 	w, slack := newTestPRReviewWorkflow(t)
 	w.github = &fakeGitHubPR{err: errors.New("404 not found")}
@@ -344,6 +388,35 @@ func TestPRReviewWorkflow_BuildJob_RejectsEmptyHeadRepo(t *testing.T) {
 	}
 }
 
+func TestPRReviewWorkflow_BuildJob_RejectsInaccessibleHeadRepo(t *testing.T) {
+	w, _ := newTestPRReviewWorkflow(t)
+	w.source = &fakeTokenSource{token: "ghs_app", accessible: map[string]bool{"forker/bar": false}}
+	pending := &Pending{
+		ChannelID: "C1",
+		ThreadTS:  "1.0",
+		TaskType:  "pr_review",
+		State: &prReviewState{
+			URL:      "https://github.com/foo/bar/pull/7",
+			Owner:    "foo",
+			Repo:     "bar",
+			Number:   7,
+			HeadRepo: "forker/bar",
+			HeadSHA:  "abc123",
+			BaseRef:  "main",
+		},
+	}
+	job, status, err := w.BuildJob(context.Background(), pending)
+	if err == nil {
+		t.Fatal("expected head repo access error")
+	}
+	if !strings.Contains(err.Error(), "head repo") {
+		t.Fatalf("err = %v", err)
+	}
+	if job != nil || status != "" {
+		t.Fatalf("job=%v status=%q, want nil/empty", job, status)
+	}
+}
+
 func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	t.Helper()
 	cfg := &config.Config{}
@@ -353,6 +426,6 @@ func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	tp := true
 	cfg.Workflows.PRReview.Enabled = &tp
 	slack := newFakeSlackPort()
-	w := NewPRReviewWorkflow(cfg, slack, &fakeGitHubPR{}, nil, slog.Default())
+	w := NewPRReviewWorkflow(cfg, nil, slack, &fakeGitHubPR{}, nil, slog.Default())
 	return w, slack
 }

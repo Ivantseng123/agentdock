@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
+	"github.com/Ivantseng123/agentdock/app/githubapp"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
@@ -67,6 +68,7 @@ func formatRefLine(repo, branch, role string) string {
 // implementation — users see no change.
 type IssueWorkflow struct {
 	cfg           *config.Config
+	source        githubapp.TokenSource
 	slack         SlackPort
 	github        IssueCreator
 	repoCache     *ghclient.RepoCache
@@ -122,6 +124,7 @@ func (s *issueState) RefExclusions() []string {
 // required. Panics on nil pointers to fail fast at startup.
 func NewIssueWorkflow(
 	cfg *config.Config,
+	source githubapp.TokenSource,
 	slack SlackPort,
 	github IssueCreator,
 	repoCache *ghclient.RepoCache,
@@ -133,6 +136,7 @@ func NewIssueWorkflow(
 	}
 	return &IssueWorkflow{
 		cfg:           cfg,
+		source:        source,
 		slack:         slack,
 		github:        github,
 		repoCache:     repoCache,
@@ -697,13 +701,16 @@ func (w *IssueWorkflow) afterRepoSelected(p *Pending, channelCfg config.ChannelC
 	if len(channelCfg.Branches) > 0 {
 		branches = channelCfg.Branches
 	} else if w.repoCache != nil {
-		// Empty token → RepoCache falls through to its tokenFn, which is
-		// staticPATSource.Get in PAT mode and appInstallationSource.Get in
-		// App mode. Reading cfg.Secrets here would steal a stale token from
-		// the dispatch-time encrypted blob in App mode (issue #212).
-		repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, "")
+		choice, err := chooseRepoAuth(st.SelectedRepo, w.cfg.GitHub.Token, w.source)
 		if err != nil {
-			// Surface the error so operators know repo access failed.
+			return NextStep{
+				Kind:      NextStepError,
+				ErrorText: repoAccessError(st.SelectedRepo),
+				Pending:   p,
+			}
+		}
+		repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, choice.perCallToken)
+		if err != nil {
 			return NextStep{
 				Kind:      NextStepError,
 				ErrorText: fmt.Sprintf(":x: Failed to access repo %s: %v", st.SelectedRepo, err),
@@ -1038,8 +1045,15 @@ func (w *IssueWorkflow) nextRefBranchStep(p *Pending) NextStep {
 	if len(cc.Branches) > 0 {
 		branches = cc.Branches
 	} else if w.repoCache != nil {
-		// See note above on EnsureRepo(..., "") + tokenFn fallback.
-		if rp, err := w.repoCache.EnsureRepo(target, ""); err == nil {
+		choice, err := chooseRepoAuth(target, w.cfg.GitHub.Token, w.source)
+		if err != nil {
+			return NextStep{
+				Kind:      NextStepError,
+				ErrorText: repoAccessError(target),
+				Pending:   p,
+			}
+		}
+		if rp, err := w.repoCache.EnsureRepo(target, choice.perCallToken); err == nil {
 			if lb, lerr := w.repoCache.ListBranches(rp); lerr == nil {
 				branches = lb
 			}

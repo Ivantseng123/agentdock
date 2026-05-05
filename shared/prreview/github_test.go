@@ -1,6 +1,7 @@
 package prreview
 
 import (
+	"encoding/json"
 	"context"
 	"io"
 	"net/http"
@@ -131,6 +132,64 @@ func TestHTTPCallRetry_403RateLimitRetries(t *testing.T) {
 	resp.Body.Close()
 	if hits != 2 {
 		t.Errorf("want 2 hits, got %d", hits)
+	}
+}
+
+func TestCreateReview_DoesNotRetryNonIdempotentPost(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(503)
+		_, _ = io.WriteString(w, `{"message":"temporary outage"}`)
+	}))
+	defer srv.Close()
+
+	id, err := createReview(context.Background(), srv.URL, "https://github.com/foo/bar/pull/1", "ghs_test", &CreateReviewReq{
+		CommitID: "abc123",
+		Body:     "summary",
+		Event:    "COMMENT",
+		Comments: []CreateReviewReqInline{{Path: "a.go", Line: 1, Side: "RIGHT", Body: "body"}},
+	}, 30*time.Second)
+	if err == nil {
+		t.Fatalf("want error, got nil (review id=%d)", id)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("createReview retried POST %d times, want exactly 1", got)
+	}
+	if !strings.Contains(err.Error(), "create review: 503") {
+		t.Fatalf("error = %v, want 503 create review error", err)
+	}
+}
+
+func TestCreateReview_SuccessSinglePost(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(200)
+		_ = json.NewEncoder(w).Encode(map[string]int64{"id": 42})
+	}))
+	defer srv.Close()
+
+	id, err := createReview(context.Background(), srv.URL, "https://github.com/foo/bar/pull/1", "ghs_test", &CreateReviewReq{
+		CommitID: "abc123",
+		Body:     "summary",
+		Event:    "COMMENT",
+		Comments: []CreateReviewReqInline{{Path: "a.go", Line: 1, Side: "RIGHT", Body: "body"}},
+	}, 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != 42 {
+		t.Fatalf("review id = %d, want 42", id)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("createReview hit count = %d, want 1", got)
 	}
 }
 

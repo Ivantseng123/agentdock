@@ -146,7 +146,7 @@ func marshalAppYAML(cfg *appconfig.Config, path string) ([]byte, error) {
 		text = insertBefore(text, "slack:", "# REQUIRED for `agentdock app`: Slack bot+app tokens")
 	}
 	if cfg.GitHub.Token == "" {
-		text = insertBefore(text, "github:", "# REQUIRED for both subcommands: GitHub token")
+		text = insertBefore(text, "github:", "# OPTIONAL PAT fallback: set github.token only if you need PAT mode or cross-installation fallback; pure GitHub App deployments use github.app.*")
 	}
 	if cfg.Redis.Addr == "" {
 		text = insertBefore(text, "redis:", "# REQUIRED when queue.transport=redis: Redis address")
@@ -175,7 +175,7 @@ func marshalWorkerYAML(cfg *workerconfig.Config, path string) ([]byte, error) {
 	}
 	text := string(raw)
 	if cfg.GitHub.Token == "" {
-		text = insertBefore(text, "github:", "# REQUIRED: GitHub token")
+		text = insertBefore(text, "github:", "# OPTIONAL worker override: set github.token only for PAT-only or deliberate worker-local override deployments")
 	}
 	if cfg.Redis.Addr == "" {
 		text = insertBefore(text, "redis:", "# REQUIRED when queue.transport=redis: Redis address")

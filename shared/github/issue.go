@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/metrics"
@@ -22,7 +21,7 @@ type IssueClient struct {
 // per outbound request via tokenTransport so the underlying gh.Client
 // can keep up with installation-token rotation without rebuilding.
 func NewIssueClient(tokenFn func() (string, error), logger *slog.Logger) *IssueClient {
-	httpClient := &http.Client{Transport: newTokenTransport(tokenFn, nil)}
+	httpClient := NewHTTPClientWithTokenFn(tokenFn, ProfileInteractive)
 	return &IssueClient{
 		client: gh.NewClient(httpClient),
 		logger: logger,
