@@ -28,6 +28,9 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Logging.AgentOutputDir == "" {
 		cfg.Logging.AgentOutputDir = "logs/agent-outputs"
 	}
+	if cfg.Logging.StderrFormat == "" {
+		cfg.Logging.StderrFormat = "styled"
+	}
 	for name, agent := range cfg.Agents {
 		if agent.Timeout <= 0 {
 			agent.Timeout = 5 * time.Minute

@@ -36,6 +36,9 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Logging.AgentOutputDir == "" {
 		cfg.Logging.AgentOutputDir = "logs/agent-outputs"
 	}
+	if cfg.Logging.StderrFormat == "" {
+		cfg.Logging.StderrFormat = "styled"
+	}
 	if cfg.Queue.Capacity <= 0 {
 		cfg.Queue.Capacity = 50
 	}
