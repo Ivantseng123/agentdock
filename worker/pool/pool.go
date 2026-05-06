@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 )
@@ -97,11 +96,10 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				logger.Info("job channel closed")
 				return
 			}
-			// Tag every downstream log record with the job's RequestID as
-			// trace_id. Callers that emit via *Context slog variants pick up
-			// the attr automatically; legacy logger.Info calls remain
-			// unaffected (they continue to ignore ctx, see #46 follow-up).
-			jobCtx := logging.WithTraceID(ctx, job.RequestID)
+			// trace_id will flow from the OTel SpanContext extracted from
+			// Job.Traceparent in T8 (#46). Plain ctx for now — no v1
+			// fallback per ADR-0004.
+			jobCtx := ctx
 			// Check if cancelled while pending.
 			state, err := p.cfg.Store.Get(jobCtx, job.ID)
 			if err != nil {
@@ -245,10 +243,8 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		logger.Error("failed to publish result", "error", err)
 	}
 
-	// Use *Context variants here so trace_id (set by runWorker via
-	// WithTraceID) lands on the terminal log lines. The rest of the worker
-	// code path still uses non-Context variants — full migration is folded
-	// into the OTel rollout (#46).
+	// *Context variants flow OTel SpanContext from the worker.handle_job
+	// span (set in T8 of #46) so trace_id lands on terminal log lines.
 	if result.Status == "cancelled" {
 		logger.InfoContext(ctx, "工作已取消", "phase", "完成")
 	} else {

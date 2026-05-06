@@ -266,11 +266,10 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	// It mirrors the old Workflow.runTriage logic, now accepting a *workflow.Pending
 	// and calling BuildJob on the matching registered workflow.
 	submitJob := func(ctx context.Context, p *workflow.Pending) {
-		// Tag downstream ctx with the pending's RequestID so log records
-		// emitted via *Context slog variants pick up the trace_id attr.
-		// Legacy logger.Info calls in this closure remain unaffected; the
-		// migration is tracked in #46.
-		ctx = logging.WithTraceID(ctx, p.RequestID)
+		// trace_id flows from the OTel root span started later in this
+		// closure (#46). Until that root span exists in the call graph,
+		// non-Context slog calls here emit without trace_id — accepted
+		// per ADR-0004.
 		wfImpl, ok := reg.Get(p.TaskType)
 		if !ok {
 			appLogger.Error("submitJob: unknown task_type", "phase", "失敗", "task_type", p.TaskType)
