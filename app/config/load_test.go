@@ -21,6 +21,7 @@ func clearAppEnv(t *testing.T) {
 		"SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "GITHUB_TOKEN",
 		"GITHUB_APP_APP_ID", "GITHUB_APP_INSTALLATION_ID", "GITHUB_APP_PRIVATE_KEY_PATH",
 		"MANTIS_API_TOKEN", "REDIS_ADDR", "REDIS_PASSWORD", "SECRET_KEY",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
 	} {
 		t.Setenv(k, "")
 	}
@@ -131,5 +132,53 @@ func TestValidate_OK(t *testing.T) {
 	ApplyDefaults(cfg)
 	if err := Validate(cfg); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestBuildKoanf_TracingEndpointFromYAML pins the YAML → cfg.Tracing path so
+// new operators can drop tracing.otlp_endpoint into app.yaml without env vars.
+func TestBuildKoanf_TracingEndpointFromYAML(t *testing.T) {
+	clearAppEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.yaml")
+	yaml := "tracing:\n  otlp_endpoint: jaeger-collector.istio-system:4317\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cmd := newTestCmd(t)
+	if err := cmd.ParseFlags(nil); err != nil {
+		t.Fatalf("ParseFlags: %v", err)
+	}
+	cfg, _, _, _, err := BuildKoanf(cmd, path)
+	if err != nil {
+		t.Fatalf("BuildKoanf: %v", err)
+	}
+	if cfg.Tracing.OTLPEndpoint != "jaeger-collector.istio-system:4317" {
+		t.Errorf("Tracing.OTLPEndpoint = %q, want yaml value", cfg.Tracing.OTLPEndpoint)
+	}
+}
+
+// TestBuildKoanf_TracingEndpointEnvOverridesYAML confirms env > YAML for the
+// OTel endpoint, matching the precedence Decision Q5 in the spec.
+func TestBuildKoanf_TracingEndpointEnvOverridesYAML(t *testing.T) {
+	clearAppEnv(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "tempo.observability.svc:4317")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.yaml")
+	yaml := "tracing:\n  otlp_endpoint: jaeger-collector.istio-system:4317\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cmd := newTestCmd(t)
+	if err := cmd.ParseFlags(nil); err != nil {
+		t.Fatalf("ParseFlags: %v", err)
+	}
+	cfg, _, _, _, err := BuildKoanf(cmd, path)
+	if err != nil {
+		t.Fatalf("BuildKoanf: %v", err)
+	}
+	if cfg.Tracing.OTLPEndpoint != "tempo.observability.svc:4317" {
+		t.Errorf("Tracing.OTLPEndpoint = %q, want env value", cfg.Tracing.OTLPEndpoint)
 	}
 }
