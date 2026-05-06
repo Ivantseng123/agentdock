@@ -1,90 +1,63 @@
-# Todo: Ask Fallback Extension (Categorised Failure Recovery)
+# TODO: Observability v2 — OpenTelemetry Tracing
 
-Plan: `tasks/plan.md`
-Spec: `docs/superpowers/specs/2026-04-26-ask-fallback-extension-design.md`
-Branch: `feat/ask-fallback-extension` (from `main`, NOT from `fix/ask-parser-marker-in-string`)
+> Plan: `docs/superpowers/plans/2026-05-06-otel-tracing.md` · Spec: `docs/superpowers/specs/2026-05-06-otel-tracing-design.md`
 
-## Pre-flight
+## Phase 1 — 基建(無流量,build 不變)
 
-- [ ] Confirm with human: spec is approved as-is or with edits
-- [ ] Confirm with human: four `fallback_*` constant spellings are final
-- [ ] Confirm with human: empty-stdout wording `:x: Agent 沒有產生任何答案`
-- [ ] Confirm with human: branch deletion of `fix/ask-parser-marker-in-string` (destructive, requires explicit go-ahead)
-- [ ] `git checkout main && git pull && git checkout -b feat/ask-fallback-extension`
+- [ ] **T1** 新增 `shared/tracing/` package(setup + propagation + constants),fail-soft,empty endpoint = silent skip
+- [ ] **T2** `Job.Traceparent` add-only + 雙向相容 fixture test(v1 ↔ v2 payload 都不爆)
+- [ ] **T3** 砍 v1 fallback:刪 `WithTraceID` / `TraceIDFrom`,handler 改讀 OTel SpanContext,清 2 個 callers
+- [ ] **T4** `cmd/agentdock/` 配線:YAML schema(`tracing.otlp_endpoint`)+ env override + `BuildTracerProvider` 啟動 + init 樣板
+- [ ] **T5** Commitlint baseline 跑一次
 
-## Task 1 — Parser refactor (`app/workflow/ask_parser.go`, `_test.go`)
+### ✅ Checkpoint Phase 1
+- [ ] `go test ./... -race` 全綠(root + 三 module)
+- [ ] `agentdock app/worker` 啟動成功
+- [ ] 無 `WithTraceID` / `TraceIDFrom` 殘留
+- [ ] (預期)log 暫時無 `trace_id`,Jaeger 無 span — 由 Phase 2 補回
 
-- [ ] Replace `ResultSourceRawFallback` const with four new consts:
-  - [ ] `ResultSourceFallbackMarkerMissing = "fallback_marker_missing"`
-  - [ ] `ResultSourceFallbackSegmentsNoJSON = "fallback_segments_no_json"`
-  - [ ] `ResultSourceFallbackUnmarshal = "fallback_unmarshal"`
-  - [ ] `ResultSourceFallbackEmptyAnswer = "fallback_empty_answer"`
-- [ ] Add private helper `fallbackOrFail(output, reason string) (AskResult, error)` per spec sketch
-- [ ] Refactor `ParseAskOutput`:
-  - [ ] Marker-missing branch routes through `fallbackOrFail(output, ResultSourceFallbackMarkerMissing)`
-  - [ ] Segment-not-`{` branch tracks `ResultSourceFallbackSegmentsNoJSON` as `lastReason`
-  - [ ] Unmarshal-fail branch tracks `ResultSourceFallbackUnmarshal`
-  - [ ] Empty-answer branch tracks `ResultSourceFallbackEmptyAnswer`
-  - [ ] Loop fall-through routes through `fallbackOrFail(output, lastReason)`
-  - [ ] Schema success unchanged
-- [ ] Update doc comment on `ParseAskOutput` to describe the new contract; remove the pointer to old §Design Decisions #2
-- [ ] Test updates in `ask_parser_test.go`:
-  - [ ] `TestParseAskOutput_Valid` — unchanged (schema path)
-  - [ ] `TestParseAskOutput_MarkerMissing_FallbackToRaw` → rename + assert new constant `ResultSourceFallbackMarkerMissing`
-  - [ ] `TestParseAskOutput_MalformedJSON` → flip semantic: now expects fallback success with `ResultSourceFallbackUnmarshal`; rename to `TestParseAskOutput_MalformedJSON_FallsBackToUnmarshal`
-  - [ ] `TestParseAskOutput_EmptyAnswer` → flip semantic: now expects fallback success with `ResultSourceFallbackEmptyAnswer`; rename to `TestParseAskOutput_EmptyAnswer_FallsBackToEmptyAnswer`
-  - [ ] Add `TestParseAskOutput_MarkerInBodyNoJSON` (covers 2026-04-26 incident: marker referenced in markdown body, no JSON object) → expects `ResultSourceFallbackSegmentsNoJSON`
-  - [ ] `TestParseAskOutput_MarkerMissing_EmptyFails` — keep (true empty still errors)
-  - [ ] `TestParseAskOutput_MarkerMissing_WhitespaceOnlyFails` — keep
-  - [ ] `TestParseAskOutput_MarkerMissing_TooShortFails` — keep
-  - [ ] `TestParseAskOutput_MultipleMarkers_LastWins` — verify still passes (schema path unaffected)
-  - [ ] `TestParseAskOutput_FenceMarkers` — verify still passes (schema path)
-- [ ] Verify: `go test ./app/workflow -run TestParseAskOutput -v` green
-- [ ] Verify: `go vet ./app/...` clean
+## Phase 2 — App 端可見的第一個 trace(端到端最小 slice)
 
-### Checkpoint after Task 1
+> ⚠️ **T3 + T6 + T7 強制綁同一 PR merge**,避免過渡期 log 缺 trace_id
 
-- [ ] Stop and confirm with human: are the four `fallback_*` constant spellings + the empty-stdout wording final before continuing to Task 2?
+- [ ] **T6** `shared/queue.Submit()` auto-instrument `queue.enqueue` span(allowlist: queue/job_id/task_type/priority)
+- [ ] **T7** `app/app.go submitJob` 起 `bot.handle_event` root span,`Job.RequestID` 改填 OTel hex,`Job.Traceparent` Inject
 
-## Task 2 — Handler simplify (`app/workflow/ask.go`, `_test.go`)
+### ✅ Checkpoint Phase 2
+- [ ] log `trace_id` 回歸,為 OTel 16-byte hex
+- [ ] Jaeger UI 看到 `bot.handle_event` + `queue.enqueue`(2 spans,`agentdock-app` service)
+- [ ] `Job.RequestID` ≡ log `trace_id` ≡ Jaeger trace ID
+- [ ] Empty endpoint 路徑仍正常
 
-- [ ] Replace the `if err != nil { ... }` body in `HandleResult` (`app/workflow/ask.go:443-455`):
-  - [ ] Keep `logging.Redact` + truncation + `WARN` log (operator value)
-  - [ ] Replace `metrics ... "parse_failed"` increment — keep label, but it now only fires for true-empty stdout
-  - [ ] Replace post text with `:x: Agent 沒有產生任何答案`
-- [ ] Replace the `parsed.ResultSource == ResultSourceRawFallback` check (`app/workflow/ask.go:459-462`):
-  - [ ] Branch on `parsed.ResultSource != ResultSourceSchema` instead
-  - [ ] `status = parsed.ResultSource` (the new `fallback_*` value)
-  - [ ] Banner prepend unchanged
-- [ ] Banner constant `askFallbackBanner` unchanged
-- [ ] Test updates in `ask_test.go`:
-  - [ ] Existing `TestAskWorkflow_HandleResult_FallbackPrependsBannerAndIncMetric` (line 722) → split or generalise into per-category tests
-  - [ ] Add coverage for `fallback_segments_no_json` metric label increment + banner present
-  - [ ] Add coverage for `fallback_unmarshal` metric label increment + banner present
-  - [ ] Add coverage for `fallback_empty_answer` metric label increment + banner present
-  - [ ] Add coverage for true-empty stdout → posts `:x: Agent 沒有產生任何答案` + `parse_failed` metric
-  - [ ] Existing `TestAskWorkflow_HandleResult_SchemaPathHasNoBanner` — verify unchanged
-- [ ] Verify: `go test ./app/workflow -run TestAskWorkflow_HandleResult -v` green
-- [ ] Verify: `go build ./cmd/agentdock` succeeds
+## Phase 3 — Worker 端跨 process 接上
 
-### Checkpoint after Task 2
+- [ ] **T8** Worker `worker.handle_job` umbrella + `agent.execute` span(無 `queue.dequeue`,Q10);agent attrs 嚴守 allowlist(無 prompt/stdout 內容)
 
-- [ ] `go test ./...` green across all modules
-- [ ] `go test ./test/...` green (import direction)
-- [ ] Stop and confirm with human: handler behaviour matches expectation before housekeeping
+### ✅ Checkpoint Phase 3
+- [ ] Jaeger UI 4-span tree:`bot.handle_event` → `queue.enqueue` → `worker.handle_job` → `agent.execute`,跨兩 service 同 trace_id
 
-## Task 3 — Cleanup (spec annotation + CHANGELOG + branch close)
+## Phase 4 — 完整 5+ span tree
 
-- [ ] Add reversed-by note to top of `docs/superpowers/specs/2026-04-25-workflow-output-boundary-design.md`:
-  - [ ] `**Reversed in part by:** docs/superpowers/specs/2026-04-26-ask-fallback-extension-design.md (§Design Decisions #2, §Acceptance Criteria #3, §Ask Fallback Policy → Trigger Condition #2)`
-- [ ] Locate CHANGELOG-of-record (release-please managed `CHANGELOG.md` or release-notes draft):
-  - [ ] Add entry: `Ask metric label fallback_raw removed; replaced by fallback_marker_missing, fallback_segments_no_json, fallback_unmarshal, fallback_empty_answer.`
-- [ ] Confirm with human (per memory `feedback_merge_authorization`): delete local branch `fix/ask-parser-marker-in-string`?
-  - [ ] If yes: `git branch -D fix/ask-parser-marker-in-string` (commit `2c4a2db` recoverable from reflog 90 days)
-  - [ ] If no: leave branch as-is; spec acceptance only requires "not merged"
+- [ ] **T9** `shared/github/repo.go` `clone_repo` span(primary + ref sibling,`repo_role` attr 區分)
+- [ ] **T10** `result_listener` Extract `state.Job.Traceparent` + workflow `github.create_issue` span(parent = 原 root;不依賴 JobResult 加欄位)
 
-### Checkpoint after Task 3 (Complete)
+### ✅ Checkpoint Phase 4
+- [ ] 完整 5+ span tree
+- [ ] PII 抽查:每個 span attr 對 ADR-0003 allowlist,無 thread/prompt/token/stdout 內容
 
-- [ ] Open PR on `feat/ask-fallback-extension`
-- [ ] **STOP after PR open** — per memory, do not self-merge; user verifies CI
-- [ ] Image rebuild + k8s redeploy is downstream (release-please flow), not part of this plan
+## Phase 5 — Retry 拓樸
+
+- [ ] **T11** `retry_handler` 逐字複製 `Traceparent` + `RequestID`,**不開新 span**(ADR-0002);queue.enqueue auto-span 自動 child of 原 root
+
+### ✅ Checkpoint Phase 5
+- [ ] retry 後多個 `worker.handle_job` sibling 在同 trace_id
+- [ ] 無任何 `bot.retry_handler` 之類 app-side umbrella span
+
+## Phase 6 — Manual verify
+
+- [ ] **T12** 手動跑三個 scenario(issue / ask+ref / retry)+ Jaeger 截圖貼 PR + ADR-0003 allowlist 抽查
+
+### ✅ Final
+- [ ] SPEC §Success Criteria 七條全 ✅
+- [ ] CHANGELOG 更新
+- [ ] PR ready for review
