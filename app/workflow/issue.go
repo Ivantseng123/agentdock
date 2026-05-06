@@ -8,13 +8,22 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/Ivantseng123/agentdock/app/config"
 	"github.com/Ivantseng123/agentdock/app/githubapp"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 )
+
+// tracer reads the global TracerProvider; cmd/agentdock/app.go owns setup.
+var tracer = otel.Tracer("agentdock/app/workflow")
 
 // criticalSentinel is the HTML-comment marker the agent emits in issue body
 // when a critical ref repo is unavailable and the issue cannot meaningfully
@@ -595,11 +604,25 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 	}
 
 	owner, repo := splitRepo(job.Repo)
+	// github.create_issue span — child of the original bot.handle_event
+	// (ctx was extracted from state.Job.Traceparent in result_listener).
+	// Attributes follow ADR-0003: counts and lengths only, no content.
+	ctx, createSpan := tracer.Start(ctx, tracing.SpanGithubCreateIssue,
+		trace.WithAttributes(
+			attribute.String("repo", job.Repo),
+			attribute.Int("labels_count", len(labels)),
+			attribute.Int("title_len", len(title)),
+		),
+	)
 	url, err := w.github.CreateIssue(ctx, owner, repo, title, body, labels)
 	if err != nil {
+		createSpan.RecordError(err)
+		createSpan.SetStatus(codes.Error, "create issue failed")
+		createSpan.End()
 		w.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
 		return fmt.Errorf("github create issue: %w", err)
 	}
+	createSpan.End()
 
 	confidence := parsed.Confidence
 	if confidence == "" {
