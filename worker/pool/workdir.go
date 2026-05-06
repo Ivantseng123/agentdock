@@ -134,27 +134,33 @@ func prepareRefs(ctx context.Context, provider RepoProvider, primaryPath, token 
 		target := filepath.Join(refsRoot, refDirName(r.Repo))
 		// One github.clone_repo span per ref — siblings of the primary
 		// clone span, all children of worker.handle_job. repo_role attr
-		// distinguishes them in the trace UI.
+		// distinguishes them in the trace UI. Inline closure scopes
+		// defer span.End() per-iteration so a future panic/early-return
+		// in the body cannot orphan a span.
 		refStart := time.Now()
-		_, refSpan := tracer.Start(ctx, tracing.SpanGithubCloneRepo,
-			trace.WithAttributes(
-				attribute.String("repo_role", "ref"),
-				attribute.String("repo", r.Repo),
-				attribute.String("branch", r.Branch),
-			),
-		)
-		pErr := provider.PrepareAt(r.CloneURL, r.Branch, token, target)
-		refSpan.SetAttributes(attribute.Int64("duration_ms", time.Since(refStart).Milliseconds()))
+		pErr := func() error {
+			_, refSpan := tracer.Start(ctx, tracing.SpanGithubCloneRepo,
+				trace.WithAttributes(
+					attribute.String("repo_role", "ref"),
+					attribute.String("repo", r.Repo),
+					attribute.String("branch", r.Branch),
+				),
+			)
+			defer refSpan.End()
+			err := provider.PrepareAt(r.CloneURL, r.Branch, token, target)
+			refSpan.SetAttributes(attribute.Int64("duration_ms", time.Since(refStart).Milliseconds()))
+			if err != nil {
+				refSpan.RecordError(err)
+				refSpan.SetStatus(codes.Error, "ref clone failed")
+			}
+			return err
+		}()
 		if pErr != nil {
-			refSpan.RecordError(pErr)
-			refSpan.SetStatus(codes.Error, "ref clone failed")
-			refSpan.End()
 			logger.Warn("ref clone failed; continuing with partial context",
 				"phase", "處理中", "ref", r.Repo, "branch", r.Branch, "error", pErr)
 			unavailable = append(unavailable, r.Repo)
 			continue
 		}
-		refSpan.End()
 		successful = append(successful, queue.RefRepoContext{
 			Repo: r.Repo, Branch: r.Branch, Path: target,
 		})

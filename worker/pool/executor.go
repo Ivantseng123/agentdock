@@ -112,24 +112,32 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	provider := selectProvider(job, deps.repoCache, ghToken)
 	// github.clone_repo span (primary). EmptyDirProvider also flows through
 	// here — its work is filesystem-only (no actual clone), but we keep the
-	// span for observability symmetry with repo-backed jobs.
-	_, primaryCloneSpan := tracer.Start(ctx, tracing.SpanGithubCloneRepo,
-		trace.WithAttributes(
-			attribute.String("repo_role", "primary"),
-			attribute.String("repo", job.Repo),
-			attribute.String("branch", job.Branch),
-		),
-	)
-	repoPath, err := provider.Prepare(job)
-	primaryCloneSpan.SetAttributes(attribute.Int64("duration_ms", time.Since(prepareStart).Milliseconds()))
+	// span for observability symmetry with repo-backed jobs. Inline closure
+	// scopes defer span.End() to this clone — same pattern as worker.handle_job
+	// in pool.go, prevents span leak if a later early-return is added.
+	var repoPath string
+	err := func() error {
+		_, primaryCloneSpan := tracer.Start(ctx, tracing.SpanGithubCloneRepo,
+			trace.WithAttributes(
+				attribute.String("repo_role", "primary"),
+				attribute.String("repo", job.Repo),
+				attribute.String("branch", job.Branch),
+			),
+		)
+		defer primaryCloneSpan.End()
+		var prepareErr error
+		repoPath, prepareErr = provider.Prepare(job)
+		primaryCloneSpan.SetAttributes(attribute.Int64("duration_ms", time.Since(prepareStart).Milliseconds()))
+		if prepareErr != nil {
+			primaryCloneSpan.RecordError(prepareErr)
+			primaryCloneSpan.SetStatus(codes.Error, "primary clone failed")
+		}
+		return prepareErr
+	}()
 	if err != nil {
-		primaryCloneSpan.RecordError(err)
-		primaryCloneSpan.SetStatus(codes.Error, "primary clone failed")
-		primaryCloneSpan.End()
 		logger.Error("Repo 準備失敗", "phase", "失敗", "branch", job.Branch, "error", err.Error())
 		return classifyResult(job, startedAt, fmt.Errorf("workdir prepare failed: %w", err), "", ctx, deps.store)
 	}
-	primaryCloneSpan.End()
 	prepareSeconds := time.Since(prepareStart).Seconds()
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath, "prepare_seconds", prepareSeconds)
 
