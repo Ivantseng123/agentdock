@@ -614,15 +614,14 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 			attribute.Int("title_len", len(title)),
 		),
 	)
+	defer createSpan.End()
 	url, err := w.github.CreateIssue(ctx, owner, repo, title, body, labels)
 	if err != nil {
 		createSpan.RecordError(err)
 		createSpan.SetStatus(codes.Error, "create issue failed")
-		createSpan.End()
 		w.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
 		return fmt.Errorf("github create issue: %w", err)
 	}
-	createSpan.End()
 
 	confidence := parsed.Confidence
 	if confidence == "" {
