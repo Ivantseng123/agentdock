@@ -87,6 +87,9 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	start := time.Now()
 	var stderrLen int
 	exitCode := -1 // -1 = not run / not waited
+	// Closure captures `output` (named return) and `stderrLen` so the
+	// span attrs reflect whatever values the function ends up returning,
+	// regardless of which exit branch fires.
 	defer func() {
 		attrs := []attribute.KeyValue{
 			attribute.Int64("duration_ms", time.Since(start).Milliseconds()),
