@@ -54,6 +54,28 @@ func TestBuildTracerProvider_SetEndpointReturnsUsableProvider(t *testing.T) {
 	_ = shutdown(shortCtx) // err is acceptable per fail-soft posture
 }
 
+func TestRedactEndpoint(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		out  string
+	}{
+		{"no userinfo bare hostport", "localhost:4317", "localhost:4317"},
+		{"no userinfo with scheme", "https://otel.example:4317", "https://otel.example:4317"},
+		{"userinfo bare hostport", "user:pass@otel.example:4317", "<redacted>@otel.example:4317"},
+		{"userinfo with scheme", "https://user:pass@otel.example:4317", "https://<redacted>@otel.example:4317"},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactEndpoint(tc.in)
+			if got != tc.out {
+				t.Errorf("RedactEndpoint(%q) = %q, want %q", tc.in, got, tc.out)
+			}
+		})
+	}
+}
+
 func TestBuildTracerProvider_NilLoggerDoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 	tp, shutdown := BuildTracerProvider(ctx, Config{

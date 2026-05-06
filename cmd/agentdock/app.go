@@ -73,7 +73,7 @@ func setupTracing(ctx context.Context, serviceName, endpoint string) func() {
 	slog.Info("OTel tracing setup",
 		"phase", "啟動",
 		"service_name", serviceName,
-		"endpoint", endpoint,
+		"endpoint", tracing.RedactEndpoint(endpoint),
 		"source", source,
 	)
 

@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -10,6 +11,21 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+// RedactEndpoint strips any userinfo prefix from an endpoint string so
+// logs never carry credentials. OTLP gRPC endpoints are typically
+// host:port (no userinfo), but operators may set an HTTP-style URL
+// with embedded credentials — this helper handles both safely.
+func RedactEndpoint(s string) string {
+	i := strings.LastIndex(s, "@")
+	if i < 0 {
+		return s
+	}
+	if j := strings.Index(s, "://"); j >= 0 && j < i {
+		return s[:j+3] + "<redacted>@" + s[i+1:]
+	}
+	return "<redacted>@" + s[i+1:]
+}
 
 // Config holds the runtime knobs for tracing setup.
 //
@@ -57,7 +73,7 @@ func BuildTracerProvider(ctx context.Context, cfg Config, logger *slog.Logger) (
 			if logger != nil {
 				logger.Warn("OTLP exporter init failed; continuing without exporter",
 					"phase", "失敗",
-					"endpoint", cfg.OTLPEndpoint,
+					"endpoint", RedactEndpoint(cfg.OTLPEndpoint),
 					"error", err)
 			}
 		} else {
