@@ -23,13 +23,23 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// tracer is the package-level OTel tracer for the app process. Reads the
+// global TracerProvider so cmd/agentdock owns setup; tests run against the
+// default no-op provider unless they explicitly install a recorder.
+var tracer = otel.Tracer("agentdock/app")
 
 // Build info propagated from cmd at link time (goreleaser -X flags target
 // main.*; cmd/agentdock copies those values into these vars before Run
@@ -266,22 +276,30 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	// It mirrors the old Workflow.runTriage logic, now accepting a *workflow.Pending
 	// and calling BuildJob on the matching registered workflow.
 	submitJob := func(ctx context.Context, p *workflow.Pending) {
-		// trace_id flows from the OTel root span started later in this
-		// closure (#46). Until that root span exists in the call graph,
-		// non-Context slog calls here emit without trace_id — accepted
-		// per ADR-0004.
+		// bot.handle_event is the app-side root span. It covers everything
+		// from workflow lookup through queue submit; cross-process traces
+		// then continue from the worker's worker.handle_job span via the
+		// W3C traceparent embedded in the Job (set below). Attributes are
+		// kept to the ADR-0003 allowlist — no PII, no thread content.
+		ctx, span := tracer.Start(ctx, tracing.SpanBotHandleEvent,
+			trace.WithAttributes(
+				attribute.String("task_type", p.TaskType),
+				attribute.String("channel_id", p.ChannelID),
+			),
+		)
+		defer span.End()
+
 		wfImpl, ok := reg.Get(p.TaskType)
 		if !ok {
-			appLogger.Error("submitJob: unknown task_type", "phase", "失敗", "task_type", p.TaskType)
+			appLogger.ErrorContext(ctx, "submitJob: unknown task_type", "phase", "失敗", "task_type", p.TaskType)
 			_ = slackPort.PostMessage(p.ChannelID, ":x: internal error: unknown workflow type", p.ThreadTS)
 			return
 		}
 
 		job, statusText, err := wfImpl.BuildJob(ctx, p)
 		if err != nil {
-			// *Context variant so trace_id (injected above) lands on this
-			// failure-path record. Demonstrates the wiring; broader
-			// migration deferred to #46.
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "BuildJob failed")
 			appLogger.ErrorContext(ctx, "BuildJob failed", "phase", "失敗", "error", err)
 			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: %v", err), p.ThreadTS)
 			if handler != nil {
@@ -289,6 +307,13 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 			}
 			return
 		}
+
+		// Replace the workflow-generated RequestID (timestamp+rand) with the
+		// OTel root span's TraceID so log records and the trace backend share
+		// the same identifier (ADR-0004). Inject the W3C traceparent so the
+		// worker side can resume the trace as a child span.
+		job.RequestID = span.SpanContext().TraceID().String()
+		job.Traceparent = tracing.InjectFromContext(ctx)
 
 		// Append worker-availability busy hint if the pre-submit check set one.
 		if p.BusyHint != "" {
@@ -422,8 +447,11 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		// Submit to queue.
 		if err := coordinator.Submit(ctx, job); err != nil {
 			if err == queue.ErrQueueFull {
+				// Load shedding — anticipated, not an OTel error.
 				_ = slackPort.PostMessage(p.ChannelID, ":warning: 系統忙碌，請稍後再試", p.ThreadTS)
 			} else {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "queue submit failed")
 				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to submit job: %v", err), p.ThreadTS)
 			}
 			if handler != nil {
