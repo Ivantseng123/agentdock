@@ -35,19 +35,3 @@ func EnvOverrideMap() map[string]any {
 	return out
 }
 
-func scanSecretEnvVars() map[string]string {
-	const prefix = "AGENTDOCK_SECRET_"
-	out := make(map[string]string)
-	for _, env := range os.Environ() {
-		if idx := strings.Index(env, "="); idx > 0 {
-			key := env[:idx]
-			if strings.HasPrefix(key, prefix) {
-				name := key[len(prefix):]
-				if name != "" {
-					out[name] = env[idx+1:]
-				}
-			}
-		}
-	}
-	return out
-}

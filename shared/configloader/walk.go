@@ -1,6 +1,7 @@
 package configloader
 
 import (
+	"log/slog"
 	"reflect"
 	"strings"
 
@@ -38,6 +39,18 @@ func WalkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool, ma
 		if ft.Kind() == reflect.Struct {
 			WalkYAMLPathsKeyOnly(ft, path, out, mapKeys)
 		}
+	}
+}
+
+// WarnUnknownKeys logs a slog.Warn for every koanf key not present in the
+// yaml schema of configType. Map-valued fields (e.g. agents, secrets,
+// channels) accept arbitrary sub-keys and are skipped automatically.
+func WarnUnknownKeys(k *koanf.Koanf, configType reflect.Type) {
+	valid := map[string]bool{}
+	mapKeys := map[string]bool{}
+	WalkYAMLPathsKeyOnly(configType, "", valid, mapKeys)
+	for _, key := range UnknownKeys(k, valid, mapKeys) {
+		slog.Warn("未知設定鍵", "phase", "失敗", "key", key)
 	}
 }
 

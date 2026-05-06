@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Ivantseng123/agentdock/shared/configloader"
 	"gopkg.in/yaml.v3"
 )
 
@@ -96,7 +97,7 @@ func resolveSecrets(cfg *Config) {
 			cfg.Secrets["GH_TOKEN"] = cfg.GitHub.Token
 		}
 	}
-	for k, v := range scanSecretEnvVars() {
+	for k, v := range configloader.ScanSecretEnvVars("AGENTDOCK_SECRET_") {
 		cfg.Secrets[k] = v
 	}
 }
