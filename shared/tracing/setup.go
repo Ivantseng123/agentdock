@@ -61,7 +61,15 @@ func BuildTracerProvider(ctx context.Context, cfg Config, logger *slog.Logger) (
 					"error", err)
 			}
 		} else {
-			opts = append(opts, sdktrace.WithBatcher(exp))
+			// Pin BatchSpanProcessor sizing explicitly. Values match the SDK
+			// defaults today (queue 2048, batch 512, 5s tick) so behavior is
+			// unchanged, but they're now grep-able and easy to tune if the
+			// "buffer 滿 → span loss" risk in the spec ever materializes.
+			opts = append(opts, sdktrace.WithBatcher(exp,
+				sdktrace.WithMaxQueueSize(2048),
+				sdktrace.WithMaxExportBatchSize(512),
+				sdktrace.WithBatchTimeout(5*time.Second),
+			))
 		}
 	}
 
