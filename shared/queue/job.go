@@ -42,6 +42,11 @@ type Job struct {
 	SubmittedAt      time.Time                `json:"submitted_at"`
 	EncryptedSecrets []byte                   `json:"encrypted_secrets,omitempty"`
 	RefRepos         []RefRepo                `json:"ref_repos,omitempty"`
+	// Traceparent carries the W3C TraceContext header so the worker can
+	// resume the app-side trace as a child span. Empty string means the
+	// producer didn't enable tracing (or sits on v1 code) — Extract is a
+	// graceful no-op in that case (see shared/tracing).
+	Traceparent string `json:"traceparent,omitempty"`
 }
 
 type AttachmentMeta struct {
