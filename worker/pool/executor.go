@@ -11,8 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 	"github.com/Ivantseng123/agentdock/worker/prompt"
 )
@@ -105,11 +110,26 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		return classifyResult(job, startedAt, fmt.Errorf("empty repo reference: job has no usable repo/clone_url"), "", ctx, deps.store)
 	}
 	provider := selectProvider(job, deps.repoCache, ghToken)
+	// github.clone_repo span (primary). EmptyDirProvider also flows through
+	// here — its work is filesystem-only (no actual clone), but we keep the
+	// span for observability symmetry with repo-backed jobs.
+	_, primaryCloneSpan := tracer.Start(ctx, tracing.SpanGithubCloneRepo,
+		trace.WithAttributes(
+			attribute.String("repo_role", "primary"),
+			attribute.String("repo", job.Repo),
+			attribute.String("branch", job.Branch),
+		),
+	)
 	repoPath, err := provider.Prepare(job)
+	primaryCloneSpan.SetAttributes(attribute.Int64("duration_ms", time.Since(prepareStart).Milliseconds()))
 	if err != nil {
+		primaryCloneSpan.RecordError(err)
+		primaryCloneSpan.SetStatus(codes.Error, "primary clone failed")
+		primaryCloneSpan.End()
 		logger.Error("Repo 準備失敗", "phase", "失敗", "branch", job.Branch, "error", err.Error())
 		return classifyResult(job, startedAt, fmt.Errorf("workdir prepare failed: %w", err), "", ctx, deps.store)
 	}
+	primaryCloneSpan.End()
 	prepareSeconds := time.Since(prepareStart).Seconds()
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath, "prepare_seconds", prepareSeconds)
 
@@ -130,7 +150,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	if job.CloneURL != "" && len(job.RefRepos) > 0 {
 		var refErr error
 		refContexts, successfulRefPaths, unavailableRefs, refsRoot, refErr = prepareRefs(
-			deps.repoCache, repoPath, ghToken, job.RefRepos, logger,
+			ctx, deps.repoCache, repoPath, ghToken, job.RefRepos, logger,
 		)
 		if refErr != nil {
 			// Only refs-root mkdir failures bubble up; per-ref failures are

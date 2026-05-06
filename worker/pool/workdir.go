@@ -1,13 +1,20 @@
 package pool
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 )
 
 // WorkDirProvider prepares and cleans up the working directory an agent
@@ -109,7 +116,7 @@ func refDirName(repo string) string {
 //
 // err returns non-nil only when the refs-root mkdir itself fails — per-ref
 // failures are absorbed into `unavailable`.
-func prepareRefs(provider RepoProvider, primaryPath, token string, refs []queue.RefRepo, logger *slog.Logger) (
+func prepareRefs(ctx context.Context, provider RepoProvider, primaryPath, token string, refs []queue.RefRepo, logger *slog.Logger) (
 	successful []queue.RefRepoContext,
 	successfulPaths []string,
 	unavailable []string,
@@ -125,12 +132,29 @@ func prepareRefs(provider RepoProvider, primaryPath, token string, refs []queue.
 	}
 	for _, r := range refs {
 		target := filepath.Join(refsRoot, refDirName(r.Repo))
-		if pErr := provider.PrepareAt(r.CloneURL, r.Branch, token, target); pErr != nil {
+		// One github.clone_repo span per ref — siblings of the primary
+		// clone span, all children of worker.handle_job. repo_role attr
+		// distinguishes them in the trace UI.
+		refStart := time.Now()
+		_, refSpan := tracer.Start(ctx, tracing.SpanGithubCloneRepo,
+			trace.WithAttributes(
+				attribute.String("repo_role", "ref"),
+				attribute.String("repo", r.Repo),
+				attribute.String("branch", r.Branch),
+			),
+		)
+		pErr := provider.PrepareAt(r.CloneURL, r.Branch, token, target)
+		refSpan.SetAttributes(attribute.Int64("duration_ms", time.Since(refStart).Milliseconds()))
+		if pErr != nil {
+			refSpan.RecordError(pErr)
+			refSpan.SetStatus(codes.Error, "ref clone failed")
+			refSpan.End()
 			logger.Warn("ref clone failed; continuing with partial context",
 				"phase", "處理中", "ref", r.Repo, "branch", r.Branch, "error", pErr)
 			unavailable = append(unavailable, r.Repo)
 			continue
 		}
+		refSpan.End()
 		successful = append(successful, queue.RefRepoContext{
 			Repo: r.Repo, Branch: r.Branch, Path: target,
 		})
