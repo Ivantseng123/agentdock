@@ -10,6 +10,7 @@ replace (
 require (
 	github.com/Ivantseng123/agentdock/shared v0.0.0
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/knadh/koanf/providers/confmap v1.0.0
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.4
@@ -27,7 +28,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/go-github/v60 v60.0.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
@@ -56,5 +56,5 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/term v0.42.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
-	google.golang.org/protobuf v1.36.8 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )
