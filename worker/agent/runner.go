@@ -87,9 +87,13 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	start := time.Now()
 	var stderrLen int
 	exitCode := -1 // -1 = not run / not waited
-	// Closure captures `output` (named return) and `stderrLen` so the
-	// span attrs reflect whatever values the function ends up returning,
-	// regardless of which exit branch fires.
+	// Closure captures `output`, `err` (named returns), `stderrLen`, and
+	// `exitCode` so span attrs AND status reflect whatever values the
+	// function ends up returning, regardless of which exit branch fires.
+	// Single status-setting site here keeps the cmd.Start / cmd.Wait /
+	// blocked-args / output-file paths consistent — Jaeger filters by
+	// `error=true` would otherwise miss exit-non-zero (the most common
+	// failure mode), since `span.End` alone leaves status Unset.
 	defer func() {
 		attrs := []attribute.KeyValue{
 			attribute.Int64("duration_ms", time.Since(start).Milliseconds()),
@@ -100,6 +104,12 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 			attrs = append(attrs, attribute.Int("exit_code", exitCode))
 		}
 		span.SetAttributes(attrs...)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "agent run failed")
+		} else if exitCode > 0 {
+			span.SetStatus(codes.Error, fmt.Sprintf("agent exited %d", exitCode))
+		}
 		span.End()
 	}()
 
@@ -203,10 +213,8 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 
 	if startErr := cmd.Start(); startErr != nil {
 		// Process couldn't even launch (e.g. binary missing) — not a
-		// business failure but a worker-environment problem. Mark Error
-		// so trace UI surfaces it instead of burying it as Unset.
-		span.RecordError(startErr)
-		span.SetStatus(codes.Error, "agent process start failed")
+		// business failure but a worker-environment problem. Defer above
+		// records this on the span via the named-return `err` capture.
 		return "", startErr
 	}
 
