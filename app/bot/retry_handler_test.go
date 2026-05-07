@@ -346,3 +346,53 @@ func TestRetryHandler_IgnoresNonFailedJob(t *testing.T) {
 		t.Error("should not submit when job is not failed")
 	}
 }
+
+// TestRetryHandler_PreservesTraceparentAndRequestID guards ADR-0002:
+// the retry chain stays on the original trace_id by copying both
+// Traceparent (W3C carrier for span propagation) and RequestID (the
+// log-side identifier, OTel hex on T7+) verbatim.
+func TestRetryHandler_PreservesTraceparentAndRequestID(t *testing.T) {
+	ctx := context.Background()
+	store := queue.NewMemJobStore()
+	const (
+		origTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+		origRequestID   = "4bf92f3577b34da6a3ce929d0e0e4736"
+	)
+	original := &queue.Job{
+		ID:        "j-retry-trace",
+		ChannelID: "C1",
+		ThreadTS:  "T1",
+		UserID:    "U1",
+		Repo:      "owner/repo",
+		CloneURL:  "https://github.com/owner/repo.git",
+		Branch:    "main",
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "Alice", Timestamp: "1", Text: "x"}},
+			Channel:        "general",
+			Reporter:       "Alice",
+			Goal:           "triage",
+		},
+		RequestID:   origRequestID,
+		Traceparent: origTraceparent,
+	}
+	store.Put(ctx, original)
+	store.UpdateStatus(ctx, "j-retry-trace", queue.JobFailed)
+
+	q := &mockJobQueue{}
+	handler := NewRetryHandler(store, q, &mockSlackPoster{}, slog.Default(), nil, nil, nil)
+	handler.Handle("C1", "j-retry-trace", "msg-ts")
+
+	if len(q.submitted) != 1 {
+		t.Fatalf("expected 1 submitted retry job, got %d", len(q.submitted))
+	}
+	newJob := q.submitted[0]
+	if newJob.RequestID != origRequestID {
+		t.Errorf("RequestID = %q, want verbatim copy %q", newJob.RequestID, origRequestID)
+	}
+	if newJob.Traceparent != origTraceparent {
+		t.Errorf("Traceparent = %q, want verbatim copy %q", newJob.Traceparent, origTraceparent)
+	}
+	if newJob.ID == original.ID {
+		t.Error("retry job ID must differ from original (RetryOfJobID tracks lineage instead)")
+	}
+}

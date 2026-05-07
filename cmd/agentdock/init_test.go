@@ -44,6 +44,47 @@ func TestInitApp_YAML(t *testing.T) {
 	}
 }
 
+// TestInitApp_TracingBlockPresent confirms the OTel tracing knob lands in
+// the generated app.yaml with the env-override hint comment so operators
+// can wire up Jaeger / Tempo without reading the docs first.
+func TestInitApp_TracingBlockPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.yaml")
+	if err := runInitApp(path, false, false); err != nil {
+		t.Fatalf("runInitApp: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	if !strings.Contains(content, "tracing:") {
+		t.Error("app.yaml missing tracing: block")
+	}
+	if !strings.Contains(content, "otlp_endpoint") {
+		t.Error("app.yaml missing tracing.otlp_endpoint key")
+	}
+	if !strings.Contains(content, "OTEL_EXPORTER_OTLP_ENDPOINT") {
+		t.Error("app.yaml missing OTEL_EXPORTER_OTLP_ENDPOINT env hint")
+	}
+}
+
+func TestInitWorker_TracingBlockPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.yaml")
+	if err := runInitWorker(path, false, false); err != nil {
+		t.Fatalf("runInitWorker: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	if !strings.Contains(content, "tracing:") {
+		t.Error("worker.yaml missing tracing: block")
+	}
+	if !strings.Contains(content, "otlp_endpoint") {
+		t.Error("worker.yaml missing tracing.otlp_endpoint key")
+	}
+	if !strings.Contains(content, "OTEL_EXPORTER_OTLP_ENDPOINT") {
+		t.Error("worker.yaml missing OTEL_EXPORTER_OTLP_ENDPOINT env hint")
+	}
+}
+
 // TestInitApp_EmitsNewSchema pins the v2.3 schema shape — top-level
 // workflows: / prompt_defaults:, no top-level legacy prompt: / pr_review:.
 // Regression guard for issue #126: accidentally emitting the legacy shape

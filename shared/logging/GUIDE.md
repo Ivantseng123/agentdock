@@ -26,7 +26,7 @@ K8s + log aggregator 部署可切到 JSON：設 `logging.stderr_format: json`（
 
 ## Trace 串接（trace_id）
 
-`shared/logging/trace.go` 提供 `WithTraceID(ctx, id)` 與 `TraceIDHandler` slog middleware。entry point（app 的 `submitJob`、worker 的 `runWorker`）已注入 `Job.RequestID` 作 `trace_id`。callers 透過 `logger.InfoContext(ctx, ...)`（`*Context` 變體）發 log 才會自動帶 `trace_id`；非 `*Context` 變體不流經 ctx，OTel tracing（#46）落地後會把 `trace_id` 換成 OTel span 的 trace ID。
+`trace_id` 來自 ctx 上的 OTel SpanContext，由 `shared/logging/trace.go` 的 `TraceIDHandler`（slog middleware）讀取後寫入 record。callers 透過 `logger.InfoContext(ctx, ...)`（`*Context` 變體）發 log 才會自動帶 `trace_id`；非 `*Context` 變體不流經 ctx，沒有 `trace_id`。Cross-process 傳遞由 `Job.Traceparent`（W3C 格式）載送 SpanContext，worker 端在 `worker.handle_job` 開 span 前 `tracing.ExtractToContext` 還原。詳細設計見 ADR-0004。
 
 ## Component 注入
 

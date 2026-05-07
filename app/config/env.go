@@ -46,6 +46,13 @@ func EnvOverrideMap() map[string]any {
 	if v := os.Getenv("SECRET_KEY"); v != "" {
 		out["secret_key"] = v
 	}
+	// OTEL_EXPORTER_OTLP_ENDPOINT is the OTel-standard env name for the
+	// gRPC/HTTP collector address. We bind it into our tracing.otlp_endpoint
+	// path so env wins over YAML during koanf merge (matches the precedence
+	// of the other env vars above).
+	if v := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); v != "" {
+		out["tracing.otlp_endpoint"] = v
+	}
 	return out
 }
 

@@ -7,15 +7,25 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
+
+// tracer reads the global TracerProvider; cmd/agentdock/worker.go owns setup.
+var tracer = otel.Tracer("agentdock/worker/agent")
 
 // RunOptions provides per-call callbacks for agent execution.
 type RunOptions struct {
@@ -68,7 +78,41 @@ func (r *Runner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt s
 	return "", fmt.Errorf("all agents failed: %s", strings.Join(errs, "; "))
 }
 
-func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (string, error) {
+func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (output string, err error) {
+	ctx, span := tracer.Start(ctx, tracing.SpanAgentExecute,
+		trace.WithAttributes(
+			attribute.String("agent_type", filepath.Base(agent.Command)),
+		),
+	)
+	start := time.Now()
+	var stderrLen int
+	exitCode := -1 // -1 = not run / not waited
+	// Closure captures `output`, `err` (named returns), `stderrLen`, and
+	// `exitCode` so span attrs AND status reflect whatever values the
+	// function ends up returning, regardless of which exit branch fires.
+	// Single status-setting site here keeps the cmd.Start / cmd.Wait /
+	// blocked-args / output-file paths consistent — Jaeger filters by
+	// `error=true` would otherwise miss exit-non-zero (the most common
+	// failure mode), since `span.End` alone leaves status Unset.
+	defer func() {
+		attrs := []attribute.KeyValue{
+			attribute.Int64("duration_ms", time.Since(start).Milliseconds()),
+			attribute.Int("stdout_len", len(output)),
+			attribute.Int("stderr_len", stderrLen),
+		}
+		if exitCode >= 0 {
+			attrs = append(attrs, attribute.Int("exit_code", exitCode))
+		}
+		span.SetAttributes(attrs...)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "agent run failed")
+		} else if exitCode > 0 {
+			span.SetStatus(codes.Error, fmt.Sprintf("agent exited %d", exitCode))
+		}
+		span.End()
+	}()
+
 	timeout := agent.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -167,8 +211,11 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 
-	if err := cmd.Start(); err != nil {
-		return "", err
+	if startErr := cmd.Start(); startErr != nil {
+		// Process couldn't even launch (e.g. binary missing) — not a
+		// business failure but a worker-environment problem. Defer above
+		// records this on the span via the named-return `err` capture.
+		return "", startErr
 	}
 
 	// Notify listener of PID.
@@ -201,7 +248,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	}
 
 	// Read stdout in a goroutine; wait for it before cmd.Wait().
-	var output string
+	// `output` is the named return value; goroutine writes through closure.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -211,6 +258,12 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	wg.Wait()
 
 	err = cmd.Wait()
+	stderrLen = stderr.Len()
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		exitCode = exitErr.ExitCode()
+	} else if err == nil {
+		exitCode = 0
+	}
 	if err != nil {
 		if inactivityKilled.Load() {
 			return "", fmt.Errorf("inactivity timeout after %s (no stream events)", agent.InactivityTimeout)
