@@ -1,0 +1,141 @@
+{
+  "skill_name": "sql-generator",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Spring Boot 3.5 專案（pom.xml 用 spring-boot-starter-parent 3.5.0）。User entity（@Table(name = \"users\")）目前有 id / email / displayName 三個 @Column 欄位；現在加了一個 createdBy 欄位 @Column(name = \"created_by\", length = 50)，預設值 'system'。請產生 schema migration 與老資料 backfill 的 SQL。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=add-column-default-backfill。DDL 段含 ALTER TABLE users ADD COLUMN created_by VARCHAR(50) DEFAULT 'system'，附 implicit-commit banner。DML 段含 UPDATE users SET created_by = 'system' WHERE created_by IS NULL，包在 BEGIN/-- COMMIT/ROLLBACK 三段並附 nudge-not-safety 註解。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "json_has_field", "field": "subcase", "equals": "add-column-default-backfill"},
+        {"kind": "sql_uses_table", "table": "users"},
+        {"kind": "sql_uses_column", "column": "created_by"},
+        {"kind": "output_contains_section", "section": "DDL"},
+        {"kind": "output_contains_section", "section": "DML"},
+        {"kind": "dml_where_mentions", "needles": ["created_by", "IS NULL"]},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Spring Boot 3.5 專案。User entity（@Table(name = \"users\")）有 id / email / displayName，現在加了一個 lastLoginAt 欄位（型別 java.time.Instant），**沒有** @Column 註解。預設用 SpringPhysicalNamingStrategy 讓 camelCase 自動推 snake_case column 名。老資料填 NOW()。請產生對應 SQL。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=add-column-default-backfill。Column 名應為 last_login_at（camelCase → snake_case）。DDL ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP NULL。DML UPDATE users SET last_login_at = NOW() WHERE last_login_at IS NULL。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "sql_uses_column", "column": "last_login_at"},
+        {"kind": "output_contains_section", "section": "DDL"},
+        {"kind": "output_contains_section", "section": "DML"},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Spring Boot 3.5 專案。Order entity（@Table(name = \"orders\")）內有 status 欄位，原本是 @Enumerated(EnumType.ORDINAL) @Column(name = \"status\")，現在改成 @Enumerated(EnumType.STRING) @Column(name = \"status\", length = 16)。Enum 定義為 PENDING(ordinal 0), PAID(ordinal 1), CANCELLED(ordinal 2)。請產生 column type 切換 + 老資料對齊（int → enum constant 名）的 SQL。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=column-semantics-change。DDL 改 status column type 從 INT/SMALLINT 到 VARCHAR(16)。DML UPDATE 老資料：0 → 'PENDING', 1 → 'PAID', 2 → 'CANCELLED'。實作上常見手法是先新增臨時 column → 翻譯資料 → drop 舊 column → rename 新 column；或 ALTER TYPE 配合 CASE 表達式。任一方案都可，但必須處理三個 enum 值對應。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "sql_uses_table", "table": "orders"},
+        {"kind": "sql_uses_column", "column": "status"},
+        {"kind": "dml_where_mentions", "needles": ["PENDING", "PAID", "CANCELLED"]},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Spring Boot 3.5 專案。User entity（@Table(name = \"users\")）內嵌 @Embedded Address 物件（@Embeddable），Address 原本有 city / postalCode 兩個 @Column 欄位。現在 Address 加了 country 欄位 @Column(name = \"country\", length = 2)，預設 'TW'。請產生對應 SQL。提醒：@Embedded 攤平所有 Address 欄位到 users 表，**沒有** address 子表。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=add-column-default-backfill。DDL ALTER TABLE users ADD COLUMN country VARCHAR(2) DEFAULT 'TW'，column 落在 users 表（不是另開 address 表）。DML UPDATE users SET country = 'TW' WHERE country IS NULL。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "sql_uses_table", "table": "users"},
+        {"kind": "sql_uses_column", "column": "country"},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Spring Boot 3.5 專案。Party 為抽象 base entity，@Table(name = \"parties\") @Inheritance(strategy = SINGLE_TABLE) @DiscriminatorColumn(name = \"party_type\")。Customer extends Party 用 @DiscriminatorValue(\"CUSTOMER\")；Vendor extends Party 用 @DiscriminatorValue(\"VENDOR\")。Customer 加了 vipLevel 欄位 @Column(name = \"vip_level\")，預設 0。請產生對應 SQL。提醒：SINGLE_TABLE 策略下所有子類欄位都在 parties 表。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=add-column-default-backfill。DDL ALTER TABLE parties ADD COLUMN vip_level INT DEFAULT 0（target base 表，不是另開 customer 表）。Summary 必須提到 SINGLE_TABLE 策略以協助 reviewer 確認 table 選擇。DML UPDATE parties SET vip_level = 0 WHERE party_type = 'CUSTOMER' AND vip_level IS NULL（限制 discriminator 只回填 Customer row）。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "sql_uses_column", "column": "vip_level"},
+        {"kind": "summary_mentions", "needles": ["SINGLE_TABLE", "single"]},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Spring Boot 3.5 專案。User 與 Role 用 @ManyToMany 並透過 @JoinTable(name = \"user_roles\", joinColumns = @JoinColumn(name = \"user_id\"), inverseJoinColumns = @JoinColumn(name = \"role_id\")) 連接。現在改成 explicit UserRole entity（@Table(name = \"user_roles\")）以便加欄位：assignedAt @Column(name = \"assigned_at\", nullable = false)，老資料填 NOW()。請產生對應 SQL。提醒：底層 user_roles 表已存在不需重建，只是補欄位。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=add-column-default-backfill。DDL ALTER TABLE user_roles ADD COLUMN assigned_at TIMESTAMP（target join table 名稱，不是 users 或 roles）。DML UPDATE user_roles SET assigned_at = NOW() WHERE assigned_at IS NULL。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "sql_uses_table", "table": "user_roles"},
+        {"kind": "sql_uses_column", "column": "assigned_at"},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Spring Boot 3.5 專案。Customer entity（@Table(name = \"customers\")）目前有 firstName @Column(name = \"first_name\", length = 80) 與 lastName / email。現在 firstName 改名為 givenName @Column(name = \"given_name\", length = 80)。請產生兩段式 migration 的 **第一步**：新增 given_name → 從 first_name 把資料移過去。drop first_name 留待後續 release（應用碼還在讀 first_name 期間不能 drop）。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=column-rename-data-move。DDL ALTER TABLE customers ADD COLUMN given_name VARCHAR(80)。DML UPDATE customers SET given_name = first_name WHERE given_name IS NULL（或 unconditional）。Summary 必須點出 drop first_name 留到第二步。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "json_has_field", "field": "subcase", "equals": "column-rename-data-move"},
+        {"kind": "sql_uses_column", "column": "given_name"},
+        {"kind": "dml_where_mentions", "needles": ["first_name"]},
+        {"kind": "summary_mentions", "needles": ["第二步", "兩段", "follow-up", "drop"]},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Spring Boot 3.5 專案。Product entity（@Table(name = \"products\")）的 sku 欄位之前 @Column(name = \"sku\", length = 64) 可空，現在改成 @Column(name = \"sku\", nullable = false, length = 64)。為了避免 prod 上有舊 NULL row 直接落 NOT NULL 失敗，分兩步：第一步 backfill 既有 NULL 值（填 'UNKNOWN'）；NOT NULL 約束第二步另外處理。請產生第一步的 SQL。",
+      "expected_output": "===SQL_RESULT=== status=GENERATED, subcase=not-null-precondition-backfill。DDL 段為空（或不含 ALTER TO NOT NULL，明確說明 NOT NULL 約束留待第二步）。DML UPDATE products SET sku = 'UNKNOWN' WHERE sku IS NULL。Summary 必須點出兩段式 migration、NOT NULL 在第二步。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "GENERATED"},
+        {"kind": "json_has_field", "field": "subcase", "equals": "not-null-precondition-backfill"},
+        {"kind": "sql_uses_table", "table": "products"},
+        {"kind": "dml_where_mentions", "needles": ["sku", "IS NULL"]},
+        {"kind": "summary_mentions", "needles": ["第二步", "兩段", "NOT NULL"]},
+        {"kind": "format_check", "ddl_banner": true, "dml_rollback_first": true}
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Spring Boot 3.5 專案。需要把 User 表 status=1 與 Order 表 paid=true 的記錄做跨表 sync 對齊（兩個 table 一起更新）。請產生 SQL。",
+      "expected_output": "===SQL_RESULT=== status=REJECTED。reason 點出多表 sync 超出 column 演進 scope，引導使用者拆請求或走 Liquibase / DBA。不應產生實際 SQL。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "REJECTED"},
+        {"kind": "summary_mentions", "needles": ["scope", "單表", "Liquibase"]}
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Spring Boot 2.7 專案（pom.xml 寫 spring-boot-starter-parent 2.7.18）。User entity 加了 createdBy 欄位，請產生 backfill SQL。",
+      "expected_output": "===SQL_RESULT=== status=REJECTED。reason 點出本工具只支援 Spring Boot 3.4 / 3.5，其他版本未驗證；引導使用者升級或手寫 SQL。",
+      "files": [],
+      "assertions": [
+        {"kind": "marker_present", "marker": "===SQL_RESULT==="},
+        {"kind": "json_has_field", "field": "status", "equals": "REJECTED"},
+        {"kind": "summary_mentions", "needles": ["版本", "3.4", "3.5"]}
+      ]
+    }
+  ]
+}
