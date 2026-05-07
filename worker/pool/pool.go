@@ -6,10 +6,19 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/shared/logging"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 )
+
+// tracer reads the global TracerProvider; cmd/agentdock/worker.go owns
+// setup. Tests run against the default no-op unless they install a recorder.
+var tracer = otel.Tracer("agentdock/worker/pool")
 
 type Config struct {
 	Queue          queue.JobQueue
@@ -97,32 +106,51 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				logger.Info("job channel closed")
 				return
 			}
-			// Tag every downstream log record with the job's RequestID as
-			// trace_id. Callers that emit via *Context slog variants pick up
-			// the attr automatically; legacy logger.Info calls remain
-			// unaffected (they continue to ignore ctx, see #46 follow-up).
-			jobCtx := logging.WithTraceID(ctx, job.RequestID)
-			// Check if cancelled while pending.
-			state, err := p.cfg.Store.Get(jobCtx, job.ID)
-			if err != nil {
-				p.cfg.Results.Publish(jobCtx, &queue.JobResult{
-					JobID: job.ID, Status: "failed", Error: "state lookup failed",
-				})
-				continue
-			}
-			switch state.Status {
-			case queue.JobCancelled:
-				p.cfg.Results.Publish(jobCtx, &queue.JobResult{
-					JobID: job.ID, Status: "cancelled",
-				})
-				continue
-			case queue.JobFailed:
-				p.cfg.Results.Publish(jobCtx, &queue.JobResult{
-					JobID: job.ID, Status: "failed", Error: "terminated before execution",
-				})
-				continue
-			}
-			p.executeWithTracking(jobCtx, id, job)
+			// Wrapping in a closure scopes defer span.End() to one job — every
+			// `return` from here unwinds the span before the next dequeue.
+			func() {
+				// Resume the app-side trace by extracting the W3C carrier the
+				// app injected on submitJob. Empty / malformed traceparent
+				// (legacy v1 producer) → ExtractToContext is a graceful no-op
+				// and tracer.Start synthesizes a fresh root span (fail-soft per
+				// ADR-0001).
+				jobCtx := tracing.ExtractToContext(ctx, job.Traceparent)
+				jobCtx, span := tracer.Start(jobCtx, tracing.SpanWorkerHandleJob,
+					trace.WithAttributes(
+						attribute.String("task_type", job.TaskType),
+						attribute.String("repo", job.Repo),
+						attribute.Int("retry_count", job.RetryCount),
+					),
+				)
+				defer span.End()
+
+				// Check if cancelled while pending.
+				state, err := p.cfg.Store.Get(jobCtx, job.ID)
+				if err != nil {
+					span.RecordError(err)
+					span.SetStatus(codes.Error, "state lookup failed")
+					p.cfg.Results.Publish(jobCtx, &queue.JobResult{
+						JobID: job.ID, Status: "failed", Error: "state lookup failed",
+					})
+					return
+				}
+				switch state.Status {
+				case queue.JobCancelled:
+					span.SetAttributes(attribute.Bool("cancelled", true))
+					p.cfg.Results.Publish(jobCtx, &queue.JobResult{
+						JobID: job.ID, Status: "cancelled",
+					})
+					return
+				case queue.JobFailed:
+					// Admin-failed before execution — not an OTel error
+					// (the failure was authored upstream); status stays Unset.
+					p.cfg.Results.Publish(jobCtx, &queue.JobResult{
+						JobID: job.ID, Status: "failed", Error: "terminated before execution",
+					})
+					return
+				}
+				p.executeWithTracking(jobCtx, id, job)
+			}()
 		case <-ctx.Done():
 			logger.Info("worker shutting down")
 			return
@@ -245,10 +273,8 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		logger.Error("failed to publish result", "error", err)
 	}
 
-	// Use *Context variants here so trace_id (set by runWorker via
-	// WithTraceID) lands on the terminal log lines. The rest of the worker
-	// code path still uses non-Context variants — full migration is folded
-	// into the OTel rollout (#46).
+	// *Context variants flow OTel SpanContext from the worker.handle_job
+	// span (set in T8 of #46) so trace_id lands on terminal log lines.
 	if result.Status == "cancelled" {
 		logger.InfoContext(ctx, "工作已取消", "phase", "完成")
 	} else {

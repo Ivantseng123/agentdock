@@ -3,40 +3,25 @@ package logging
 import (
 	"context"
 	"log/slog"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
-type traceIDKey struct{}
-
-// WithTraceID returns a copy of ctx tagged with the given trace ID. Empty IDs
-// are ignored — the returned ctx is the input unchanged. The value flows to
-// log records emitted via Info/Warn/Error/DebugContext through TraceIDHandler.
-func WithTraceID(ctx context.Context, id string) context.Context {
-	if id == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, traceIDKey{}, id)
-}
-
-// TraceIDFrom returns the trace ID stored on ctx, or "" if absent.
-func TraceIDFrom(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	v, _ := ctx.Value(traceIDKey{}).(string)
-	return v
-}
-
 // TraceIDHandler wraps a slog.Handler so every record carries a trace_id
-// attribute pulled from ctx (set via WithTraceID). Records emitted through
-// non-Context slog calls (Info/Warn/Error/Debug) flow through with no
-// trace_id — those entry-point sites need to migrate to *Context variants
-// for trace_id to surface.
+// attribute pulled from the active OpenTelemetry SpanContext on ctx.
+//
+// Per ADR-0004, this handler is the *only* path that injects trace_id —
+// the legacy WithTraceID / TraceIDFrom helpers were removed. Records
+// emitted through non-Context slog calls (Info/Warn/Error/Debug) still
+// flow through with no trace_id, and that is now considered acceptable
+// (those call sites must migrate to *Context variants if they want
+// trace correlation).
 type TraceIDHandler struct {
 	inner slog.Handler
 }
 
-// NewTraceIDHandler wraps inner so emitted records gain a trace_id attribute
-// when ctx carries one.
+// NewTraceIDHandler wraps inner so emitted records gain a trace_id
+// attribute when ctx carries an OTel SpanContext.
 func NewTraceIDHandler(inner slog.Handler) *TraceIDHandler {
 	return &TraceIDHandler{inner: inner}
 }
@@ -46,8 +31,8 @@ func (h *TraceIDHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *TraceIDHandler) Handle(ctx context.Context, r slog.Record) error {
-	if id := TraceIDFrom(ctx); id != "" {
-		r.AddAttrs(slog.String(KeyTraceID, id))
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		r.AddAttrs(slog.String(KeyTraceID, sc.TraceID().String()))
 	}
 	return h.inner.Handle(ctx, r)
 }

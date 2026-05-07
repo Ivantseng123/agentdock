@@ -18,6 +18,7 @@ type Config struct {
 	Prompt       PromptConfig           `yaml:"prompt"`
 	RepoCache    RepoCacheConfig        `yaml:"repo_cache"`
 	Queue        QueueConfig            `yaml:"queue"`
+	Tracing      TracingConfig          `yaml:"tracing"`
 	Redis        RedisConfig            `yaml:"redis"`
 	SecretKey    string                 `yaml:"secret_key"`
 	Secrets      map[string]string      `yaml:"secrets"`
@@ -84,6 +85,13 @@ type LoggingConfig struct {
 	// default) or "json" (one JSON object per line for log aggregators). File
 	// output is always JSON regardless of this setting.
 	StderrFormat string `yaml:"stderr_format"`
+}
+
+// TracingConfig mirrors app/config.TracingConfig — see that doc comment for
+// the contract. Each module declares its own type so the schema can evolve
+// independently per the package's intentional non-extraction policy.
+type TracingConfig struct {
+	OTLPEndpoint string `yaml:"otlp_endpoint"`
 }
 
 type RepoCacheConfig struct {

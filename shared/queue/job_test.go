@@ -290,3 +290,66 @@ func TestJobResult_RefViolations_OmitEmpty(t *testing.T) {
 		t.Errorf("empty RefViolations should be omitted: %s", buf)
 	}
 }
+
+// TestJob_Traceparent_RoundTrip ensures the W3C traceparent field marshals
+// and unmarshals losslessly.
+func TestJob_Traceparent_RoundTrip(t *testing.T) {
+	in := Job{
+		ID:          "j1",
+		Traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"`) {
+		t.Errorf("traceparent missing from JSON: %s", raw)
+	}
+	var out Job
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Traceparent != in.Traceparent {
+		t.Errorf("Traceparent = %q, want %q", out.Traceparent, in.Traceparent)
+	}
+}
+
+// TestJob_Traceparent_OmitEmpty: a job without traceparent must drop the
+// key entirely so the wire shape stays unchanged for callers (e.g. retry
+// fixtures or v1 producers that don't set it).
+func TestJob_Traceparent_OmitEmpty(t *testing.T) {
+	j := &Job{ID: "j1", TaskType: "issue"}
+	buf, _ := json.Marshal(j)
+	if strings.Contains(string(buf), "traceparent") {
+		t.Errorf("empty Traceparent should be omitted: %s", buf)
+	}
+}
+
+// TestJob_OldPayload_WithoutTraceparent_StillParses guards rolling-deploy
+// safety: a v2 worker reading a v1-app payload (no traceparent field) must
+// not error and must default Traceparent to "".
+func TestJob_OldPayload_WithoutTraceparent_StillParses(t *testing.T) {
+	raw := []byte(`{"id":"abc","repo":"foo/bar","clone_url":"https://example/foo/bar.git"}`)
+	var out Job
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Traceparent != "" {
+		t.Errorf("expected empty Traceparent on v1 payload, got %q", out.Traceparent)
+	}
+}
+
+// TestJob_NewPayload_OnV1Struct_Symmetric: the inverse rolling-deploy guard
+// — a v1 binary should ignore the unknown traceparent field cleanly.
+// Go's encoding/json discards unknown fields by default, so this just
+// confirms the v2 payload doesn't break v1 deserialisation logic.
+func TestJob_NewPayload_OnV1Struct_Symmetric(t *testing.T) {
+	raw := []byte(`{"id":"abc","traceparent":"00-1234-5678-01","repo":"x/y"}`)
+	var out Job
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("v1 binary should tolerate v2 payload: %v", err)
+	}
+	if out.ID != "abc" || out.Repo != "x/y" {
+		t.Errorf("known fields lost during unmarshal: %+v", out)
+	}
+}
