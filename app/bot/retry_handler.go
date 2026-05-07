@@ -11,6 +11,7 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 )
 
 // JobSubmitter abstracts queue submission for testing.
@@ -93,7 +94,12 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 		encryptedSecrets = fresh
 	}
 
-	// Create new job copying relevant fields.
+	// Create new job copying relevant fields. Per ADR-0002 the retry
+	// chain stays under the original trace_id — copy Traceparent and
+	// RequestID verbatim so the queue.enqueue auto-span on the next
+	// Submit attaches under the original bot.handle_event root rather
+	// than starting a brand-new trace. We deliberately do NOT open a
+	// `bot.retry_handler` umbrella span on the app side.
 	newJob := &queue.Job{
 		ID:               logging.NewRequestID(),
 		Priority:         original.Priority,
@@ -105,13 +111,19 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 		CloneURL:         original.CloneURL,
 		PromptContext:    original.PromptContext,
 		Skills:           original.Skills,
-		RequestID:        logging.NewRequestID(),
+		RequestID:        original.RequestID,    // ADR-0002: same trace
+		Traceparent:      original.Traceparent,  // ADR-0002: verbatim
 		Attachments:      original.Attachments,
 		RetryCount:       original.RetryCount + 1,
 		RetryOfJobID:     original.ID,
 		SubmittedAt:      time.Now(),
 		EncryptedSecrets: encryptedSecrets,
 	}
+
+	// Plumb the original SpanContext into ctx so the queue.enqueue
+	// auto-span (and any future spans started inside Submit) parents
+	// under the original root rather than the no-op default.
+	ctx = tracing.ExtractToContext(ctx, original.Traceparent)
 
 	// Put in store before posting button (so cancel_job can find it).
 	h.store.Put(ctx, newJob)

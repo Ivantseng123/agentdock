@@ -10,7 +10,19 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 )
+
+// tracer reads the global TracerProvider so library code stays test-friendly:
+// when no provider is configured (e.g. in unit tests of consumer packages
+// that don't set one up), it resolves to a no-op and Start is essentially
+// free.
+var tracer = otel.Tracer("agentdock/shared/queue")
 
 // RedisJobQueue implements JobQueue using Redis Streams with consumer groups
 // for reliable job dispatch and worker registration via Redis keys.
@@ -68,22 +80,47 @@ func NewRedisJobQueue(rdb *redis.Client, store JobStore, taskType string, opts .
 // Only this app instance's QueuePosition consults the value — across-instance
 // ordering is irrelevant because each app's MemJobStore only sees its own
 // submissions.
+//
+// Submit auto-instruments a `queue.enqueue` span. Attribute set is the
+// minimal allowlist from ADR-0003 (no payload/prompt/PII). Caller's ctx
+// may already carry a parent span (e.g. bot.handle_event) — the new span
+// will be its child and the W3C traceparent injected into Job.Traceparent
+// upstream travels with the payload to the worker.
 func (q *RedisJobQueue) Submit(ctx context.Context, job *Job) error {
+	ctx, span := tracer.Start(ctx, tracing.SpanQueueEnqueue,
+		trace.WithAttributes(
+			attribute.String("queue", q.taskType),
+			attribute.String("job_id", job.ID),
+			attribute.String("task_type", job.TaskType),
+			attribute.Int("priority", job.Priority),
+		),
+	)
+	defer span.End()
+
 	job.Seq = q.seqCounter.Add(1)
 
 	data, err := json.Marshal(job)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("marshal job: %w", err)
 	}
 
 	if err := q.store.Put(ctx, job); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("store put: %w", err)
 	}
 
-	return q.rdb.XAdd(ctx, &redis.XAddArgs{
+	if err := q.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: q.stream,
 		Values: map[string]interface{}{"payload": string(data)},
-	}).Err()
+	}).Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+	return nil
 }
 
 // QueuePosition returns the 1-based position of a still-pending job in this

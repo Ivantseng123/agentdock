@@ -26,6 +26,12 @@ var workerCmd = &cobra.Command{
 		if _, err := workerconfig.RunPreflight(wcfg); err != nil {
 			return fmt.Errorf("preflight: %w", err)
 		}
+
+		// OTel tracing setup. setupTracing is shared with the app command
+		// — see cmd/agentdock/app.go for the contract.
+		tracingShutdown := setupTracing(cmd.Context(), "agentdock-worker", wcfg.Tracing.OTLPEndpoint)
+		defer tracingShutdown()
+
 		return worker.Run(wcfg)
 	},
 }

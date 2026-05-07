@@ -42,6 +42,7 @@ type Config struct {
 	Queue        QueueConfig        `yaml:"queue"`
 	Availability AvailabilityConfig `yaml:"availability"`
 	Logging      LoggingConfig      `yaml:"logging"`
+	Tracing      TracingConfig      `yaml:"tracing"`
 	Redis        RedisConfig        `yaml:"redis"`
 	SecretKey    string             `yaml:"secret_key"`
 	Secrets      map[string]string  `yaml:"secrets"`
@@ -222,6 +223,21 @@ type LoggingConfig struct {
 	// default) or "json" (one JSON object per line for log aggregators). File
 	// output is always JSON regardless of this setting.
 	StderrFormat string `yaml:"stderr_format"`
+}
+
+// TracingConfig holds OpenTelemetry tracing knobs. Only one field — keeping
+// the surface intentionally small per ADR-0001:
+//
+//   - Empty OTLPEndpoint → silent skip (real SDK with no exporter; SpanContext
+//     still flows through ctx so log handlers pick up trace_id, but no OTLP
+//     traffic is emitted).
+//   - Non-empty endpoint → OTLP gRPC exporter targeting that address.
+//
+// `OTEL_EXPORTER_OTLP_ENDPOINT` env var overrides this YAML field. Sampling
+// is hardwired to AlwaysOn (no knob); `deployment.environment` is sourced
+// from `OTEL_RESOURCE_ATTRIBUTES` instead of YAML — see the spec for why.
+type TracingConfig struct {
+	OTLPEndpoint string `yaml:"otlp_endpoint"`
 }
 
 type AttachmentsConfig struct {

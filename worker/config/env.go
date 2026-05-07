@@ -32,6 +32,11 @@ func EnvOverrideMap() map[string]any {
 			out["providers"] = providers
 		}
 	}
+	// OTEL_EXPORTER_OTLP_ENDPOINT is the OTel-standard env name. Bind into
+	// our tracing.otlp_endpoint path so env wins over YAML during koanf merge.
+	if v := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); v != "" {
+		out["tracing.otlp_endpoint"] = v
+	}
 	return out
 }
 

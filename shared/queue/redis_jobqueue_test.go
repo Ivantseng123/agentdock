@@ -7,6 +7,11 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 )
 
 func TestRedisJobQueue_SubmitAndReceive(t *testing.T) {
@@ -326,3 +331,71 @@ func TestRedisJobQueue_WorkerRegistration(t *testing.T) {
 		t.Errorf("ListWorkers count after unregister = %d, want 0", len(workers))
 	}
 }
+
+// TestRedisJobQueue_Submit_AutoSpan asserts that Submit auto-instruments a
+// queue.enqueue span carrying only the ADR-0003 allowlist attrs. Uses a
+// SpanRecorder so the assertion does not depend on a real OTLP exporter.
+func TestRedisJobQueue_Submit_AutoSpan(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	client := testRedisClient(t)
+	store := NewMemJobStore()
+	q := NewRedisJobQueue(client, store, "triage")
+	defer q.Close()
+
+	ctx := context.Background()
+	job := &Job{
+		ID:          "job-span-001",
+		Priority:    3,
+		TaskType:    "triage",
+		SubmittedAt: time.Now(),
+	}
+	if err := q.Submit(ctx, job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	spans := sr.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("recorded span count = %d, want 1; spans=%+v", len(spans), spans)
+	}
+	got := spans[0]
+	if got.Name() != tracing.SpanQueueEnqueue {
+		t.Errorf("span name = %q, want %q", got.Name(), tracing.SpanQueueEnqueue)
+	}
+
+	// Attributes — only the allowlist.
+	attrs := map[string]any{}
+	for _, a := range got.Attributes() {
+		attrs[string(a.Key)] = a.Value.AsInterface()
+	}
+	if attrs["queue"] != "triage" {
+		t.Errorf("queue attr = %v, want triage", attrs["queue"])
+	}
+	if attrs["job_id"] != "job-span-001" {
+		t.Errorf("job_id attr = %v, want job-span-001", attrs["job_id"])
+	}
+	if attrs["task_type"] != "triage" {
+		t.Errorf("task_type attr = %v, want triage", attrs["task_type"])
+	}
+	if got, ok := attrs["priority"].(int64); !ok || got != 3 {
+		t.Errorf("priority attr = %v (%T), want 3", attrs["priority"], attrs["priority"])
+	}
+	// Nothing else should be present.
+	for k := range attrs {
+		switch k {
+		case "queue", "job_id", "task_type", "priority":
+		default:
+			t.Errorf("unexpected attr %q = %v (allowlist violation)", k, attrs[k])
+		}
+	}
+
+	// Successful path: no error status.
+	if got.Status().Code != 0 {
+		t.Errorf("span status code = %v, want Unset (0)", got.Status().Code)
+	}
+}
+

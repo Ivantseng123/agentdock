@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -220,7 +221,7 @@ func TestPrepareRefs_PartialSuccess(t *testing.T) {
 		{Repo: "backend/api", CloneURL: "u3", Branch: "release"},
 	}
 	successful, successfulPaths, unavailable, refsRoot, err :=
-		prepareRefs(fake, primary, "tkn", refs, slog.Default())
+		prepareRefs(context.Background(), fake, primary, "tkn", refs, slog.Default())
 	if err != nil {
 		t.Fatalf("prepareRefs returned err: %v", err)
 	}
@@ -265,7 +266,7 @@ func TestPrepareRefs_PartialSuccess(t *testing.T) {
 func TestPrepareRefs_EmptyRefs_NoOp(t *testing.T) {
 	fake := &fakeRepoProvider{}
 	successful, successfulPaths, unavailable, refsRoot, err :=
-		prepareRefs(fake, "/tmp/p", "t", nil, slog.Default())
+		prepareRefs(context.Background(), fake, "/tmp/p", "t", nil, slog.Default())
 	if err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
@@ -296,7 +297,7 @@ func TestPrepareRefs_MkdirFailure(t *testing.T) {
 
 	refs := []queue.RefRepo{{Repo: "any/ref", CloneURL: "u"}}
 	_, _, _, _, err :=
-		prepareRefs(&fakeRepoProvider{}, primary, "t", refs, slog.Default())
+		prepareRefs(context.Background(), &fakeRepoProvider{}, primary, "t", refs, slog.Default())
 	if err == nil {
 		t.Fatalf("expected mkdir error for primary %q, got nil", primary)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/Ivantseng123/agentdock/app/workflow"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 )
 
 // SlackPoster abstracts Slack message posting for testing.
@@ -91,6 +92,13 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 		r.logger.Error("找不到工作結果對應的工作", "phase", "失敗", "job_id", result.JobID, "error", err)
 		return
 	}
+
+	// Resume the original app-side trace (#46): extract the W3C carrier
+	// stamped on the Job at submitJob time so any spans started here
+	// (e.g. github.create_issue inside the workflow handler) parent under
+	// the original bot.handle_event root rather than starting a new trace.
+	// JobResult intentionally does NOT carry traceparent — Q12 in the spec.
+	ctx = tracing.ExtractToContext(ctx, state.Job.Traceparent)
 
 	r.recordMetrics(state, result)
 

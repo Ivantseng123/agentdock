@@ -10,6 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
@@ -642,6 +648,75 @@ echo '`+streamResultLine+`'
 	}
 	if !strings.Contains(output, "streamed result") {
 		t.Errorf("output: %q", output)
+	}
+}
+
+// TestRunner_NonZeroExit_MarksSpanError pins the deferred closure in runOne
+// as the single Error-status site for agent.execute. Without it, the most
+// common failure mode (process exits non-zero) leaves the span Status as
+// Unset, and on-call queries that filter Jaeger by `error=true` miss the
+// failure entirely. Twin assertion on a successful run guards against the
+// reverse regression — marking healthy spans as Error.
+func TestRunner_NonZeroExit_MarksSpanError(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	// Pick the most-recent agent.execute span. Other runner tests in this
+	// package may also have produced spans before us; we only care about
+	// the one our own runner.Run emitted.
+	latestAgentSpan := func(t *testing.T) sdktrace.ReadOnlySpan {
+		t.Helper()
+		spans := sr.Ended()
+		for i := len(spans) - 1; i >= 0; i-- {
+			if spans[i].Name() == tracing.SpanAgentExecute {
+				return spans[i]
+			}
+		}
+		t.Fatalf("agent.execute span not recorded; got %d spans total", len(spans))
+		return nil
+	}
+
+	dir := t.TempDir()
+	failScript := filepath.Join(dir, "exit-1-agent")
+	os.WriteFile(failScript, []byte(`#!/bin/sh
+echo "stdout from failing agent"
+exit 1
+`), 0755)
+
+	failRunner := NewRunner([]config.AgentConfig{{
+		Command: failScript, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
+	}})
+	if _, err := failRunner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{}); err == nil {
+		t.Fatal("expected non-zero exit error")
+	}
+	failSpan := latestAgentSpan(t)
+	if got := failSpan.Status().Code; got != codes.Error {
+		t.Errorf("non-zero exit: Status().Code = %v, want %v", got, codes.Error)
+	}
+	var exitCodeAttr int64 = -1
+	for _, kv := range failSpan.Attributes() {
+		if string(kv.Key) == "exit_code" {
+			exitCodeAttr = kv.Value.AsInt64()
+		}
+	}
+	if exitCodeAttr != 1 {
+		t.Errorf("non-zero exit: exit_code attr = %d, want 1", exitCodeAttr)
+	}
+
+	okScript := filepath.Join(dir, "ok-agent")
+	os.WriteFile(okScript, []byte("#!/bin/sh\necho 'ok output with enough chars padding padding padding padding padding'\n"), 0755)
+	okRunner := NewRunner([]config.AgentConfig{{
+		Command: okScript, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
+	}})
+	if _, err := okRunner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{}); err != nil {
+		t.Fatalf("unexpected error on success path: %v", err)
+	}
+	okSpan := latestAgentSpan(t)
+	if got := okSpan.Status().Code; got != codes.Unset {
+		t.Errorf("success: Status().Code = %v, want %v (must not flag healthy runs)", got, codes.Unset)
 	}
 }
 
