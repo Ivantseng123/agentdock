@@ -10,7 +10,10 @@ YAML consumed by `agentdock app`. Default path: `~/.config/agentdock/app.yaml`. 
 log_level: info                       # console / stderr level: debug | info | warn | error
 
 server:
-  port: 8080                          # /healthz, /jobs, /metrics HTTP endpoints
+  port: 8080                          # /healthz, /jobs, /metrics HTTP endpoints (0 = no HTTP server)
+
+metrics:
+  enabled: true                       # omit this block = true. false → not registered, /metrics not mounted
 
 slack:
   bot_token: xoxb-...                 # REQUIRED
@@ -187,6 +190,22 @@ Two independent knobs:
 | `logging.level` | rotated file `logs/YYYY-MM-DD.jsonl` | `debug` |
 
 Accepts `debug` / `info` / `warn` / `error`. Also overridable via `--log-level` or the `LOG_LEVEL` env var.
+
+## Metrics (Prometheus)
+
+The app exposes Prometheus metrics (`agentdock_*` namespace, pull model) at `/metrics` on `server.port`. `metrics.enabled` defaults to `true` (omitting the `metrics:` block enables it):
+
+| Setting | Behaviour |
+|---|---|
+| omitted / `metrics.enabled: true` | metrics registered + `/metrics` mounted (pre-v3 behaviour) |
+| `metrics.enabled: false` | not registered, `/metrics` not mounted, default Prometheus registry stays empty. The `.Inc()` call sites still run (no-ops on an unregistered metric) |
+
+Notes:
+
+- With `server.port: 0` there is no HTTP server at all, so no `/metrics` either. If `metrics.enabled` is still true in that case the app logs one warning at startup. Metrics still accumulate in-process, they just have no scrape endpoint.
+- **`/metrics` typically contains internal information** (queue depth, agent provider, exit-code distribution, ...) — restrict access at the ingress / NetworkPolicy / firewall layer. There is no "bind `/metrics` to a separate port" option yet (`metrics.listen_addr` was deferred in v3 — see [adr/0005-metrics-prometheus.md](adr/0005-metrics-prometheus.md) Decision #4).
+- PromQL examples (success rate, P95 execution time, queue wait, exit-code anomaly thresholds, ...) live in the Metrics section of [operations.md](operations.md).
+- Design rationale (Prometheus vs. OTel metrics, the dual-stack posture, cardinality rules) is in [adr/0005-metrics-prometheus.md](adr/0005-metrics-prometheus.md).
 
 ## Secrets
 
