@@ -7,19 +7,19 @@ labels: enhancement
 
 <!--
 AI 填寫規則：
-1. 此 template 為短版；不需要 RCA / 多方案比較。
-2. 若改動跨 app/worker/shared 三 module 之 import 邊界（`test/import_direction_test.go` 把關），在「改動建議」明確說明預期影響。
-3. `<scope>`：`worker`、`queue`、`config`、`workflow`、`shared`、`app`。
+1. 短版 template；不需 RCA / 多方案比較。
+2. 跨 app/worker/shared 之 import 邊界改動（`test/import_direction_test.go` 把關），在「改動建議」明確說明預期影響。
+3. `<scope>` 限定：`worker`、`queue`、`config`、`workflow`、`shared`、`app`。
 4. 不適用章節整段刪除。
 -->
 
 ## 現狀
 
-<!-- 目前長什麼樣 + 為何想動 + 牽涉的檔案或 package。 -->
+<!-- 目前長什麼樣 + 為何想動。 -->
 
 ## 改動建議
 
-<!-- 預期動到哪些檔案或 package；牽動 import 邊界請點明。 -->
+<!-- 預期動到的檔案或 package；牽動 import 邊界請點明。 -->
 
 ## 驗證方式
 
@@ -31,4 +31,4 @@ go test ./test/... -run TestImportDirection
 
 ## Related
 
-<!-- "Refs #N" / "Part of #N"；無則寫 N/A。 -->
+<!-- Refs #N / Part of #N；無則 N/A。 -->
