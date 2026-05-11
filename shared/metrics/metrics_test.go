@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -316,7 +317,7 @@ func TestLabelCardinality(t *testing.T) {
 		// Multi-label metric, exercises comma splitting.
 		fq, labels = parseDesc(descOf(t, AgentExecutionsTotal))
 		want := []string{"provider", "workflow", "status"}
-		if fq != "agentdock_agent_executions_total" || !equalStrings(labels, want) {
+		if fq != "agentdock_agent_executions_total" || !slices.Equal(labels, want) {
 			t.Fatalf("parseDesc(AgentExecutionsTotal) = (%q, %v), want (agentdock_agent_executions_total, %v) — Desc.String() layout may have changed", fq, labels, want)
 		}
 	})
@@ -352,14 +353,3 @@ func descOf(t *testing.T, c prometheus.Collector) *prometheus.Desc {
 	return d
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
