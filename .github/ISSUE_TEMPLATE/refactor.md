@@ -24,8 +24,10 @@ AI authoring rules:
 ## Verification
 
 ```bash
-go build ./... && (cd app && go build ./...) && (cd worker && go build ./...) && (cd shared && go build ./...)
-go test ./... -race && (cd app && go test ./... -race) && (cd worker && go test ./... -race) && (cd shared && go test ./... -race)
+go test ./... -race
+(cd app && go test ./... -race)
+(cd worker && go test ./... -race)
+(cd shared && go test ./... -race)
 go test ./test/... -run TestImportDirection
 ```
 
