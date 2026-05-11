@@ -32,8 +32,13 @@ AI authoring rules:
 <!-- Commands actually run + a summary of output. Write "not run — reason: …" if not executed. -->
 
 ```bash
-go build ./... && (cd app && go build ./...) && (cd worker && go build ./...) && (cd shared && go build ./...)
-go test ./... -race && (cd app && go test ./... -race) && (cd worker && go test ./... -race) && (cd shared && go test ./... -race)
+# Test per module (also covers compilation)
+go test ./... -race
+(cd app && go test ./... -race)
+(cd worker && go test ./... -race)
+(cd shared && go test ./... -race)
+
+# Import direction + commit message
 go test ./test/... -run TestImportDirection
 git log -1 --pretty=%B | npx --yes commitlint --extends @commitlint/config-conventional
 ```
