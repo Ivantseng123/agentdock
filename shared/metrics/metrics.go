@@ -70,14 +70,17 @@ var AgentExecutionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 }, []string{"provider", "workflow", "status"})
 
 // AgentExitCodeTotal records the distribution of agent process exit codes.
-// The app-side result listener observes this for any termination that
-// carried a captured code; the worker's -1 sentinel ("no process / not
-// waited") is skipped at the call site, so this metric only ever sees real
-// codes — 0 success, 1 generic failure, 124 timeout, 137 SIGKILL/OOM, etc.
-// Distinct from agent_executions_total{status}, which buckets into a few
-// coarse outcomes; this one keeps the raw signal so OOM vs. timeout vs.
-// agent-self-abort are separable. See docs/operations.md for the alert
-// threshold on distinct exit_code cardinality.
+// The app-side result listener observes this for any termination that carried
+// a captured code; the worker's -1 sentinel ("no captured code") is skipped at
+// the call site, so this metric only ever sees codes the process chose for
+// itself — 0 success, 1 generic failure, 2 usage error, etc. Signal-terminated
+// runs do NOT appear here: Go's (*exec.ExitError).ExitCode() returns -1 (not
+// 128+signal) for SIGKILL/SIGTERM, so OOM kills and inactivity/deadline
+// timeouts surface as -1 — watch those via agent_executions_total{status=
+// "timeout"|"error"} instead. Distinct from agent_executions_total{status},
+// which buckets into a few coarse outcomes; this one keeps the raw self-chosen
+// code. See docs/operations.md for the alert threshold on distinct exit_code
+// cardinality.
 var AgentExitCodeTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: namespace,
 	Name:      "agent_exit_code_total",

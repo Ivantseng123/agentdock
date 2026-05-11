@@ -143,10 +143,11 @@ histogram_quantile(0.95,
 
 ```promql
 # Distinct exit-code values > 16 → treat as worker anomaly, investigate worker/agent/runner.go
-# (agent_exit_code_total only records real codes; the -1 sentinel is excluded. Normally very few: 0/1/124/137 and the like)
+# (agent_exit_code_total only records the code the agent chose for itself: 0/1/2/…; signal-killed
+# runs report -1 and are excluded — for OOM / idle / deadline timeouts see agent_executions_total{status="timeout"|"error"})
 count(count by (exit_code) (agentdock_agent_exit_code_total)) > 16
 
-# Non-zero exit-code ratio (rolling 1h)
+# Non-zero exit-code ratio (rolling 1h; denominator excludes signal kills — those go to agent_executions_total{status})
 sum(rate(agentdock_agent_exit_code_total{exit_code!="0"}[1h]))
   / sum(rate(agentdock_agent_exit_code_total[1h]))
 

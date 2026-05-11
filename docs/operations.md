@@ -178,10 +178,11 @@ histogram_quantile(0.95,
 
 ```promql
 # Exit code 種類數 > 16 → 視為 worker 異常，調查 worker/agent/runner.go
-#（agent_exit_code_total 只記真實 code；-1 sentinel 不入此指標。正常情況下種類很少：0/1/124/137 之類）
+#（agent_exit_code_total 只記 agent 自己選的退出碼：0/1/2…；被 signal 強殺的 run
+# 回報 -1、不會進入此指標——OOM / idle / deadline timeout 改看 agent_executions_total{status="timeout"|"error"}）
 count(count by (exit_code) (agentdock_agent_exit_code_total)) > 16
 
-# 非 0 exit code 占比（rolling 1h）
+# 非 0 exit code 占比（rolling 1h；分母不含 signal 強殺，那些走 agent_executions_total{status}）
 sum(rate(agentdock_agent_exit_code_total{exit_code!="0"}[1h]))
   / sum(rate(agentdock_agent_exit_code_total[1h]))
 

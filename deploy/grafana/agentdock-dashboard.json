@@ -1540,7 +1540,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Raw agent process exit codes; the -1 \"no process / not waited\" sentinel is excluded, so this only ever shows real codes (0 success, 1 generic, 124 timeout, 137 SIGKILL/OOM, ...). A spike in distinct codes is a worker anomaly.",
+      "description": "Exit codes the agent chose for itself (0 success, 1 generic, 2 usage, ...). Signal kills do NOT appear here — Go reports -1 (not 128+signal) for a process killed by SIGKILL/SIGTERM, so OOM kills and idle/deadline timeouts are excluded; see agentdock_agent_executions_total{status=\"timeout\"|\"error\"} for those. A spike in distinct codes is a worker anomaly.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -1593,7 +1593,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "description": "Share of agent terminations with a non-zero exit code (rolling rate window). Yellow >5%, red >20% — investigate worker/agent/runner.go.",
+      "description": "Share of agent runs that exited with a non-zero self-chosen code (rolling rate window). Signal kills (OOM, timeout) aren't counted here — they have no exit code; track those via agentdock_agent_executions_total{status}. Yellow >5%, red >20% — investigate worker/agent/runner.go.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -1741,6 +1741,6 @@
   "timezone": "",
   "title": "AgentDock Overview",
   "uid": "agentdock-overview",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

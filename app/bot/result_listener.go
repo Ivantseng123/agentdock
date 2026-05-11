@@ -245,10 +245,12 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 	}
 
 	// Agent process exit code — emitted whenever the worker captured a real
-	// code (>= 0). The -1 sentinel means "no process / not waited" (pre-runner
-	// failure, cancel before exec) and is skipped. Independent of the
-	// AgentStatus block above, so an OOM/timeout kill that lost its status
-	// stream still records its exit code (137 / 124 / ...).
+	// code (>= 0). The -1 sentinel means "no captured code": pre-runner failure,
+	// cancel before exec, or a signal kill — Go's (*exec.ExitError).ExitCode()
+	// returns -1 (not 128+signal) when a process is terminated by a signal, so
+	// OOM/timeout kills land here as -1 and are skipped. Watch those via
+	// agent_executions_total{status="timeout"|"error"}. Independent of the
+	// AgentStatus block above.
 	if result.ExitCode >= 0 {
 		provider := "unknown"
 		if as := state.AgentStatus; as != nil && as.AgentCmd != "" {
