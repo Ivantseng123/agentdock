@@ -1,11 +1,11 @@
 name: Bug Report
 description: 回報實際出錯的行為（卡住、結果錯亂、CI red、worker crash 等）
-title: "bug(<scope>): "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
+        Title 建議用 `bug(<scope>): …` 格式（非強制）。常見 scope：`worker/agent`、`workflow/issue`、`workflow/ask`、`workflow/pr-review`、`bot`、`queue`、`config`、`github`。
         若這是 app 自動生成的 issue，`Channel / Reporter / Branch` 通常會在最上方。手動建立時不必填。
         中英文皆可，混寫亦可。表格與 `- [ ]` 自由使用。
 

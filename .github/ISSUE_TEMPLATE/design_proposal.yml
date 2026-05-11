@@ -1,11 +1,12 @@
 name: Design / Feature Request
 description: 提出新功能、架構變動，或要在實作前先收斂方案的設計題
-title: "feat(<scope>): "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
+        Title 建議用 `feat(<scope>): …` 或 `Design: …` 格式（非強制，視內容傾向新功能或純設計討論）。
+        常見 scope：`worker/agent`、`workflow/issue`、`workflow/ask`、`bot`、`queue`、`config`、`skill/<name>`。
         這個 template 對齊 repo 已存在的 design issue（例 #196 / #214 / #218 / #228）。
         若內容偏大，可在 `docs/superpowers/specs/` 或 `docs/ideas/` 補 spec/one-pager，再從這裡 link 過去。
 
@@ -30,17 +31,13 @@ body:
     id: options
     attributes:
       label: 想過的方案
-      description: 至少兩個選項並列出缺點；只列一個的設計很容易缺少對照。
-      value: |
-        ### A. ...
+      description: 至少兩個選項並列出缺點；只列一個的設計很容易缺少對照。可參考 #196 的 A/B/C/... 寫法。
+      placeholder: |
+        ### A. <方案名>
         - 做法：
         - 缺點：
 
-        ### B. ...
-        - 做法：
-        - 缺點：
-
-        ### C. ...
+        ### B. <方案名>
         - 做法：
         - 缺點：
     validations:

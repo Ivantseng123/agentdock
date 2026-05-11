@@ -4,13 +4,13 @@
 
 ## Module touched
 
-<!-- 勾選此 PR 動到的 module。reviewer 會用這個評估 import-direction 影響（test/import_direction_test.go）。 -->
+<!-- 列出此 PR 動到的 module；reviewer 會用這個評估 import-direction 影響（test/import_direction_test.go）。沒動到的請刪除。 -->
 
-- [ ] `app/`
-- [ ] `worker/`
-- [ ] `shared/`
-- [ ] `cmd/`
-- [ ] `docs/` / `.github/`
+- `app/`
+- `worker/`
+- `shared/`
+- `cmd/`
+- `docs/` / `.github/`
 
 ## Related issues
 
