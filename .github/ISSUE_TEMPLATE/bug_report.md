@@ -7,11 +7,12 @@ labels: bug
 
 <!--
 AI 填寫規則：
-1. 順著章節順序寫，標題勿動。
-2. 「Supporting evidence」必須真實 log/commit/pod，沒有寫「無」，不要編造。
-3. 「根因分析」未掌握時寫「未知，待調查」並保留章節。
-4. `<scope>` 限定：`worker/agent`、`workflow/issue`、`workflow/ask`、`workflow/pr-review`、`bot`、`queue`、`config`、`github`。
-5. 不適用的章節整段刪除（含標題）。
+1. **填入的內容一律用英文**；章節標題保留中文。
+2. 順著章節順序寫，標題勿動。
+3. 「Supporting evidence」必須真實 log/commit/pod，沒有寫 "none"，不要編造。
+4. 「根因分析」未掌握時寫 "unknown, pending investigation" 並保留章節。
+5. `<scope>` 限定：`worker/agent`、`workflow/issue`、`workflow/ask`、`workflow/pr-review`、`bot`、`queue`、`config`、`github`。
+6. 不適用的章節整段刪除（含標題）。
 -->
 
 ## 問題現象

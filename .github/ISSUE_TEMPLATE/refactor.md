@@ -7,10 +7,11 @@ labels: enhancement
 
 <!--
 AI 填寫規則：
-1. 短版 template；不需 RCA / 多方案比較。
-2. 跨 app/worker/shared 之 import 邊界改動（`test/import_direction_test.go` 把關），在「改動建議」明確說明預期影響。
-3. `<scope>` 限定：`worker`、`queue`、`config`、`workflow`、`shared`、`app`。
-4. 不適用章節整段刪除。
+1. **填入的內容一律用英文**；章節標題保留中文。
+2. 短版 template；不需 RCA / 多方案比較。
+3. 跨 app/worker/shared 之 import 邊界改動（`test/import_direction_test.go` 把關），在「改動建議」明確說明預期影響。
+4. `<scope>` 限定：`worker`、`queue`、`config`、`workflow`、`shared`、`app`。
+5. 不適用章節整段刪除。
 -->
 
 ## 現狀

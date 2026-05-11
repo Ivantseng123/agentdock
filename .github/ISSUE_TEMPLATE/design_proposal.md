@@ -7,12 +7,13 @@ labels: enhancement
 
 <!--
 AI 填寫規則：
-1. 「想過的方案」至少 A、B 兩個並列缺點；只列一個沒有對照，不接受。
-2. 不確定的章節保留，內容寫「未知」或「待補」，不要編造方案。
-3. 純設計討論（非新功能）title 可改 'Design: …'。
-4. `<scope>` 限定：`worker/agent`、`workflow/issue`、`workflow/ask`、`bot`、`queue`、`config`、`skill/<name>`。
-5. 大型設計另寫 spec 放 `docs/superpowers/specs/` 或 `docs/ideas/`，於 References link 過來。
-6. 不適用章節整段刪除。
+1. **填入的內容一律用英文**；章節標題保留中文。
+2. 「想過的方案」至少 A、B 兩個並列缺點；只列一個沒有對照，不接受。
+3. 不確定的章節保留，內容寫 "unknown" 或 "TBD"，不要編造方案。
+4. 純設計討論（非新功能）title 可改 'Design: …'。
+5. `<scope>` 限定：`worker/agent`、`workflow/issue`、`workflow/ask`、`bot`、`queue`、`config`、`skill/<name>`。
+6. 大型設計另寫 spec 放 `docs/superpowers/specs/` 或 `docs/ideas/`，於 References link 過來。
+7. 不適用章節整段刪除。
 -->
 
 ## 問題或痛點
