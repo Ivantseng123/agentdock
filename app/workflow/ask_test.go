@@ -3,9 +3,11 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
@@ -1378,4 +1380,174 @@ func selectorValues(opts []SelectorOption) []string {
 		out = append(out, o.Value)
 	}
 	return out
+}
+
+func TestAskHandleResult_InlineDiagAppended(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job:      &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "===ASK_RESULT===\n{\"answer\":\"short answer\"}",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if !strings.HasSuffix(last, "\n5s · worker: w1") {
+		t.Errorf("expected trailing diag line; got %q", last)
+	}
+	if !strings.Contains(last, "short answer") {
+		t.Errorf("expected answer body retained; got %q", last)
+	}
+}
+
+func TestAskHandleResult_AllZeroDiagOmitted(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+
+	state := &queue.JobState{Job: &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"}}
+	r := &queue.JobResult{Status: "completed", RawOutput: "===ASK_RESULT===\n{\"answer\":\"hello\"}"}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") || strings.Contains(last, "·") {
+		t.Errorf("expected no diag line; got %q", last)
+	}
+}
+
+func TestAskHandleResult_FailedHasNoDiag(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job:      &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "failed",
+		Error:      "boom",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("failure path must not include diag; got %q", last)
+	}
+}
+
+func TestAskHandleResult_FileUploadPreviewCarriesDiag_WithStatusTS(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+
+	long := strings.Repeat("x", askInlineThreshold+1)
+	now := time.Now()
+	state := &queue.JobState{
+		Job:      &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "===ASK_RESULT===\n{\"answer\":\"" + long + "\"}",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	// With StatusMsgTS set, the preview is delivered via UpdateMessage *before*
+	// UploadFile. The UpdateMessage call records the preview into Posted; the
+	// subsequent UploadFile records the raw file content.
+	if len(slack.Posted) < 2 {
+		t.Fatalf("expected at least 2 posted records, got %d: %v", len(slack.Posted), slack.Posted)
+	}
+	preview := slack.Posted[0]
+	fileContent := slack.Posted[1]
+
+	if !strings.HasSuffix(preview, "\n5s · worker: w1") {
+		t.Errorf("preview should end with diag line; got %q", preview)
+	}
+	if strings.Contains(fileContent, "worker:") {
+		t.Errorf("file content must stay plain; got %q (head)", fileContent[:min(80, len(fileContent))])
+	}
+}
+
+func TestAskHandleResult_FileUploadPreviewCarriesDiag_NoStatusTS(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+
+	long := strings.Repeat("x", askInlineThreshold+1)
+	now := time.Now()
+	state := &queue.JobState{
+		Job:      &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "===ASK_RESULT===\n{\"answer\":\"" + long + "\"}",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	// Without StatusMsgTS, UploadFile carries the preview as initialComment.
+	// fakeSlackPort records content first, then initialComment, into Posted.
+	if len(slack.Posted) < 2 {
+		t.Fatalf("expected content + initialComment in Posted, got %v", slack.Posted)
+	}
+	fileContent := slack.Posted[0]
+	initialComment := slack.Posted[1]
+
+	if !strings.HasSuffix(initialComment, "\n5s · worker: w1") {
+		t.Errorf("initialComment should end with diag line; got %q", initialComment)
+	}
+	if strings.Contains(fileContent, "worker:") {
+		t.Errorf("file content must stay plain; got %q (head)", fileContent[:min(80, len(fileContent))])
+	}
+}
+
+func TestAskHandleResult_UploadFailureInlineFallbackHasDiag(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+	slack.UploadFileErr = fmt.Errorf("simulated upload failure")
+
+	long := strings.Repeat("x", askInlineThreshold+1)
+	now := time.Now()
+	state := &queue.JobState{
+		Job:      &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "===ASK_RESULT===\n{\"answer\":\"" + long + "\"}",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if !strings.HasSuffix(last, "\n5s · worker: w1") {
+		t.Errorf("upload-failure fallback should append diag; got %q (tail)",
+			last[max(0, len(last)-80):])
+	}
 }
