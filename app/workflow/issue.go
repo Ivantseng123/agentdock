@@ -481,32 +481,6 @@ func (w *IssueWorkflow) handleFailure(state *queue.JobState, result *queue.JobRe
 	}
 }
 
-// workerLabel derives the worker identity label for diagnostics, preferring
-// the live AgentStatus report (relayed by StatusListener) but falling back to
-// JobState.WorkerID for jobs that finished before any status reports landed.
-// Returns empty string when no identity is available.
-func workerLabel(state *queue.JobState) string {
-	if state == nil {
-		return ""
-	}
-	workerID := ""
-	workerNickname := ""
-	if state.AgentStatus != nil {
-		workerID = state.AgentStatus.WorkerID
-		workerNickname = state.AgentStatus.WorkerNickname
-	}
-	if workerID == "" {
-		workerID = state.WorkerID
-	}
-	label := workerNickname
-	if label == "" {
-		label = workerID
-	} else if workerID != "" {
-		label = fmt.Sprintf("%s (%s)", workerNickname, workerID)
-	}
-	return label
-}
-
 // postLowConfidence posts the REJECTED / low-confidence message to the thread.
 func (w *IssueWorkflow) postLowConfidence(job *queue.Job, message string) {
 	w.logger.Info("issue rejected", "reason", "low_confidence", "job_id", job.ID, "repo", job.Repo)
@@ -672,20 +646,6 @@ func stripTriageSection(body string) string {
 		}
 	}
 	return body
-}
-
-// humanDuration formats a duration as a compact human-readable string.
-func humanDuration(d time.Duration) string {
-	s := int(d.Seconds())
-	if s < 60 {
-		return fmt.Sprintf("%ds", s)
-	}
-	m := s / 60
-	s = s % 60
-	if s == 0 {
-		return fmt.Sprintf("%dm", m)
-	}
-	return fmt.Sprintf("%dm %ds", m, s)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
