@@ -89,3 +89,17 @@ func (s *statusAccumulator) toReport() queue.StatusReport {
 		PrepareSeconds: s.prepareSeconds,
 	}
 }
+
+// applyTotalsTo overwrites cost/token fields on result with the totals the
+// accumulator captured from the agent stream. Safe to call regardless of
+// result.Status: when the run ended before any "result" event landed, the
+// fields stay at zero, which is the correct semantic. Worker is the sole
+// writer of these fields on the success / cancelled / failed paths, so
+// overwriting any caller-set value is intentional.
+func (s *statusAccumulator) applyTotalsTo(result *queue.JobResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result.CostUSD = s.costUSD
+	result.InputTokens = s.inputTokens
+	result.OutputTokens = s.outputTokens
+}
