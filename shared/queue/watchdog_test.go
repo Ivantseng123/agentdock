@@ -45,6 +45,9 @@ func TestWatchdog_PublishesFailedResultOnTimeout(t *testing.T) {
 		if result.Error == "" {
 			t.Error("error should contain timeout reason")
 		}
+		if result.ExitCode != -1 {
+			t.Errorf("ExitCode = %d, want -1 (signal kill carries no exit code)", result.ExitCode)
+		}
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for result on ResultBus")
 	}
@@ -85,6 +88,9 @@ func TestWatchdog_CancelFallbackAfterTimeout(t *testing.T) {
 	case r := <-ch:
 		if r.Status != "cancelled" {
 			t.Errorf("status = %q, want cancelled", r.Status)
+		}
+		if r.ExitCode != -1 {
+			t.Errorf("ExitCode = %d, want -1 (no agent process)", r.ExitCode)
 		}
 	case <-ctx.Done():
 		t.Fatal("no result published")

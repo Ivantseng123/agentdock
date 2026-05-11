@@ -469,6 +469,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 					JobID:      job.ID,
 					Status:     "failed",
 					Error:      fmt.Sprintf("attachment prepare failed: %v", err),
+					ExitCode:   -1, // agent never ran
 					StartedAt:  time.Now(),
 					FinishedAt: time.Now(),
 				})

@@ -149,6 +149,7 @@ func (w *Watchdog) publishCancelledFallback(state *JobState) {
 		w.results.Publish(ctx, &JobResult{
 			JobID:      state.Job.ID,
 			Status:     "cancelled",
+			ExitCode:   -1, // no agent process — keep the sentinel out of agent_exit_code_total
 			FinishedAt: time.Now(),
 		})
 	}
@@ -179,6 +180,7 @@ func (w *Watchdog) killAndPublish(state *JobState, reason string) {
 			JobID:      state.Job.ID,
 			Status:     "failed",
 			Error:      fmt.Sprintf("job terminated: %s", reason),
+			ExitCode:   -1, // signal kill carries no exit code
 			FinishedAt: time.Now(),
 		})
 	}
