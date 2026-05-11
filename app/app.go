@@ -606,6 +606,11 @@ func handleSocketEvent(
 	botUserID string,
 	appLogger *slog.Logger,
 ) {
+	// Raw inbound traffic mix — counted before any dedup / rate-limit / ack,
+	// so it reflects what Slack actually delivered. Unknown-classed events
+	// (connection lifecycle, new event types) land in {type="unknown"}.
+	metrics.SlackEventsTotal.WithLabelValues(slackclient.EventTypeLabel(evt)).Inc()
+
 	switch evt.Type {
 	case socketmode.EventTypeEventsAPI:
 		sm.Ack(*evt.Request)
