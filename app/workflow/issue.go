@@ -634,27 +634,11 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 	// Preserve worker diagnostics on the final message so the thread captures
 	// what the job actually consumed.
 	line := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url)
-	if diag := w.formatDiagnostics(state, r); diag != "" {
+	if diag := formatDiagnostics(state, r); diag != "" {
 		line = line + "\n" + diag
 	}
 	w.updateStatus(job, line)
 	return nil
-}
-
-// formatDiagnostics renders the elapsed time, cost, and worker-label diagnostics line.
-// Order matches result_listener's failure-path format: stats first, identity last.
-func (w *IssueWorkflow) formatDiagnostics(state *queue.JobState, result *queue.JobResult) string {
-	var parts []string
-	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
-		parts = append(parts, humanDuration(elapsed))
-	}
-	if result.CostUSD > 0 {
-		parts = append(parts, fmt.Sprintf("$%.2f", result.CostUSD))
-	}
-	if label := workerLabel(state); label != "" {
-		parts = append(parts, "worker: "+label)
-	}
-	return strings.Join(parts, " · ")
 }
 
 // updateStatus updates the status message if StatusMsgTS is set, otherwise posts a new message.
