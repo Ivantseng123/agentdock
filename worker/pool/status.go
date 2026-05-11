@@ -96,6 +96,12 @@ func (s *statusAccumulator) toReport() queue.StatusReport {
 // fields stay at zero, which is the correct semantic. Worker is the sole
 // writer of these fields on the success / cancelled / failed paths, so
 // overwriting any caller-set value is intentional.
+//
+// Known limitation: cancellation mid-stream may lose a final "result" event
+// because the runner's OnEvent forwarder takes the ctx.Done() drain path
+// without invoking the callback (worker/agent/runner.go:325-329). When that
+// happens the accumulator never sees the totals and cancelled JobResults
+// carry zero. Tracked separately in #253.
 func (s *statusAccumulator) applyTotalsTo(result *queue.JobResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
