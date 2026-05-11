@@ -11,7 +11,8 @@ AI authoring rules:
 2. "Supporting evidence" must be real log / commit / pod names. Write "none" if you don't have any — do not fabricate.
 3. If "Root cause analysis" is unknown, write "unknown, pending investigation" and keep the section.
 4. `<scope>` must be one of: `worker/agent`, `workflow/issue`, `workflow/ask`, `workflow/pr-review`, `bot`, `queue`, `config`, `github`.
-5. Delete inapplicable sections entirely (including the heading); do not leave empty headings.
+5. The issue title uses `bug(<scope>):` (repo convention). The PR/commit that fixes it must use `fix(<scope>):` — `bug` is not a Conventional Commits type and will fail commitlint.
+6. Delete inapplicable sections entirely (including the heading); do not leave empty headings.
 -->
 
 ## Symptom
