@@ -31,7 +31,7 @@
 ### 非目標(明確不做)
 - Business metrics(`cost_per_issue` 等)— issue 已聲明。
 - 高基數 label(`channel_id` / `user_id` / `repo` 入 metric label)— issue 已聲明。
-- 自訂 Grafana dashboard / alert rule — issue 已聲明。
+- 新建 Grafana dashboard / alert rule — issue 已聲明。**但** repo 已有 `deploy/grafana/agentdock-dashboard.json`;把兩個新 metric(`agent_exit_code_total`、`slack_events_total`)的 panel 加進那份既有 dashboard 屬於「維護既有 artifact」,不算新建,本 PR 一併做。
 - Custom Go runtime metrics — issue 已聲明。
 - **Worker 自有 HTTP / metrics endpoint 與行為改動** — 經確認,worker 維持現狀;本 PR 對 worker 的改動限縮為**單一 data plumbing**(`JobResult.ExitCode` 欄位的 setter),不加 endpoint、不改觀測行為、不改 control flow。
 - **OTel metrics push pipeline** — Prometheus pull 已是事實上的決定,不引入第二條 metrics pipeline。
