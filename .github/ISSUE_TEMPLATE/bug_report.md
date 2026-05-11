@@ -1,41 +1,40 @@
 ---
 name: Bug Report
-about: 回報實際出錯的行為（卡住、結果錯亂、CI red、worker crash 等）
+about: Report broken behaviour (hangs, wrong results, CI red, worker crash, etc.)
 title: 'bug(<scope>): '
 labels: bug
 ---
 
 <!--
-AI 填寫規則：
-1. **填入的內容一律用英文**；章節標題保留中文。
-2. 順著章節順序寫，標題勿動。
-3. 「Supporting evidence」必須真實 log/commit/pod，沒有寫 "none"，不要編造。
-4. 「根因分析」未掌握時寫 "unknown, pending investigation" 並保留章節。
-5. `<scope>` 限定：`worker/agent`、`workflow/issue`、`workflow/ask`、`workflow/pr-review`、`bot`、`queue`、`config`、`github`。
-6. 不適用的章節整段刪除（含標題）。
+AI authoring rules:
+1. Follow the section order; do not change headings.
+2. "Supporting evidence" must be real log / commit / pod names. Write "none" if you don't have any — do not fabricate.
+3. If "Root cause analysis" is unknown, write "unknown, pending investigation" and keep the section.
+4. `<scope>` must be one of: `worker/agent`, `workflow/issue`, `workflow/ask`, `workflow/pr-review`, `bot`, `queue`, `config`, `github`.
+5. Delete inapplicable sections entirely (including the heading); do not leave empty headings.
 -->
 
-## 問題現象
+## Symptom
 
-實際行為：
+Actual behaviour:
 
-期望行為：
+Expected behaviour:
 
-## 重現步驟
+## Reproduction
 
-<!-- 無法穩定重現寫「偶發，條件未知」。 -->
+<!-- If not consistently reproducible, write "intermittent, conditions unknown". -->
 
 1.
 2.
 3.
 
-## 根因分析
+## Root cause analysis
 
-<!-- 程式碼路徑 + 觸發條件。 -->
+<!-- Code path + trigger conditions. -->
 
-## 影響
+## Impact
 
-<!-- blast radius / 是否阻塞 release / 影響範圍。 -->
+<!-- Blast radius / release-blocking / affected users. -->
 
 -
 
@@ -46,7 +45,7 @@ AI 填寫規則：
 
 ## Acceptance criteria
 
-<!-- 3-5 個可被 grep / 自動驗證的條件。 -->
+<!-- 3-5 grep-friendly, verifiable conditions. -->
 
 - [ ]
 - [ ]
@@ -54,4 +53,4 @@ AI 填寫規則：
 
 ## Related
 
-<!-- Fixes #N / Refs #N / Blocks #N。 -->
+<!-- Fixes #N / Refs #N / Blocks #N. -->

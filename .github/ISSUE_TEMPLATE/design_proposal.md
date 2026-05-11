@@ -1,60 +1,59 @@
 ---
 name: Design / Feature Request
-about: 提出新功能、架構變動，或要在實作前先收斂方案的設計題
+about: Propose a new feature, architecture change, or design that needs option exploration before implementation
 title: 'feat(<scope>): '
 labels: enhancement
 ---
 
 <!--
-AI 填寫規則：
-1. **填入的內容一律用英文**；章節標題保留中文。
-2. 「想過的方案」至少 A、B 兩個並列缺點；只列一個沒有對照，不接受。
-3. 不確定的章節保留，內容寫 "unknown" 或 "TBD"，不要編造方案。
-4. 純設計討論（非新功能）title 可改 'Design: …'。
-5. `<scope>` 限定：`worker/agent`、`workflow/issue`、`workflow/ask`、`bot`、`queue`、`config`、`skill/<name>`。
-6. 大型設計另寫 spec 放 `docs/superpowers/specs/` 或 `docs/ideas/`，於 References link 過來。
-7. 不適用章節整段刪除。
+AI authoring rules:
+1. "Options considered" requires at least A and B with drawbacks listed; a single-option design has no contrast and is not acceptable.
+2. If a section is uncertain, keep the heading and write "unknown" or "TBD" — do not fabricate options.
+3. For pure design discussions (not a new feature), the title may be changed to 'Design: …'.
+4. `<scope>` must be one of: `worker/agent`, `workflow/issue`, `workflow/ask`, `bot`, `queue`, `config`, `skill/<name>`.
+5. Large designs should be written as a spec under `docs/superpowers/specs/` or `docs/ideas/` and linked from References.
+6. Delete inapplicable sections entirely.
 -->
 
-## 問題或痛點
+## Problem / Pain point
 
-<!-- 現狀 + 為何不夠。 -->
+<!-- Current state + why it's insufficient. -->
 
-## 為什麼這題難 / 複雜度來源
+## Why this is hard / Sources of complexity
 
-<!-- 限制、相依、矛盾。簡單題刪整節。 -->
+<!-- Constraints, dependencies, contradictions. Delete the section if straightforward. -->
 
 -
 
-## 想過的方案
+## Options considered
 
-### A. <方案名>
+### A. <Name>
 
-- 做法：
-- 缺點：
+- Approach:
+- Drawbacks:
 
-### B. <方案名>
+### B. <Name>
 
-- 做法：
-- 缺點：
+- Approach:
+- Drawbacks:
 
-<!-- 需要更多選項繼續 C/D/...。 -->
+<!-- Continue with C/D/... if more options exist. -->
 
-## 建議方向
+## Recommended direction
 
-<!-- 傾向哪個方案 + 為什麼。 -->
+<!-- Which option you lean toward, and why. -->
 
-## Out of scope / 非目標
+## Out of scope
 
 -
 
 ## Follow-ups
 
-<!-- 關掉此 issue 前要做的事。 -->
+<!-- Things that must happen before closing this issue. -->
 
 - [ ]
 - [ ]
 
 ## References
 
-<!-- spec 路徑、相關 issue、外部連結。 -->
+<!-- Spec paths, related issues, external links. -->

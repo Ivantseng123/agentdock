@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 專案 README
+  - name: Project README
     url: https://github.com/Ivantseng123/agentdock#readme
-    about: 架構、build/run、release flow 都在 README 與 docs/ 內，先看這裡再決定是否開 issue。
-  - name: v2 Migration 指引
+    about: Architecture, build/run, and release flow all live in README and docs/. Check there before opening an issue.
+  - name: v2 Migration guide
     url: https://github.com/Ivantseng123/agentdock/blob/main/docs/MIGRATION-v2.md
-    about: 從 v1 升 v2（app/worker 拆 module、config 重建）的步驟說明。
+    about: Steps for upgrading from v1 to v2 (app/worker module split, config rebuild).

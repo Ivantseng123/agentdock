@@ -1,28 +1,27 @@
 ---
 name: Refactor / Tech Debt
-about: 內部清理、結構調整、命名修正等非功能性改動
+about: Internal cleanup, structural changes, renames, and other non-functional changes
 title: 'refactor(<scope>): '
 labels: enhancement
 ---
 
 <!--
-AI 填寫規則：
-1. **填入的內容一律用英文**；章節標題保留中文。
-2. 短版 template；不需 RCA / 多方案比較。
-3. 跨 app/worker/shared 之 import 邊界改動（`test/import_direction_test.go` 把關），在「改動建議」明確說明預期影響。
-4. `<scope>` 限定：`worker`、`queue`、`config`、`workflow`、`shared`、`app`。
-5. 不適用章節整段刪除。
+AI authoring rules:
+1. Short template; no RCA or multi-option comparison needed.
+2. If the change crosses the app/worker/shared import boundary (enforced by `test/import_direction_test.go`), state the expected impact under "Proposal".
+3. `<scope>` must be one of: `worker`, `queue`, `config`, `workflow`, `shared`, `app`.
+4. Delete inapplicable sections entirely.
 -->
 
-## 現狀
+## Current state
 
-<!-- 目前長什麼樣 + 為何想動。 -->
+<!-- What it looks like today + why you want to change it. -->
 
-## 改動建議
+## Proposal
 
-<!-- 預期動到的檔案或 package；牽動 import 邊界請點明。 -->
+<!-- Files / packages expected to change; call out any import-boundary impact. -->
 
-## 驗證方式
+## Verification
 
 ```bash
 go build ./... && (cd app && go build ./...) && (cd worker && go build ./...) && (cd shared && go build ./...)
@@ -32,4 +31,4 @@ go test ./test/... -run TestImportDirection
 
 ## Related
 
-<!-- Refs #N / Part of #N；無則 N/A。 -->
+<!-- Refs #N / Part of #N; "N/A" if none. -->
