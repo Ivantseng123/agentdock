@@ -634,9 +634,7 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 	// Preserve worker diagnostics on the final message so the thread captures
 	// what the job actually consumed.
 	line := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url)
-	if diag := formatDiagnostics(state, r); diag != "" {
-		line = line + "\n" + diag
-	}
+	line = withDiagnostics(line, formatDiagnostics(state, r))
 	w.updateStatus(job, line)
 	return nil
 }

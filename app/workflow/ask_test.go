@@ -1421,8 +1421,8 @@ func TestAskHandleResult_AllZeroDiagOmitted(t *testing.T) {
 	}
 
 	last := slack.LastPosted()
-	if strings.Contains(last, "worker:") || strings.Contains(last, "·") {
-		t.Errorf("expected no diag line; got %q", last)
+	if last != "hello" {
+		t.Errorf("expected exact answer with no diag; got %q", last)
 	}
 }
 
@@ -1448,6 +1448,31 @@ func TestAskHandleResult_FailedHasNoDiag(t *testing.T) {
 	last := slack.LastPosted()
 	if strings.Contains(last, "worker:") {
 		t.Errorf("failure path must not include diag; got %q", last)
+	}
+}
+
+func TestAskHandleResult_ParseFailHasNoDiag(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job:      &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "T1"},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "", // triggers ParseAskOutput error branch (below askFallbackMinLength)
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("parse-failure path must not include diag; got %q", last)
 	}
 }
 

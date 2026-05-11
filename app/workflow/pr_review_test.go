@@ -520,3 +520,92 @@ func TestPRReviewHandleResult_ErrorHasNoDiag(t *testing.T) {
 		t.Errorf("ERROR branch must not include diag; got %q", last)
 	}
 }
+
+func TestPRReviewHandleResult_FailedHasNoDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "failed",
+		Error:      "boom",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("failed path must not include diag; got %q", last)
+	}
+}
+
+func TestPRReviewHandleResult_CancelledHasNoDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "cancelled",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("cancelled path must not include diag; got %q", last)
+	}
+}
+
+func TestPRReviewHandleResult_ParseFailedHasNoDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "not valid json",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("parse-failed path must not include diag; got %q", last)
+	}
+}
