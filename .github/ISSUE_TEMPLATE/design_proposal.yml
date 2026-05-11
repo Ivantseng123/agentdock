@@ -1,0 +1,76 @@
+name: Design / Feature Request
+description: 提出新功能、架構變動，或要在實作前先收斂方案的設計題
+title: "feat(<scope>): "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        這個 template 對齊 repo 已存在的 design issue（例 #196 / #214 / #218 / #228）。
+        若內容偏大，可在 `docs/superpowers/specs/` 或 `docs/ideas/` 補 spec/one-pager，再從這裡 link 過去。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 問題或痛點
+      description: 現在的行為是什麼？為什麼不夠？
+    validations:
+      required: true
+
+  - type: textarea
+    id: complexity
+    attributes:
+      label: 為什麼這題難 / 複雜度來源
+      description: 牽涉到的限制、相依、矛盾。沒特別難的話可空。
+      placeholder: |
+        - 限制 1：…
+        - 限制 2：…
+
+  - type: textarea
+    id: options
+    attributes:
+      label: 想過的方案
+      description: 至少兩個選項並列出缺點；只列一個的設計很容易缺少對照。
+      value: |
+        ### A. ...
+        - 做法：
+        - 缺點：
+
+        ### B. ...
+        - 做法：
+        - 缺點：
+
+        ### C. ...
+        - 做法：
+        - 缺點：
+    validations:
+      required: true
+
+  - type: textarea
+    id: direction
+    attributes:
+      label: 建議方向
+      description: 傾向的方案 + 為何。
+
+  - type: textarea
+    id: oos
+    attributes:
+      label: Out of scope / 非目標
+      placeholder: |
+        - …
+        - …
+
+  - type: textarea
+    id: followups
+    attributes:
+      label: Follow-ups
+      description: 關掉這個 issue 之前要做的事。
+      value: |
+        - [ ]
+        - [ ]
+
+  - type: input
+    id: refs
+    attributes:
+      label: References
+      placeholder: "spec 路徑 / 相關 issue / 外部連結"
