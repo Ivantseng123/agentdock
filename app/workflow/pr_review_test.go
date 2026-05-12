@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
@@ -428,4 +429,183 @@ func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	slack := newFakeSlackPort()
 	w := NewPRReviewWorkflow(cfg, nil, slack, &fakeGitHubPR{}, nil, slog.Default())
 	return w, slack
+}
+
+func TestPRReviewHandleResult_PostedHasDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "===REVIEW_RESULT===\n" + `{"status":"POSTED","severity_summary":"low","summary":"ok","comments_posted":1}`,
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if !strings.HasSuffix(last, "\n5s · worker: w1") {
+		t.Errorf("POSTED branch must end with diag line; got %q", last)
+	}
+}
+
+func TestPRReviewHandleResult_SkippedHasDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "===REVIEW_RESULT===\n" + `{"status":"SKIPPED","reason":"doc-only","summary":"no comment"}`,
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if !strings.HasSuffix(last, "\n5s · worker: w1") {
+		t.Errorf("SKIPPED branch must end with diag line; got %q", last)
+	}
+}
+
+func TestPRReviewHandleResult_ErrorHasNoDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "===REVIEW_RESULT===\n" + `{"status":"ERROR","error":"boom"}`,
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("ERROR branch must not include diag; got %q", last)
+	}
+}
+
+func TestPRReviewHandleResult_FailedHasNoDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "failed",
+		Error:      "boom",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("failed path must not include diag; got %q", last)
+	}
+}
+
+func TestPRReviewHandleResult_CancelledHasNoDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "cancelled",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("cancelled path must not include diag; got %q", last)
+	}
+}
+
+func TestPRReviewHandleResult_ParseFailedHasNoDiag(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+
+	now := time.Now()
+	state := &queue.JobState{
+		Job: &queue.Job{
+			ID:           "j1",
+			ChannelID:    "C1",
+			ThreadTS:     "T1",
+			WorkflowArgs: map[string]string{"pr_url": "https://example/pr/1"},
+		},
+		WorkerID: "w1",
+	}
+	r := &queue.JobResult{
+		Status:     "completed",
+		RawOutput:  "not valid json",
+		StartedAt:  now,
+		FinishedAt: now.Add(5 * time.Second),
+	}
+
+	if err := w.HandleResult(context.Background(), state, r); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+
+	last := slack.LastPosted()
+	if strings.Contains(last, "worker:") {
+		t.Errorf("parse-failed path must not include diag; got %q", last)
+	}
 }

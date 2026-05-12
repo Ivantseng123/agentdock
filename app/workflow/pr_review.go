@@ -243,11 +243,9 @@ func mapGitHubErrorToSlack(err error) string {
 //     opens the modal instead.
 //   - pr_review_modal: value is the URL the user pasted into the modal.
 func (w *PRReviewWorkflow) Selection(ctx context.Context, p *Pending, value string) (NextStep, error) {
-	st, ok := p.State.(*prReviewState)
-	if !ok {
+	if _, ok := p.State.(*prReviewState); !ok {
 		return NextStep{Kind: NextStepError, ErrorText: "PRReviewWorkflow: unexpected state type"}, nil
 	}
-	_ = st
 
 	switch p.Phase {
 	case "pr_review_confirm":
@@ -370,14 +368,16 @@ func (w *PRReviewWorkflow) HandleResult(ctx context.Context, state *queue.JobSta
 	switch parsed.Status {
 	case "POSTED":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "posted").Inc()
-		return w.post(job, fmt.Sprintf(
+		text := fmt.Sprintf(
 			":white_check_mark: Review 完成 (severity: %s · %d comments, %d skipped) on %s\n> %s",
 			fallback(severity, "unknown"), parsed.CommentsPosted, parsed.CommentsSkipped, prURL,
 			firstN(summary, 200),
-		))
+		)
+		return w.post(job, withDiagnostics(text, formatDiagnostics(state, r)))
 	case "SKIPPED":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "skipped").Inc()
-		return w.post(job, fmt.Sprintf(":information_source: Review 跳過 (%s): %s", reason, firstN(summary, 200)))
+		text := fmt.Sprintf(":information_source: Review 跳過 (%s): %s", reason, firstN(summary, 200))
+		return w.post(job, withDiagnostics(text, formatDiagnostics(state, r)))
 	case "ERROR":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "error").Inc()
 		return w.post(job, fmt.Sprintf(":x: Review 失敗：%s", parsedErr))

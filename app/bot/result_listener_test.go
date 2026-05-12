@@ -883,3 +883,49 @@ func TestResultListener_RefViolations_EmptySliceNoop(t *testing.T) {
 		t.Fatalf("counter should not have moved on empty RefViolations: before=%v after=%v", before, after)
 	}
 }
+
+// TestResultListener_AgentExitCode covers the three observation paths for
+// agent_exit_code_total{provider, exit_code}:
+//   - ExitCode == -1 (worker's "no process / not waited" sentinel) → no sample
+//   - ExitCode == 0 with an AgentStatus report → {provider from report, "0"}
+//   - ExitCode == 137 on a "failed" job with no AgentStatus → {"unknown","137"}
+//     (an OOM/timeout kill that lost its status stream still records the code)
+func TestResultListener_AgentExitCode(t *testing.T) {
+	r := &ResultListener{logger: slog.Default()}
+
+	t.Run("sentinel_minus_one_skipped", func(t *testing.T) {
+		before := testutil.ToFloat64(metrics.AgentExitCodeTotal.WithLabelValues("unknown", "-1"))
+		state := &queue.JobState{Job: &queue.Job{ID: "j", TaskType: "ask"}}
+		result := &queue.JobResult{JobID: "j", Status: "completed", ExitCode: -1}
+		r.recordMetrics(state, result)
+		after := testutil.ToFloat64(metrics.AgentExitCodeTotal.WithLabelValues("unknown", "-1"))
+		if after != before {
+			t.Fatalf("ExitCode=-1 must not touch the counter: before=%v after=%v", before, after)
+		}
+	})
+
+	t.Run("success_zero_uses_status_provider", func(t *testing.T) {
+		before := testutil.ToFloat64(metrics.AgentExitCodeTotal.WithLabelValues("claude", "0"))
+		state := &queue.JobState{
+			Job:         &queue.Job{ID: "j", TaskType: "issue"},
+			AgentStatus: &queue.StatusReport{AgentCmd: "claude"},
+		}
+		result := &queue.JobResult{JobID: "j", Status: "completed", ExitCode: 0}
+		r.recordMetrics(state, result)
+		after := testutil.ToFloat64(metrics.AgentExitCodeTotal.WithLabelValues("claude", "0"))
+		if got := after - before; got != 1 {
+			t.Fatalf("AgentExitCodeTotal{claude,0} delta = %v, want 1", got)
+		}
+	})
+
+	t.Run("oom_137_failed_no_status_provider_unknown", func(t *testing.T) {
+		before := testutil.ToFloat64(metrics.AgentExitCodeTotal.WithLabelValues("unknown", "137"))
+		state := &queue.JobState{Job: &queue.Job{ID: "j", TaskType: "ask"}}
+		result := &queue.JobResult{JobID: "j", Status: "failed", Error: "killed", ExitCode: 137}
+		r.recordMetrics(state, result)
+		after := testutil.ToFloat64(metrics.AgentExitCodeTotal.WithLabelValues("unknown", "137"))
+		if got := after - before; got != 1 {
+			t.Fatalf("AgentExitCodeTotal{unknown,137} delta = %v, want 1", got)
+		}
+	})
+}

@@ -191,9 +191,10 @@ func (d *RepoDiscovery) SearchRepos(ctx context.Context, query string) ([]string
 		return all, nil
 	}
 
+	q := strings.ToLower(query)
 	var matched []string
 	for _, r := range all {
-		if containsIgnoreCase(r, query) {
+		if strings.Contains(strings.ToLower(r), q) {
 			matched = append(matched, r)
 			if len(matched) >= 25 {
 				break
@@ -201,45 +202,4 @@ func (d *RepoDiscovery) SearchRepos(ctx context.Context, query string) ([]string
 		}
 	}
 	return matched, nil
-}
-
-func containsIgnoreCase(s, substr string) bool {
-	sLower := make([]byte, len(s))
-	subLower := make([]byte, len(substr))
-	for i := range s {
-		if s[i] >= 'A' && s[i] <= 'Z' {
-			sLower[i] = s[i] + 32
-		} else {
-			sLower[i] = s[i]
-		}
-	}
-	for i := range substr {
-		if substr[i] >= 'A' && substr[i] <= 'Z' {
-			subLower[i] = substr[i] + 32
-		} else {
-			subLower[i] = substr[i]
-		}
-	}
-	return bytesContains(sLower, subLower)
-}
-
-func bytesContains(s, sub []byte) bool {
-	if len(sub) == 0 {
-		return true
-	}
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i] == sub[0] {
-			match := true
-			for j := 1; j < len(sub); j++ {
-				if s[i+j] != sub[j] {
-					match = false
-					break
-				}
-			}
-			if match {
-				return true
-			}
-		}
-	}
-	return false
 }

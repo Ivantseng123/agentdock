@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestInstallationRepoDiscovery_UsesInstallationRepositoriesEndpoint(t *testing.T) {
@@ -49,6 +50,71 @@ func TestInstallationRepoDiscovery_UsesInstallationRepositoriesEndpoint(t *testi
 	}
 	if calls.Load() != 1 {
 		t.Errorf("tokenFn calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestSearchRepos_FiltersAndCaps(t *testing.T) {
+	d := &RepoDiscovery{
+		ttl:     time.Hour,
+		fetched: time.Now(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	d.cache = []string{
+		"Acme/Service",
+		"acme/Library",
+		"OtherOrg/service-tools",
+		"OtherOrg/unrelated",
+	}
+
+	cases := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{"empty query returns all up to cap", "", []string{"Acme/Service", "acme/Library", "OtherOrg/service-tools", "OtherOrg/unrelated"}},
+		{"case-insensitive substring", "service", []string{"Acme/Service", "OtherOrg/service-tools"}},
+		{"uppercase query matches lowercase repo", "LIBRARY", []string{"acme/Library"}},
+		{"no match returns empty", "missing", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := d.SearchRepos(context.Background(), tc.query)
+			if err != nil {
+				t.Fatalf("SearchRepos: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSearchRepos_CapsAt25(t *testing.T) {
+	cache := make([]string, 50)
+	for i := range cache {
+		cache[i] = fmt.Sprintf("org/repo-%02d", i)
+	}
+	d := &RepoDiscovery{
+		ttl:     time.Hour,
+		fetched: time.Now(),
+		cache:   cache,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	got, err := d.SearchRepos(context.Background(), "")
+	if err != nil {
+		t.Fatalf("SearchRepos empty: %v", err)
+	}
+	if len(got) != 25 {
+		t.Errorf("empty query: got %d, want 25", len(got))
+	}
+
+	got, err = d.SearchRepos(context.Background(), "repo")
+	if err != nil {
+		t.Fatalf("SearchRepos query: %v", err)
+	}
+	if len(got) != 25 {
+		t.Errorf("query match: got %d, want 25", len(got))
 	}
 }
 

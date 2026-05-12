@@ -59,6 +59,14 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	startedAt := time.Now()
 	logger = logger.With("job_id", job.ID, "repo", job.Repo)
 
+	// Capture agent process exit code into JobResult.ExitCode. The closure
+	// fires from runner.runOne's deferred block (see worker/agent/runner.go
+	// RunOptions.OnExit). Sentinel -1 covers all pre-runner failures below
+	// — every classifyResult / failedResult call passes exitCode through,
+	// so a return that never reached deps.runner.Run still surfaces -1.
+	exitCode := -1
+	opts.OnExit = func(code int) { exitCode = code }
+
 	// Resolve attachments (blocks until Prepare completes on app side).
 	var attachments []queue.AttachmentReady
 	if len(job.Attachments) > 0 {
@@ -66,7 +74,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		var err error
 		attachments, err = deps.attachments.Resolve(ctx, job.ID)
 		if err != nil {
-			return classifyResult(job, startedAt, fmt.Errorf("attachments failed: %w", err), "", ctx, deps.store)
+			return classifyResult(job, startedAt, fmt.Errorf("attachments failed: %w", err), "", ctx, deps.store, exitCode)
 		}
 	}
 
@@ -74,15 +82,15 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	var mergedSecrets map[string]string
 	if len(job.EncryptedSecrets) > 0 {
 		if len(deps.secretKey) == 0 {
-			return classifyResult(job, startedAt, fmt.Errorf("job has encrypted secrets but worker has no secret_key configured"), "", ctx, deps.store)
+			return classifyResult(job, startedAt, fmt.Errorf("job has encrypted secrets but worker has no secret_key configured"), "", ctx, deps.store, exitCode)
 		}
 		decrypted, err := crypto.Decrypt(deps.secretKey, job.EncryptedSecrets)
 		if err != nil {
-			return classifyResult(job, startedAt, fmt.Errorf("decrypt secrets: %w", err), "", ctx, deps.store)
+			return classifyResult(job, startedAt, fmt.Errorf("decrypt secrets: %w", err), "", ctx, deps.store, exitCode)
 		}
 		var appSecrets map[string]string
 		if err := json.Unmarshal(decrypted, &appSecrets); err != nil {
-			return classifyResult(job, startedAt, fmt.Errorf("unmarshal secrets: %w", err), "", ctx, deps.store)
+			return classifyResult(job, startedAt, fmt.Errorf("unmarshal secrets: %w", err), "", ctx, deps.store, exitCode)
 		}
 		mergedSecrets = appSecrets
 	}
@@ -104,10 +112,10 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		ghToken = mergedSecrets["GH_TOKEN"]
 	}
 	if err := ctx.Err(); err != nil {
-		return classifyResult(job, startedAt, err, "", ctx, deps.store)
+		return classifyResult(job, startedAt, err, "", ctx, deps.store, exitCode)
 	}
 	if isEmptyRepoReference(job) {
-		return classifyResult(job, startedAt, fmt.Errorf("empty repo reference: job has no usable repo/clone_url"), "", ctx, deps.store)
+		return classifyResult(job, startedAt, fmt.Errorf("empty repo reference: job has no usable repo/clone_url"), "", ctx, deps.store, exitCode)
 	}
 	provider := selectProvider(job, deps.repoCache, ghToken)
 	// github.clone_repo span (primary). EmptyDirProvider also flows through
@@ -136,7 +144,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	}()
 	if err != nil {
 		logger.Error("Repo 準備失敗", "phase", "失敗", "branch", job.Branch, "error", err.Error())
-		return classifyResult(job, startedAt, fmt.Errorf("workdir prepare failed: %w", err), "", ctx, deps.store)
+		return classifyResult(job, startedAt, fmt.Errorf("workdir prepare failed: %w", err), "", ctx, deps.store, exitCode)
 	}
 	prepareSeconds := time.Since(prepareStart).Seconds()
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath, "prepare_seconds", prepareSeconds)
@@ -144,7 +152,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	// Defensive: new schema requires PromptContext. drain-and-cut means old
 	// Job.Prompt-only jobs shouldn't exist, but fail clearly if one slips through.
 	if job.PromptContext == nil {
-		return failedResult(job, startedAt, fmt.Errorf("malformed job: missing prompt_context"), repoPath)
+		return failedResult(job, startedAt, fmt.Errorf("malformed job: missing prompt_context"), repoPath, exitCode)
 	}
 
 	// Ref repos — only when primary is real (CloneURL set; refs without a
@@ -163,7 +171,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		if refErr != nil {
 			// Only refs-root mkdir failures bubble up; per-ref failures are
 			// absorbed into unavailableRefs by prepareRefs itself.
-			return classifyResult(job, startedAt, fmt.Errorf("refs prepare: %w", refErr), repoPath, ctx, deps.store)
+			return classifyResult(job, startedAt, fmt.Errorf("refs prepare: %w", refErr), repoPath, ctx, deps.store, exitCode)
 		}
 		logger.Info("Refs 已就緒",
 			"phase", "處理中",
@@ -202,7 +210,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		logger.Info("掛載 skill 中", "phase", "處理中", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
 		for _, sd := range deps.skillDirs {
 			if err := mountSkills(repoPath, job.Skills, sd); err != nil {
-				return classifyResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err), repoPath, ctx, deps.store)
+				return classifyResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err), repoPath, ctx, deps.store, exitCode)
 			}
 			defer cleanupSkills(repoPath, job.Skills, sd)
 		}
@@ -216,7 +224,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 	opts.Secrets = mergedSecrets
 	output, err := deps.runner.Run(ctx, repoPath, promptXML, opts)
 	if err != nil {
-		return classifyResult(job, startedAt, err, repoPath, ctx, deps.store)
+		return classifyResult(job, startedAt, err, repoPath, ctx, deps.store, exitCode)
 	}
 	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
 	logger.Debug("Agent output 內容", "phase", "完成", "output", output)
@@ -234,6 +242,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		JobID:          job.ID,
 		Status:         "completed",
 		RawOutput:      output,
+		ExitCode:       exitCode,
 		RepoPath:       repoPath,
 		StartedAt:      startedAt,
 		FinishedAt:     time.Now(),
@@ -312,34 +321,39 @@ func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]prompt
 	return infos, nil
 }
 
-func classifyResult(job *queue.Job, startedAt time.Time, err error, repoPath string, ctx context.Context, store queue.JobStore) *queue.JobResult {
+// exitCode threads through so post-runner failures (e.g. context cancel after
+// the agent process already exited non-zero) still surface the captured code.
+// Pre-runner callers pass -1 — the sentinel set in executeJob's closure.
+func classifyResult(job *queue.Job, startedAt time.Time, err error, repoPath string, ctx context.Context, store queue.JobStore, exitCode int) *queue.JobResult {
 	if ctx.Err() == context.Canceled {
 		// ctx is already cancelled here; use a detached ctx with short timeout
 		// so the post-cancel lookup can complete.
 		lookupCtx, cancel := context.WithTimeout(context.Background(), queue.DefaultStoreOpTimeout)
 		defer cancel()
 		if state, lookupErr := store.Get(lookupCtx, job.ID); lookupErr == nil && state.Status == queue.JobCancelled {
-			return cancelledResult(job, startedAt, repoPath)
+			return cancelledResult(job, startedAt, repoPath, exitCode)
 		}
 	}
-	return failedResult(job, startedAt, err, repoPath)
+	return failedResult(job, startedAt, err, repoPath, exitCode)
 }
 
-func cancelledResult(job *queue.Job, startedAt time.Time, repoPath string) *queue.JobResult {
+func cancelledResult(job *queue.Job, startedAt time.Time, repoPath string, exitCode int) *queue.JobResult {
 	return &queue.JobResult{
 		JobID:      job.ID,
 		Status:     "cancelled",
+		ExitCode:   exitCode,
 		RepoPath:   repoPath,
 		StartedAt:  startedAt,
 		FinishedAt: time.Now(),
 	}
 }
 
-func failedResult(job *queue.Job, startedAt time.Time, err error, repoPath string) *queue.JobResult {
+func failedResult(job *queue.Job, startedAt time.Time, err error, repoPath string, exitCode int) *queue.JobResult {
 	return &queue.JobResult{
 		JobID:      job.ID,
 		Status:     "failed",
 		Error:      err.Error(),
+		ExitCode:   exitCode,
 		RepoPath:   repoPath,
 		StartedAt:  startedAt,
 		FinishedAt: time.Now(),

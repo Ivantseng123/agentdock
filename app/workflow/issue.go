@@ -481,32 +481,6 @@ func (w *IssueWorkflow) handleFailure(state *queue.JobState, result *queue.JobRe
 	}
 }
 
-// workerLabel derives the worker identity label for diagnostics, preferring
-// the live AgentStatus report (relayed by StatusListener) but falling back to
-// JobState.WorkerID for jobs that finished before any status reports landed.
-// Returns empty string when no identity is available.
-func workerLabel(state *queue.JobState) string {
-	if state == nil {
-		return ""
-	}
-	workerID := ""
-	workerNickname := ""
-	if state.AgentStatus != nil {
-		workerID = state.AgentStatus.WorkerID
-		workerNickname = state.AgentStatus.WorkerNickname
-	}
-	if workerID == "" {
-		workerID = state.WorkerID
-	}
-	label := workerNickname
-	if label == "" {
-		label = workerID
-	} else if workerID != "" {
-		label = fmt.Sprintf("%s (%s)", workerNickname, workerID)
-	}
-	return label
-}
-
 // postLowConfidence posts the REJECTED / low-confidence message to the thread.
 func (w *IssueWorkflow) postLowConfidence(job *queue.Job, message string) {
 	w.logger.Info("issue rejected", "reason", "low_confidence", "job_id", job.ID, "repo", job.Repo)
@@ -634,27 +608,9 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 	// Preserve worker diagnostics on the final message so the thread captures
 	// what the job actually consumed.
 	line := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url)
-	if diag := w.formatDiagnostics(state, r); diag != "" {
-		line = line + "\n" + diag
-	}
+	line = withDiagnostics(line, formatDiagnostics(state, r))
 	w.updateStatus(job, line)
 	return nil
-}
-
-// formatDiagnostics renders the elapsed time, cost, and worker-label diagnostics line.
-// Order matches result_listener's failure-path format: stats first, identity last.
-func (w *IssueWorkflow) formatDiagnostics(state *queue.JobState, result *queue.JobResult) string {
-	var parts []string
-	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
-		parts = append(parts, humanDuration(elapsed))
-	}
-	if result.CostUSD > 0 {
-		parts = append(parts, fmt.Sprintf("$%.2f", result.CostUSD))
-	}
-	if label := workerLabel(state); label != "" {
-		parts = append(parts, "worker: "+label)
-	}
-	return strings.Join(parts, " · ")
 }
 
 // updateStatus updates the status message if StatusMsgTS is set, otherwise posts a new message.
@@ -690,20 +646,6 @@ func stripTriageSection(body string) string {
 		}
 	}
 	return body
-}
-
-// humanDuration formats a duration as a compact human-readable string.
-func humanDuration(d time.Duration) string {
-	s := int(d.Seconds())
-	if s < 60 {
-		return fmt.Sprintf("%ds", s)
-	}
-	m := s / 60
-	s = s % 60
-	if s == 0 {
-		return fmt.Sprintf("%dm", m)
-	}
-	return fmt.Sprintf("%dm %ds", m, s)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

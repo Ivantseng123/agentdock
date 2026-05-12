@@ -303,13 +303,12 @@ func (rc *RepoCache) Checkout(repoPath, branch, token string) error {
 
 	// Try local branch first, then track remote
 	cmd := exec.Command("git", "-C", repoPath, "checkout", branch)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if _, err := cmd.CombinedOutput(); err != nil {
 		// Try creating a tracking branch
 		cmd = exec.Command("git", "-C", repoPath, "checkout", "-b", branch, "origin/"+branch)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("checkout %s: %w\n%s", branch, err, out)
 		}
-		_ = out
 	}
 
 	// Pull latest for this branch. Token flows through env (#179) so the
