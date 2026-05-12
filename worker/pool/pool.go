@@ -239,6 +239,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	}
 
 	result := executeJob(jobCtx, job, deps, opts, logger)
+	status.applyTotalsTo(result)
 	status.setPrepareSeconds(result.PrepareSeconds)
 
 	// Promote the worker-side store to the terminal status BEFORE the final

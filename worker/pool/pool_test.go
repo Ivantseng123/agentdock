@@ -20,9 +20,15 @@ import (
 type mockRunner struct {
 	output string
 	err    error
+	events []queue.StreamEvent
 }
 
 func (m *mockRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
+	if opts.OnEvent != nil {
+		for _, evt := range m.events {
+			opts.OnEvent(evt)
+		}
+	}
 	return m.output, m.err
 }
 
@@ -801,5 +807,75 @@ func TestPool_FinalStatusReportCarriesTerminalJobStatus(t *testing.T) {
 	if final.JobStatus != queue.JobCompleted {
 		t.Errorf("final status report JobStatus=%q, want %q (otherwise app StatusListener races ResultListener and clobbers the answer)",
 			final.JobStatus, queue.JobCompleted)
+	}
+}
+
+func TestHandleJob_PublishesCostAndTokensInJobResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	store := queue.NewMemJobStore()
+	bundle := queuetest.NewBundle(10, 3, store)
+	defer bundle.Close()
+
+	agentOutput := "Analysis done."
+
+	runner := &mockRunner{
+		output: agentOutput,
+		events: []queue.StreamEvent{
+			{Type: "result", CostUSD: 0.05, InputTokens: 100, OutputTokens: 50},
+		},
+	}
+
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      runner,
+		RepoCache:   &mockRepo{path: "/tmp/r"},
+		Commands:    bundle.Commands,
+		WorkerCount: 1,
+		Hostname:    "test-host",
+		Logger:      slog.Default(),
+	})
+	pool.Start(ctx)
+
+	bundle.Attachments.Prepare(ctx, "jcost", nil)
+
+	if err := bundle.Queue.Submit(ctx, &queue.Job{
+		ID:       "jcost",
+		Priority: 50,
+		Repo:     "owner/repo",
+		PromptContext: &queue.PromptContext{
+			ThreadMessages: []queue.ThreadMessage{{User: "T", Timestamp: "1", Text: "test"}},
+			Channel:        "test",
+			Reporter:       "tester",
+			Goal:           "test goal",
+		},
+	}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	ch, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case result := <-ch:
+		if result.JobID != "jcost" {
+			t.Errorf("jobID = %q, want jcost", result.JobID)
+		}
+		if result.Status != "completed" {
+			t.Errorf("status = %q, want completed", result.Status)
+		}
+		if result.CostUSD != 0.05 {
+			t.Errorf("CostUSD = %v, want 0.05", result.CostUSD)
+		}
+		if result.InputTokens != 100 {
+			t.Errorf("InputTokens = %d, want 100", result.InputTokens)
+		}
+		if result.OutputTokens != 50 {
+			t.Errorf("OutputTokens = %d, want 50", result.OutputTokens)
+		}
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for result")
 	}
 }
