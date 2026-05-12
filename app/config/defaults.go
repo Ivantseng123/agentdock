@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ivantseng123/agentdock/shared/configloader"
 	"gopkg.in/yaml.v3"
 )
 
@@ -372,7 +373,7 @@ func resolveSecrets(cfg *Config) {
 			cfg.Secrets["MANTIS_API_TOKEN"] = cfg.Mantis.APIToken
 		}
 	}
-	for k, v := range scanSecretEnvVars() {
+	for k, v := range configloader.ScanSecretEnvVars("AGENTDOCK_SECRET_") {
 		cfg.Secrets[k] = v
 	}
 }

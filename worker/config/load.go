@@ -37,7 +37,7 @@ func BuildKoanf(cmd *cobra.Command, configPath string) (*Config, *koanf.Koanf, *
 			if err := kSave.Load(file.Provider(configPath), parser); err != nil {
 				return nil, nil, nil, configloader.DeltaInfo{}, fmt.Errorf("load %s: %w", configPath, err)
 			}
-			warnUnknownKeys(kEff)
+			configloader.WarnUnknownKeys(kEff, reflect.TypeOf(Config{}))
 		} else if !os.IsNotExist(err) {
 			return nil, nil, nil, configloader.DeltaInfo{}, fmt.Errorf("stat %s: %w", configPath, err)
 		}
@@ -123,13 +123,3 @@ func mergeBuiltinAgents(cfg *Config) {
 	}
 }
 
-// warnUnknownKeys logs warnings for koanf keys that don't match the Config
-// schema. Map-valued fields (agents, secrets) are skipped.
-func warnUnknownKeys(k *koanf.Koanf) {
-	valid := map[string]bool{}
-	mapKeys := map[string]bool{}
-	configloader.WalkYAMLPathsKeyOnly(reflect.TypeOf(Config{}), "", valid, mapKeys)
-	for _, key := range configloader.UnknownKeys(k, valid, mapKeys) {
-		slog.Warn("未知設定鍵", "phase", "失敗", "key", key)
-	}
-}

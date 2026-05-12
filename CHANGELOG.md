@@ -1,5 +1,29 @@
 # Changelog
 
+## [3.8.0](https://github.com/Ivantseng123/agentdock/compare/v3.7.0...v3.8.0) (2026-05-08)
+
+
+### Features
+
+* **bot:** retry preserves trace_id by copying Traceparent verbatim ([b8d7599](https://github.com/Ivantseng123/agentdock/commit/b8d759934c4bca092c14dd917686efbf010e6fc3)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+* **cmd:** wire OTel tracing setup with YAML + env override ([935d3f1](https://github.com/Ivantseng123/agentdock/commit/935d3f1b11f7a12b86a0e9070158d8139b3537c4)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+* observability v2 — OpenTelemetry tracing ([#46](https://github.com/Ivantseng123/agentdock/issues/46)) ([76217a5](https://github.com/Ivantseng123/agentdock/commit/76217a5e145943a4b3acc5c62ce8f52e9658e115))
+* **queue:** add Job.Traceparent field for W3C trace context propagation ([7a117b5](https://github.com/Ivantseng123/agentdock/commit/7a117b531086303a40ddbd3abb8ba4aba5c969b0)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+* **tracing:** add shared/tracing skeleton with fail-soft setup ([64e7852](https://github.com/Ivantseng123/agentdock/commit/64e7852304a09209a2b19c8e01a47cd50e767b85)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+* **tracing:** app root span + queue.enqueue auto-span ([808d9d5](https://github.com/Ivantseng123/agentdock/commit/808d9d52be44f359664919d67ff51226eb2b4997)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+* **tracing:** debug-log when ExtractToContext drops malformed input ([1882448](https://github.com/Ivantseng123/agentdock/commit/1882448f97f052d43c7aab4db06c35671abc0806))
+* **worker:** tracing — github.clone_repo span for primary + each ref ([a93a622](https://github.com/Ivantseng123/agentdock/commit/a93a622203acc520c01442b525611d4ff3e419b6)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+* **worker:** tracing — handle_job umbrella + agent.execute span ([2c1ad20](https://github.com/Ivantseng123/agentdock/commit/2c1ad20c66b9f7fad1c8d84b1a5bc659990e23c1)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+* **workflow:** tracing — github.create_issue span under app root ([3f06add](https://github.com/Ivantseng123/agentdock/commit/3f06add65e480c6cbb007db214eb0e26ae3c4850)), closes [#46](https://github.com/Ivantseng123/agentdock/issues/46)
+
+
+### Bug Fixes
+
+* **tracing:** mark agent.execute span Error on non-zero exit ([f9cffd7](https://github.com/Ivantseng123/agentdock/commit/f9cffd7cb682e52bea028d86207eedf578053dd4))
+* **tracing:** redact userinfo from endpoint before logging ([752ed6a](https://github.com/Ivantseng123/agentdock/commit/752ed6a757dc6896328935213abbe5de28ac689f))
+* **worker:** scope github.clone_repo span via inline closure + defer ([389b7ce](https://github.com/Ivantseng123/agentdock/commit/389b7ce91ce2b3eae69f07699cf449375c33ca72))
+* **workflow:** defer createSpan.End for github.create_issue ([281b00d](https://github.com/Ivantseng123/agentdock/commit/281b00d1d1ae2052794d14296d15b6c5125bc5ac))
+
 ## [3.7.0](https://github.com/Ivantseng123/agentdock/compare/v3.6.1...v3.7.0) (2026-05-05)
 
 

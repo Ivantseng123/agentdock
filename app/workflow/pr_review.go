@@ -243,11 +243,9 @@ func mapGitHubErrorToSlack(err error) string {
 //     opens the modal instead.
 //   - pr_review_modal: value is the URL the user pasted into the modal.
 func (w *PRReviewWorkflow) Selection(ctx context.Context, p *Pending, value string) (NextStep, error) {
-	st, ok := p.State.(*prReviewState)
-	if !ok {
+	if _, ok := p.State.(*prReviewState); !ok {
 		return NextStep{Kind: NextStepError, ErrorText: "PRReviewWorkflow: unexpected state type"}, nil
 	}
-	_ = st
 
 	switch p.Phase {
 	case "pr_review_confirm":
