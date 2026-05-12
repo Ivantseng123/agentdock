@@ -10,7 +10,10 @@
 log_level: info                       # console / stderr 層級：debug | info | warn | error
 
 server:
-  port: 8080                          # /healthz, /jobs, /metrics HTTP endpoint
+  port: 8080                          # /healthz, /jobs, /metrics HTTP endpoint（0 = 不開 HTTP）
+
+metrics:
+  enabled: true                       # 省略此區塊 = true。false 時不註冊也不掛 /metrics
 
 slack:
   bot_token: xoxb-...                 # REQUIRED
@@ -187,6 +190,22 @@ App 用 `JobStore` 追蹤每個 Job 的 lifecycle（Pending → Running → Comp
 | `logging.level` | 滾動檔案 `logs/YYYY-MM-DD.jsonl` | `debug` |
 
 支援值：`debug` / `info` / `warn` / `error`。可改用 CLI flag（`--log-level debug`）或 env var（`LOG_LEVEL`）。
+
+## Metrics（Prometheus）
+
+App 在 `server.port` 上以 `/metrics` 暴露 Prometheus 指標(`agentdock_*` namespace,pull model)。`metrics.enabled` 預設 `true`(省略 `metrics:` 區塊即啟用)：
+
+| 設定 | 行為 |
+|---|---|
+| 省略 / `metrics.enabled: true` | 註冊指標 + 掛 `/metrics`(維持 v3 之前的行為) |
+| `metrics.enabled: false` | 不註冊、不掛 `/metrics`,Prometheus default registry 保持空。觀測點的計數仍會跑(對未註冊的指標是 no-op) |
+
+注意:
+
+- `server.port: 0` 時不開任何 HTTP，`/metrics` 自然也沒有。此時若 `metrics.enabled` 仍為 true,啟動會 warn 一次提醒。指標仍在 process 內累積,只是沒有 scrape 端點。
+- **`/metrics` 通常含內部資訊**(queue 深度、agent provider、exit code 分佈…),用 ingress 規則 / NetworkPolicy / 防火牆限縮可存取範圍。目前沒有「把 `/metrics` 綁到獨立 port」的選項(`metrics.listen_addr` 已在 v3 defer,見 [adr/0005-metrics-prometheus.md](adr/0005-metrics-prometheus.md) Decision #4)。
+- 可用的 PromQL 範例(成功率、P95 執行時間、queue 等待、exit code 異常閾值等)見 [operations.md](operations.md) 的 Metrics 段。
+- 設計脈絡(為何 Prometheus 而非 OTel metrics、雙 stack 共存、cardinality 規範)見 [adr/0005-metrics-prometheus.md](adr/0005-metrics-prometheus.md)。
 
 ## Secrets
 

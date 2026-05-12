@@ -118,6 +118,14 @@ type JobResult struct {
 	CostUSD        float64   `json:"cost_usd,omitempty"`
 	InputTokens    int       `json:"input_tokens,omitempty"`
 	OutputTokens   int       `json:"output_tokens,omitempty"`
+	// ExitCode is the agent process exit code. Sentinel -1 means "no
+	// process / not waited" (pre-runner failures, cancellations before
+	// exec, runner-not-yet-reached paths). Use `>= 0` to gate observation
+	// — a wire-skewed older worker missing this field decodes to 0, which
+	// is indistinguishable from a successful exit; the app/worker pair is
+	// expected to deploy together. `omitempty` is intentionally omitted
+	// so the sentinel survives JSON round-trip.
+	ExitCode int `json:"exit_code"`
 	// RefViolations lists ref repos (owner/name) where the post-execute
 	// guard detected agent writes. Worker is task-agnostic — it always
 	// reports; app side decides how to react (Ask: metric only; Issue:
