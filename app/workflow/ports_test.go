@@ -20,6 +20,10 @@ type fakeSlackPort struct {
 	PriorBotAnswer      *slackclient.ThreadRawMessage
 	PriorBotAnswerErr   error
 	PriorBotAnswerCalls int
+
+	// UploadFileErr, when non-nil, is returned by UploadFile so tests can
+	// exercise the upload-failure inline-fallback path in postWithDiag.
+	UploadFileErr error
 }
 
 func newFakeSlackPort() *fakeSlackPort { return &fakeSlackPort{} }
@@ -70,8 +74,8 @@ func (f *fakeSlackPort) OpenTextInputModal(tid, title, label, name, metadata str
 	return nil
 }
 
-func (f *fakeSlackPort) ResolveUser(uid string) string       { return "user-" + uid }
-func (f *fakeSlackPort) GetChannelName(cid string) string    { return "ch-" + cid }
+func (f *fakeSlackPort) ResolveUser(uid string) string    { return "user-" + uid }
+func (f *fakeSlackPort) GetChannelName(cid string) string { return "ch-" + cid }
 
 func (f *fakeSlackPort) FetchThreadContext(c, ts, tts string, lim int) ([]slackclient.ThreadRawMessage, error) {
 	return nil, nil
@@ -94,6 +98,9 @@ func (f *fakeSlackPort) DownloadAttachments(msgs []slackclient.ThreadRawMessage,
 }
 
 func (f *fakeSlackPort) UploadFile(channelID, threadTS, filename, title, content, initialComment string) error {
+	if f.UploadFileErr != nil {
+		return f.UploadFileErr
+	}
 	// Record the file body in Posted so tests that verify "the answer reached
 	// Slack" don't care whether the answer went inline or into a file.
 	f.Posted = append(f.Posted, content)
