@@ -469,6 +469,7 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 					JobID:      job.ID,
 					Status:     "failed",
 					Error:      fmt.Sprintf("attachment prepare failed: %v", err),
+					ExitCode:   -1, // agent never ran
 					StartedAt:  time.Now(),
 					FinishedAt: time.Now(),
 				})
@@ -541,21 +542,31 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	)
 	go watchdog.Start(make(chan struct{}))
 
-	metrics.Register(prometheus.DefaultRegisterer, coordinator, jobStore)
+	// Metrics: Register() and the /metrics endpoint are both gated by
+	// metrics.enabled (default true). Disabling keeps the default Prometheus
+	// registry clean — the metric vars still exist and .Inc()/.Observe()
+	// calls are harmless no-ops, there's just no scraper endpoint.
+	var metricsHandler http.Handler
+	if cfg.Metrics.IsEnabled() {
+		metrics.Register(prometheus.DefaultRegisterer, coordinator, jobStore)
+		metricsHandler = promhttp.Handler()
+	}
 
 	if cfg.Server.Port > 0 {
 		go func() {
-			http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("ok"))
-			})
-			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, coordinator))
-			http.HandleFunc("/jobs/", queue.KillHandler(jobStore, bundle.Commands))
-			http.Handle("/metrics", promhttp.Handler())
+			mux := http.NewServeMux()
+			mountHTTPHandlers(mux, jobStore, coordinator, bundle.Commands, metricsHandler)
 			addr := fmt.Sprintf(":%d", cfg.Server.Port)
-			appLogger.Info("HTTP 端點已啟動", "phase", "處理中", "addr", addr, "endpoints", []string{"/healthz", "/jobs", "/jobs/{id}", "/metrics"})
-			http.ListenAndServe(addr, nil)
+			endpoints := []string{"/healthz", "/jobs", "/jobs/{id}"}
+			if metricsHandler != nil {
+				endpoints = append(endpoints, "/metrics")
+			}
+			appLogger.Info("HTTP 端點已啟動", "phase", "處理中", "addr", addr, "endpoints", endpoints, "metrics_enabled", cfg.Metrics.IsEnabled())
+			http.ListenAndServe(addr, mux)
 		}()
+	} else if cfg.Metrics.IsEnabled() {
+		appLogger.Warn("metrics 已啟用但 server.port=0，/metrics 端點不會被掛載；設定 server.port 或 metrics.enabled: false 以消除此警告",
+			"component", "config", "phase", "處理中")
 	}
 
 	api := slack.New(cfg.Slack.BotToken, slack.OptionAppLevelToken(cfg.Slack.AppToken))
@@ -591,6 +602,24 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	return &Handle{done: done}, nil
 }
 
+// mountHTTPHandlers registers the app's HTTP endpoints on mux. /healthz and
+// the /jobs admin endpoints are always present; /metrics is mounted only when
+// metricsHandler is non-nil (nil = metrics.enabled: false). Extracted from Run
+// so the wiring — especially the metrics on/off branch — is testable without
+// standing up the whole app; behaviour is unchanged from the previous inline
+// http.DefaultServeMux registration, except it now uses an explicit mux.
+func mountHTTPHandlers(mux *http.ServeMux, jobStore queue.JobStore, coordinator queue.JobQueue, commands queue.CommandBus, metricsHandler http.Handler) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/jobs", queue.StatusHandler(jobStore, coordinator))
+	mux.HandleFunc("/jobs/", queue.KillHandler(jobStore, commands))
+	if metricsHandler != nil {
+		mux.Handle("/metrics", metricsHandler)
+	}
+}
+
 // handleSocketEvent dispatches a single socketmode event. Extracted to keep
 // Run shorter; behaviour is unchanged from the previous inline switch.
 func handleSocketEvent(
@@ -606,6 +635,11 @@ func handleSocketEvent(
 	botUserID string,
 	appLogger *slog.Logger,
 ) {
+	// Raw inbound traffic mix — counted before any dedup / rate-limit / ack,
+	// so it reflects what Slack actually delivered. Unknown-classed events
+	// (connection lifecycle, new event types) land in {type="unknown"}.
+	metrics.SlackEventsTotal.WithLabelValues(slackclient.EventTypeLabel(evt)).Inc()
+
 	switch evt.Type {
 	case socketmode.EventTypeEventsAPI:
 		sm.Ack(*evt.Request)

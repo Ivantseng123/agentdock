@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -241,6 +242,21 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 		metrics.AgentExecutionsTotal.WithLabelValues("unknown", workflowLabel(job), "error").Inc()
 	} else if result.Status == "cancelled" {
 		metrics.AgentExecutionsTotal.WithLabelValues("unknown", workflowLabel(job), "cancelled").Inc()
+	}
+
+	// Agent process exit code — emitted whenever the worker captured a real
+	// code (>= 0). The -1 sentinel means "no captured code": pre-runner failure,
+	// cancel before exec, or a signal kill — Go's (*exec.ExitError).ExitCode()
+	// returns -1 (not 128+signal) when a process is terminated by a signal, so
+	// OOM/timeout kills land here as -1 and are skipped. Watch those via
+	// agent_executions_total{status="timeout"|"error"}. Independent of the
+	// AgentStatus block above.
+	if result.ExitCode >= 0 {
+		provider := "unknown"
+		if as := state.AgentStatus; as != nil && as.AgentCmd != "" {
+			provider = as.AgentCmd
+		}
+		metrics.AgentExitCodeTotal.WithLabelValues(provider, strconv.Itoa(result.ExitCode)).Inc()
 	}
 }
 

@@ -162,6 +162,53 @@ github:
 	}
 }
 
+func TestMetricsConfig_IsEnabled(t *testing.T) {
+	tr := true
+	fa := false
+	cases := []struct {
+		name string
+		cfg  MetricsConfig
+		want bool
+	}{
+		{"nil_defaults_enabled", MetricsConfig{Enabled: nil}, true},
+		{"explicit_true", MetricsConfig{Enabled: &tr}, true},
+		{"explicit_false", MetricsConfig{Enabled: &fa}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.cfg.IsEnabled(); got != c.want {
+				t.Errorf("IsEnabled() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestMetricsConfig_LoadFromYAML(t *testing.T) {
+	// Omitted block → nil → IsEnabled() true (default).
+	if cfg := loadFromString(t, ``); !cfg.Metrics.IsEnabled() {
+		t.Error("omitted metrics block: IsEnabled() = false, want true")
+	}
+	// Explicit false → IsEnabled() false.
+	cfg := loadFromString(t, `
+metrics:
+  enabled: false
+`)
+	if cfg.Metrics.Enabled == nil {
+		t.Fatal("metrics.enabled: false parsed to nil pointer")
+	}
+	if cfg.Metrics.IsEnabled() {
+		t.Error("metrics.enabled: false → IsEnabled() = true, want false")
+	}
+	// Explicit true → IsEnabled() true.
+	cfg = loadFromString(t, `
+metrics:
+  enabled: true
+`)
+	if cfg.Metrics.Enabled == nil || !cfg.Metrics.IsEnabled() {
+		t.Errorf("metrics.enabled: true → Enabled=%v, IsEnabled()=%v", cfg.Metrics.Enabled, cfg.Metrics.IsEnabled())
+	}
+}
+
 func TestDefaultsMap_ShapeMatchesYAMLTags(t *testing.T) {
 	m := DefaultsMap()
 	if _, ok := m["queue"]; !ok {

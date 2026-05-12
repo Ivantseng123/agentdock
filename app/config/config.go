@@ -29,6 +29,7 @@ type Config struct {
 
 	Workflows      WorkflowsConfig      `yaml:"workflows"`
 	PromptDefaults PromptDefaultsConfig `yaml:"prompt_defaults"`
+	Metrics        MetricsConfig        `yaml:"metrics"`
 
 	// Legacy aliases. ApplyDefaults migrates these into Workflows /
 	// PromptDefaults and then zeroes them so downstream marshalling only
@@ -238,6 +239,30 @@ type LoggingConfig struct {
 // from `OTEL_RESOURCE_ATTRIBUTES` instead of YAML — see the spec for why.
 type TracingConfig struct {
 	OTLPEndpoint string `yaml:"otlp_endpoint"`
+}
+
+// MetricsConfig gates Prometheus metrics. `Enabled` is a pointer so an unset
+// config (the common case) is distinguishable from an explicit `false`:
+//
+//   - nil → enabled (preserves pre-v3 behaviour, where /metrics was always
+//     mounted whenever server.port > 0)
+//   - *true → enabled
+//   - *false → Register() is skipped and /metrics is not mounted, so the
+//     default Prometheus registry stays clean
+//
+// `metrics.listen_addr` (a separate scrape port) is deliberately not here —
+// see docs/adr/0005-metrics-prometheus.md Decision #4. If server.port is 0
+// while metrics are enabled, app.go logs a warning at HTTP setup time; the
+// metrics are still collected in-process, they just have no scrape endpoint.
+type MetricsConfig struct {
+	Enabled *bool `yaml:"enabled"`
+}
+
+// IsEnabled reports whether Prometheus metrics should be registered and
+// exposed. A nil Enabled (config omitted the key) means enabled — see the
+// MetricsConfig doc for the rationale.
+func (m MetricsConfig) IsEnabled() bool {
+	return m.Enabled == nil || *m.Enabled
 }
 
 type AttachmentsConfig struct {
