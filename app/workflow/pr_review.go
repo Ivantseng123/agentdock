@@ -368,14 +368,16 @@ func (w *PRReviewWorkflow) HandleResult(ctx context.Context, state *queue.JobSta
 	switch parsed.Status {
 	case "POSTED":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "posted").Inc()
-		return w.post(job, fmt.Sprintf(
+		text := fmt.Sprintf(
 			":white_check_mark: Review 完成 (severity: %s · %d comments, %d skipped) on %s\n> %s",
 			fallback(severity, "unknown"), parsed.CommentsPosted, parsed.CommentsSkipped, prURL,
 			firstN(summary, 200),
-		))
+		)
+		return w.post(job, withDiagnostics(text, formatDiagnostics(state, r)))
 	case "SKIPPED":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "skipped").Inc()
-		return w.post(job, fmt.Sprintf(":information_source: Review 跳過 (%s): %s", reason, firstN(summary, 200)))
+		text := fmt.Sprintf(":information_source: Review 跳過 (%s): %s", reason, firstN(summary, 200))
+		return w.post(job, withDiagnostics(text, formatDiagnostics(state, r)))
 	case "ERROR":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "error").Inc()
 		return w.post(job, fmt.Sprintf(":x: Review 失敗：%s", parsedErr))

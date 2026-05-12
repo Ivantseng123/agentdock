@@ -88,6 +88,74 @@ After timeout, bot notifies the Slack user and clears dedup so users can re-trig
 | `/healthz` | GET | Health check |
 | `/jobs` | GET | List all job states (with agent tracking) |
 | `/jobs/{id}` | DELETE | Terminate a specific job |
+| `/metrics` | GET | Prometheus metrics (not mounted when `metrics.enabled: false` — returns 404) |
+
+All served on `server.port`; with `server.port: 0` the whole HTTP server is off.
+
+## Metrics (Prometheus)
+
+The app exposes `agentdock_*` metrics at `/metrics` (pull model; configuration in [configuration-app.md](configuration-app.md), rationale in [adr/0005-metrics-prometheus.md](adr/0005-metrics-prometheus.md)). The PromQL below is written against the **existing** metrics.
+
+### The four oncall questions
+
+```promql
+# 1. Triage success rate over the last hour
+sum(rate(agentdock_agent_executions_total{status="success"}[1h]))
+  / sum(rate(agentdock_agent_executions_total[1h]))
+
+# 2. P95 agent execution time (per provider)
+histogram_quantile(0.95,
+  sum by (le, provider) (rate(agentdock_agent_execution_seconds_bucket[5m])))
+
+# 3. P95 queue wait
+histogram_quantile(0.95, rate(agentdock_queue_wait_seconds_bucket[5m]))
+
+# 4. Worst-failing agents (top 3)
+topk(3, sum by (provider) (rate(agentdock_agent_executions_total{status!="success"}[1h])))
+```
+
+### Stitching phase latency
+
+v3 does not ship a unified `job_duration_seconds{phase}` (it would re-observe the intervals below — see ADR-0005). Each phase has its own histogram; add them up for the end-to-end view:
+
+```promql
+# queue wait (P95)
+histogram_quantile(0.95, rate(agentdock_queue_wait_seconds_bucket[5m]))
+
+# agent env prep: clone / checkout / skill mount (P95)
+histogram_quantile(0.95, rate(agentdock_agent_prepare_seconds_bucket[5m]))
+
+# agent execution (P95, per provider)
+histogram_quantile(0.95,
+  sum by (le, provider) (rate(agentdock_agent_execution_seconds_bucket[5m])))
+
+# sum of per-phase means ≈ end-to-end mean (result-post / external-API leg is covered by external_duration_seconds)
+  (rate(agentdock_queue_wait_seconds_sum[5m])      / rate(agentdock_queue_wait_seconds_count[5m]))
++ (rate(agentdock_agent_prepare_seconds_sum[5m])   / rate(agentdock_agent_prepare_seconds_count[5m]))
++ (sum(rate(agentdock_agent_execution_seconds_sum[5m])) / sum(rate(agentdock_agent_execution_seconds_count[5m])))
+
+# result-post / external API (Slack / GitHub) leg
+histogram_quantile(0.95,
+  sum by (le, service, operation) (rate(agentdock_external_duration_seconds_bucket[5m])))
+```
+
+### Anomaly thresholds
+
+```promql
+# Distinct exit-code values > 16 → treat as worker anomaly, investigate worker/agent/runner.go
+# (agent_exit_code_total only records the code the agent chose for itself: 0/1/2/…; signal-killed
+# runs report -1 and are excluded — for OOM / idle / deadline timeouts see agent_executions_total{status="timeout"|"error"})
+count(count by (exit_code) (agentdock_agent_exit_code_total)) > 16
+
+# Non-zero exit-code ratio (rolling 1h; denominator excludes signal kills — those go to agent_executions_total{status})
+sum(rate(agentdock_agent_exit_code_total{exit_code!="0"}[1h]))
+  / sum(rate(agentdock_agent_exit_code_total[1h]))
+
+# slack_events_total{type="unknown"} share > 5% → a new Slack event type is unclassified;
+# add a case to EventTypeLabel in app/slack/event_label.go
+sum(rate(agentdock_slack_events_total{type="unknown"}[1h]))
+  / sum(rate(agentdock_slack_events_total[1h])) > 0.05
+```
 
 ## Agent Behavior
 

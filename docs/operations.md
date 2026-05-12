@@ -123,6 +123,74 @@ REDIS_ADDR=<host>:<port> GITHUB_TOKEN=<token> PROVIDERS=claude ./bot worker
 | `/healthz` | GET | Health check |
 | `/jobs` | GET | 列出所有 job 狀態（含 agent 追蹤） |
 | `/jobs/{id}` | DELETE | 終止指定 job |
+| `/metrics` | GET | Prometheus 指標（`metrics.enabled: false` 時不掛載，回 404） |
+
+全部掛在 `server.port`；`server.port: 0` 時整個 HTTP 不開。
+
+## Metrics（Prometheus）
+
+App 在 `/metrics` 以 pull model 暴露 `agentdock_*` 指標（設定見 [configuration-app.md](configuration-app.md) 的 Metrics 段；設計脈絡見 [adr/0005-metrics-prometheus.md](adr/0005-metrics-prometheus.md)）。下面的 PromQL 都以**現有**指標寫成。
+
+### Oncall 四問
+
+```promql
+# 1. 本小時 triage 成功率
+sum(rate(agentdock_agent_executions_total{status="success"}[1h]))
+  / sum(rate(agentdock_agent_executions_total[1h]))
+
+# 2. P95 agent 執行時間（per provider）
+histogram_quantile(0.95,
+  sum by (le, provider) (rate(agentdock_agent_execution_seconds_bucket[5m])))
+
+# 3. P95 queue 等待時間
+histogram_quantile(0.95, rate(agentdock_queue_wait_seconds_bucket[5m]))
+
+# 4. 失敗率最高的 agent（top 3）
+topk(3, sum by (provider) (rate(agentdock_agent_executions_total{status!="success"}[1h])))
+```
+
+### Phase latency 拼法
+
+v3 不提供統一的 `job_duration_seconds{phase}`（會與下列三段重複觀測，見 ADR-0005）。三段各自有獨立 histogram，要看整段就把它們相加：
+
+```promql
+# queue 等待（P95）
+histogram_quantile(0.95, rate(agentdock_queue_wait_seconds_bucket[5m]))
+
+# agent 環境準備：clone / checkout / skill mount（P95）
+histogram_quantile(0.95, rate(agentdock_agent_prepare_seconds_bucket[5m]))
+
+# agent 執行（P95，per provider）
+histogram_quantile(0.95,
+  sum by (le, provider) (rate(agentdock_agent_execution_seconds_bucket[5m])))
+
+# 三段平均之和 ≈ 端到端平均（result-post / 外部 API 那段另由 external_duration_seconds 涵蓋）
+  (rate(agentdock_queue_wait_seconds_sum[5m])      / rate(agentdock_queue_wait_seconds_count[5m]))
++ (rate(agentdock_agent_prepare_seconds_sum[5m])   / rate(agentdock_agent_prepare_seconds_count[5m]))
++ (sum(rate(agentdock_agent_execution_seconds_sum[5m])) / sum(rate(agentdock_agent_execution_seconds_count[5m])))
+
+# result-post / 外部 API（Slack / GitHub）那段
+histogram_quantile(0.95,
+  sum by (le, service, operation) (rate(agentdock_external_duration_seconds_bucket[5m])))
+```
+
+### 異常閾值
+
+```promql
+# Exit code 種類數 > 16 → 視為 worker 異常，調查 worker/agent/runner.go
+#（agent_exit_code_total 只記 agent 自己選的退出碼：0/1/2…；被 signal 強殺的 run
+# 回報 -1、不會進入此指標——OOM / idle / deadline timeout 改看 agent_executions_total{status="timeout"|"error"}）
+count(count by (exit_code) (agentdock_agent_exit_code_total)) > 16
+
+# 非 0 exit code 占比（rolling 1h；分母不含 signal 強殺，那些走 agent_executions_total{status}）
+sum(rate(agentdock_agent_exit_code_total{exit_code!="0"}[1h]))
+  / sum(rate(agentdock_agent_exit_code_total[1h]))
+
+# slack_events_total{type="unknown"} 占比 > 5% → 有新的 Slack event 類型未分類，
+# 該在 app/slack/event_label.go 的 EventTypeLabel 加 case
+sum(rate(agentdock_slack_events_total{type="unknown"}[1h]))
+  / sum(rate(agentdock_slack_events_total[1h])) > 0.05
+```
 
 ## Agent 行為
 

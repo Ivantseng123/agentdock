@@ -27,7 +27,7 @@ func TestClassifyResult_UserCancel(t *testing.T) {
 	cancel()
 
 	job := &queue.Job{ID: "j1"}
-	result := classifyResult(job, time.Now(), fmt.Errorf("killed"), "/tmp/repo", ctx, store)
+	result := classifyResult(job, time.Now(), fmt.Errorf("killed"), "/tmp/repo", ctx, store, -1)
 
 	if result.Status != "cancelled" {
 		t.Errorf("status = %q, want cancelled", result.Status)
@@ -50,7 +50,7 @@ func TestClassifyResult_WatchdogKillFallsThroughToFailed(t *testing.T) {
 	cancel()
 
 	result := classifyResult(&queue.Job{ID: "j1"}, time.Now(),
-		fmt.Errorf("killed"), "/tmp/repo", ctx, store)
+		fmt.Errorf("killed"), "/tmp/repo", ctx, store, -1)
 
 	if result.Status != "failed" {
 		t.Errorf("status = %q, want failed", result.Status)
@@ -70,7 +70,7 @@ func TestClassifyResult_RunningStoreIsFailed(t *testing.T) {
 	cancel()
 
 	result := classifyResult(&queue.Job{ID: "j1"}, time.Now(),
-		errors.New("exit 143"), "/tmp/repo", ctx, store)
+		errors.New("exit 143"), "/tmp/repo", ctx, store, -1)
 
 	if result.Status != "failed" {
 		t.Errorf("status = %q, want failed (store not yet JobCancelled)", result.Status)
@@ -87,7 +87,7 @@ func TestClassifyResult_DeadlineExceededIsFailed(t *testing.T) {
 	defer cancel()
 
 	result := classifyResult(&queue.Job{ID: "j1"}, time.Now(),
-		fmt.Errorf("timeout"), "/tmp/repo", ctx, store)
+		fmt.Errorf("timeout"), "/tmp/repo", ctx, store, -1)
 
 	if result.Status != "failed" {
 		t.Errorf("DeadlineExceeded must yield failed, got %q", result.Status)
@@ -100,7 +100,7 @@ func TestClassifyResult_NoErrorRoutesToFailed(t *testing.T) {
 	store.Put(ctx, &queue.Job{ID: "j1"})
 
 	result := classifyResult(&queue.Job{ID: "j1"}, time.Now(),
-		errors.New("parse failed"), "/tmp/repo", ctx, store)
+		errors.New("parse failed"), "/tmp/repo", ctx, store, -1)
 
 	if result.Status != "failed" {
 		t.Errorf("status = %q, want failed", result.Status)
@@ -110,6 +110,49 @@ func TestClassifyResult_NoErrorRoutesToFailed(t *testing.T) {
 // Scenario 6 — Admin kill path: store=JobFailed + ctx cancel yields "failed", not "cancelled".
 // Covered by TestClassifyResult_WatchdogKillFallsThroughToFailed above, which also
 // asserts result.Error is non-empty.
+
+// JobResult.ExitCode setter behavior across the three plumbed paths:
+// (1) pre-runner sentinel  — classifyResult passes -1 straight through
+// (2) post-runner non-zero — classifyResult forwards a captured exit code
+//     (e.g. 137 OOM, 124 timeout) into the failed-result branch
+// (3) cancelled with code  — cancelledResult forwards even when status=cancelled
+// Phase 5 wires the actual metric observation; this test only verifies plumbing.
+func TestExitCodeSetterPaths(t *testing.T) {
+	ctx := context.Background()
+	store := queue.NewMemJobStore()
+	store.Put(ctx, &queue.Job{ID: "j1"})
+
+	t.Run("pre_runner_sentinel_minus_one", func(t *testing.T) {
+		result := classifyResult(&queue.Job{ID: "j1"}, time.Now(),
+			fmt.Errorf("attachments failed"), "", ctx, store, -1)
+		if result.ExitCode != -1 {
+			t.Errorf("ExitCode = %d, want -1 (pre-runner sentinel)", result.ExitCode)
+		}
+	})
+
+	t.Run("post_runner_oom_137", func(t *testing.T) {
+		result := failedResult(&queue.Job{ID: "j1"}, time.Now(),
+			fmt.Errorf("agent killed"), "/tmp/repo", 137)
+		if result.ExitCode != 137 {
+			t.Errorf("ExitCode = %d, want 137 (OOM kill)", result.ExitCode)
+		}
+		if result.Status != "failed" {
+			t.Errorf("status = %q, want failed", result.Status)
+		}
+	})
+
+	t.Run("cancelled_with_exit_code", func(t *testing.T) {
+		// Cancel can race with a clean exit; the helper still records the
+		// captured code rather than overwriting with the sentinel.
+		result := cancelledResult(&queue.Job{ID: "j1"}, time.Now(), "/tmp/repo", 0)
+		if result.ExitCode != 0 {
+			t.Errorf("ExitCode = %d, want 0", result.ExitCode)
+		}
+		if result.Status != "cancelled" {
+			t.Errorf("status = %q, want cancelled", result.Status)
+		}
+	})
+}
 
 // Note: REJECTED/ERROR classification tests moved to internal/bot/result_listener_test.go
 // once parsing became an app-side concern (refactor/parse-out-of-worker).

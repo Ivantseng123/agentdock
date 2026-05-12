@@ -768,7 +768,7 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 	}
 
 	metrics.WorkflowCompletionsTotal.WithLabelValues("ask", status).Inc()
-	return w.post(job, answer)
+	return w.postWithDiag(job, answer, formatDiagnostics(state, r))
 }
 
 // post writes the answer into the thread. Short answers replace the
@@ -809,4 +809,41 @@ func (w *AskWorkflow) post(job *queue.Job, text string) error {
 		_ = w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, ":memo: 答案如下：")
 	}
 	return w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
+}
+
+// postWithDiag is the success-path counterpart of post. It mirrors post's
+// length-branched dispatch but threads diag into the Slack-visible message:
+// inline path appends diag to body; file-upload path appends diag to the
+// "已附為檔案：" preview so the uploaded file body stays plain. Failure callers
+// continue to use post directly — they have no diag to render.
+func (w *AskWorkflow) postWithDiag(job *queue.Job, body, diag string) error {
+	if len(body) <= askInlineThreshold {
+		text := withDiagnostics(body, diag)
+		if job.StatusMsgTS != "" {
+			return w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+		}
+		return w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
+	}
+
+	preview := withDiagnostics(
+		fmt.Sprintf(":memo: 答案較長（約 %d 字），已附為檔案：", len(body)),
+		diag,
+	)
+	var uploadErr error
+	if job.StatusMsgTS != "" {
+		_ = w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, preview)
+		uploadErr = w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", body, "")
+	} else {
+		uploadErr = w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", body, preview)
+	}
+	if uploadErr == nil {
+		return nil
+	}
+
+	w.logger.Warn("Slack 檔案上傳失敗，改用內嵌訊息",
+		"phase", "失敗", "error", uploadErr, "length", len(body))
+	if job.StatusMsgTS != "" {
+		_ = w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, ":memo: 答案如下：")
+	}
+	return w.slack.PostMessage(job.ChannelID, withDiagnostics(body, diag), job.ThreadTS)
 }

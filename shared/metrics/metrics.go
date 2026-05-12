@@ -69,6 +69,24 @@ var AgentExecutionsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Agent execution outcomes.",
 }, []string{"provider", "workflow", "status"})
 
+// AgentExitCodeTotal records the distribution of agent process exit codes.
+// The app-side result listener observes this for any termination that carried
+// a captured code; the worker's -1 sentinel ("no captured code") is skipped at
+// the call site, so this metric only ever sees codes the process chose for
+// itself — 0 success, 1 generic failure, 2 usage error, etc. Signal-terminated
+// runs do NOT appear here: Go's (*exec.ExitError).ExitCode() returns -1 (not
+// 128+signal) for SIGKILL/SIGTERM, so OOM kills and inactivity/deadline
+// timeouts surface as -1 — watch those via agent_executions_total{status=
+// "timeout"|"error"} instead. Distinct from agent_executions_total{status},
+// which buckets into a few coarse outcomes; this one keeps the raw self-chosen
+// code. See docs/operations.md for the alert threshold on distinct exit_code
+// cardinality.
+var AgentExitCodeTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: namespace,
+	Name:      "agent_exit_code_total",
+	Help:      "Agent process exit code distribution.",
+}, []string{"provider", "exit_code"})
+
 var AgentPrepare = prometheus.NewHistogram(prometheus.HistogramOpts{
 	Namespace: namespace,
 	Name:      "agent_prepare_seconds",
@@ -142,6 +160,19 @@ var HandlerRateLimitTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Requests rejected by rate limiting.",
 }, []string{"type"})
 
+// ---- Slack ----
+
+// SlackEventsTotal counts inbound Slack socketmode events by business event
+// type (app_mention, slash_command, block_action, ...). Unlike request_total
+// — which only sees triages that survive dedup and rate-limiting — this is
+// the raw inbound traffic mix, useful for spotting a flood of one event type
+// or an "unknown" share that signals a new event class needing a label.
+var SlackEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: namespace,
+	Name:      "slack_events_total",
+	Help:      "Slack socketmode events received, by business event type.",
+}, []string{"type"})
+
 // ---- Watchdog ----
 
 var WatchdogKillsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -189,6 +220,40 @@ var ExternalErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 // ---- Worker (GaugeFunc, registered in Register) ----
 // WorkerActive and WorkerIdle are computed on each Prometheus scrape.
 
+// staticCollectors holds every counter and histogram registered
+// unconditionally by Register(). A new metric MUST be appended here — the
+// cardinality audit (TestLabelCardinality) walks this same slice, so a
+// metric that skips it is silently absent from both scrape output and the
+// label-cardinality check. GaugeFunc metrics are NOT here: they need the
+// queue/store handles and are registered conditionally inside Register().
+var staticCollectors = []prometheus.Collector{
+	RequestTotal,
+	RequestDuration,
+	QueueSubmittedTotal,
+	QueueWait,
+	QueueJobDuration,
+	AgentExecution,
+	AgentExecutionsTotal,
+	AgentExitCodeTotal,
+	AgentPrepare,
+	AgentToolCalls,
+	AgentFilesRead,
+	AgentCostUSD,
+	AgentTokensTotal,
+	WorkflowCompletionsTotal,
+	WorkflowRetryTotal,
+	RefWriteViolationsTotal,
+	HandlerDedupRejectionsTotal,
+	HandlerRateLimitTotal,
+	SlackEventsTotal,
+	WatchdogKillsTotal,
+	ExternalDuration,
+	ExternalErrorsTotal,
+	WorkerAvailabilityVerdictTotal,
+	WorkerAvailabilityCheckDuration,
+	WorkerAvailabilityCheckErrors,
+}
+
 // Register registers all metrics with the given registerer. The q and store
 // parameters power the three GaugeFunc metrics (queue_depth, worker_active,
 // worker_idle) that are computed on scrape rather than incremented/decremented.
@@ -196,32 +261,7 @@ var ExternalErrorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 // Pass nil for q and store if the GaugeFunc metrics are not needed (e.g. in
 // unit tests that only care about counters/histograms).
 func Register(reg prometheus.Registerer, q queue.JobQueue, store queue.JobStore) {
-	// Static collectors.
-	reg.MustRegister(
-		RequestTotal,
-		RequestDuration,
-		QueueSubmittedTotal,
-		QueueWait,
-		QueueJobDuration,
-		AgentExecution,
-		AgentExecutionsTotal,
-		AgentPrepare,
-		AgentToolCalls,
-		AgentFilesRead,
-		AgentCostUSD,
-		AgentTokensTotal,
-		WorkflowCompletionsTotal,
-		WorkflowRetryTotal,
-		RefWriteViolationsTotal,
-		HandlerDedupRejectionsTotal,
-		HandlerRateLimitTotal,
-		WatchdogKillsTotal,
-		ExternalDuration,
-		ExternalErrorsTotal,
-		WorkerAvailabilityVerdictTotal,
-		WorkerAvailabilityCheckDuration,
-		WorkerAvailabilityCheckErrors,
-	)
+	reg.MustRegister(staticCollectors...)
 
 	// GaugeFunc metrics — computed on each scrape.
 	if q != nil {

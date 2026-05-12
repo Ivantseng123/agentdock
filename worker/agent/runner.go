@@ -31,7 +31,13 @@ var tracer = otel.Tracer("agentdock/worker/agent")
 type RunOptions struct {
 	OnStarted func(pid int, command string)
 	OnEvent   func(event queue.StreamEvent)
-	Secrets   map[string]string
+	// OnExit, when non-nil, is invoked from runOne's deferred closure with
+	// the captured agent process exit code. Sentinel -1 means the process
+	// was never started or never waited (e.g. cmd.Start failed, blocked
+	// args, output-file path). Caller is expected to plumb this into
+	// JobResult.ExitCode for app-side observation.
+	OnExit  func(int)
+	Secrets map[string]string
 }
 
 type Runner struct {
@@ -109,6 +115,9 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 			span.SetStatus(codes.Error, "agent run failed")
 		} else if exitCode > 0 {
 			span.SetStatus(codes.Error, fmt.Sprintf("agent exited %d", exitCode))
+		}
+		if opts.OnExit != nil {
+			opts.OnExit(exitCode)
 		}
 		span.End()
 	}()

@@ -130,7 +130,7 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 					span.RecordError(err)
 					span.SetStatus(codes.Error, "state lookup failed")
 					p.cfg.Results.Publish(jobCtx, &queue.JobResult{
-						JobID: job.ID, Status: "failed", Error: "state lookup failed",
+						JobID: job.ID, Status: "failed", Error: "state lookup failed", ExitCode: -1,
 					})
 					return
 				}
@@ -138,14 +138,14 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				case queue.JobCancelled:
 					span.SetAttributes(attribute.Bool("cancelled", true))
 					p.cfg.Results.Publish(jobCtx, &queue.JobResult{
-						JobID: job.ID, Status: "cancelled",
+						JobID: job.ID, Status: "cancelled", ExitCode: -1,
 					})
 					return
 				case queue.JobFailed:
 					// Admin-failed before execution — not an OTel error
 					// (the failure was authored upstream); status stays Unset.
 					p.cfg.Results.Publish(jobCtx, &queue.JobResult{
-						JobID: job.ID, Status: "failed", Error: "terminated before execution",
+						JobID: job.ID, Status: "failed", Error: "terminated before execution", ExitCode: -1,
 					})
 					return
 				}
@@ -211,7 +211,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	if err := p.cfg.Queue.Ack(jobCtx, job.ID); err != nil {
 		logger.Error("ack failed", "error", err)
 		p.cfg.Results.Publish(ctx, &queue.JobResult{
-			JobID: job.ID, Status: "failed", Error: fmt.Sprintf("ack failed: %v", err),
+			JobID: job.ID, Status: "failed", Error: fmt.Sprintf("ack failed: %v", err), ExitCode: -1,
 		})
 		if stopReporter != nil {
 			close(stopReporter)
