@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.9.0](https://github.com/Ivantseng123/agentdock/compare/v3.8.0...v3.9.0) (2026-05-12)
+
+
+### Features
+
+* observability v3 — metrics gap closure ([#47](https://github.com/Ivantseng123/agentdock/issues/47)) ([#247](https://github.com/Ivantseng123/agentdock/issues/247)) ([bdc2bd7](https://github.com/Ivantseng123/agentdock/commit/bdc2bd7c2d376028be3a2d17093e0cf0dd4f0faa))
+* **worker/pool:** add applyTotalsTo method on statusAccumulator ([7b72e51](https://github.com/Ivantseng123/agentdock/commit/7b72e5177db785faf79e4b2c48ef7d89b664e5d6))
+
+
+### Bug Fixes
+
+* **app/workflow/ask:** append worker diagnostics line to success post ([ad84039](https://github.com/Ivantseng123/agentdock/commit/ad84039915093592627f14bb3d939e39c8e18f4a))
+* **app/workflow/pr_review:** append worker diagnostics line to POSTED and SKIPPED posts ([06fc05e](https://github.com/Ivantseng123/agentdock/commit/06fc05ecf00d700cce748423ad2d3fa1a283d329))
+* **app/workflow:** show worker diagnostics on ask and pr_review success posts ([4a4612a](https://github.com/Ivantseng123/agentdock/commit/4a4612aa7edd4a16e12204114386e60f3e268891))
+* **worker/pool:** propagate cost and tokens into JobResult ([e8e0f88](https://github.com/Ivantseng123/agentdock/commit/e8e0f8817161c80811e3b229ca8775ac861d70fd))
+* **worker/pool:** propagate cost and tokens into JobResult ([14658c6](https://github.com/Ivantseng123/agentdock/commit/14658c60e06b1eac999a3f92620faf513a61d21b))
+
 ## [3.8.0](https://github.com/Ivantseng123/agentdock/compare/v3.7.0...v3.8.0) (2026-05-08)
 
 
