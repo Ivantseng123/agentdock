@@ -17,7 +17,7 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/code
 # "RipgrepExtractionFailedError" that plagued skill loading on 1.4.3 (that
 # version downloaded a platform ripgrep binary at startup and failed to
 # extract it inside the alpine runtime — see opencode PRs #21703 and #22436).
-ARG OPENCODE_VERSION=1.14.29
+ARG OPENCODE_VERSION=1.14.41
 RUN curl -sL https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x64-musl.tar.gz | \
     tar xzf - -C /usr/local/bin opencode
 
