@@ -31,8 +31,9 @@ type RunOptions struct {
 }
 
 type Runner struct {
-	agents      []config.AgentConfig
-	githubToken string
+	agents       []config.AgentConfig
+	githubToken  string
+	opencodeCfg  config.OpencodeConfig
 }
 
 func NewRunner(agents []config.AgentConfig) *Runner {
@@ -50,6 +51,7 @@ func NewRunnerFromConfig(cfg *config.Config) *Runner {
 	}
 	runner := NewRunner(chain)
 	runner.githubToken = cfg.GitHub.Token
+	runner.opencodeCfg = cfg.Opencode
 	return runner
 }
 
@@ -74,14 +76,38 @@ func (r *Runner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt s
 	return "", fmt.Errorf("all agents failed: %s", strings.Join(errs, "; "))
 }
 
-// runOne dispatches an agent invocation to the right per-mode runner.
-// Today every agent goes through runOneSpawn (the legacy per-job CLI
-// process path). Task 3.2-3 will turn this into a mode-aware dispatcher:
-// when the agent is opencode AND `cfg.Opencode.Mode == "server"`, it
-// routes to runOneServer (long-running `opencode serve` over HTTP/SSE);
-// otherwise it falls through to runOneSpawn. Until then this is a thin
-// indirection — behaviorally identical to the pre-3.2-2 inline path.
+// dispatchTarget returns the name of the per-mode runner this agent call
+// should route to. Pure decision function — no side effects, no exec —
+// so the dispatch matrix can be unit-tested without depending on a real
+// opencode/claude/codex/gemini binary on PATH.
+//
+// Routing rule: opencode + Mode=server → "server". Every other
+// combination → "spawn". This includes any non-opencode agent regardless
+// of mode, opencode with Mode unset (zero value), and opencode with
+// Mode=="spawn".
+//
+// The Command == "opencode" check matches the built-in agent definition
+// at worker/config/builtin_agents.go. Operator overrides that rename
+// `command:` to a wrapper script will skip the server-mode dispatch and
+// fall through to spawn — acceptable for Stage 1 per the manifest's
+// §1.3 trade-off; revisit if an operator actually hits this.
+func (r *Runner) dispatchTarget(agent config.AgentConfig) string {
+	if agent.Command == "opencode" && r.opencodeCfg.Mode == config.OpencodeModeServer {
+		return "server"
+	}
+	return "spawn"
+}
+
+// runOne dispatches an agent invocation based on dispatchTarget. Stage 1
+// ships runOneServer as a stub that errors out, so even when the
+// dispatcher picks "server" the worker stays alive via Run's
+// agent-chain failure path (the stub error surfaces, next provider in
+// the chain takes over). Stage 2's lazy supervisor lands without
+// further plumbing changes here.
 func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (output string, err error) {
+	if r.dispatchTarget(agent) == "server" {
+		return r.runOneServer(ctx, logger, agent, workDir, prompt, opts)
+	}
 	return r.runOneSpawn(ctx, logger, agent, workDir, prompt, opts)
 }
 
