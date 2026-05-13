@@ -32,7 +32,7 @@ Server mode 採 **lower-bound 版本門檻**：`MinimumOpencodeVersion` 是 work
 
 Floor 只會在 POC `-all -replay-count=100` 在更新 build 上重跑、P1–P10 在 classification rules 下全綠時才升級；舊版本在 floor 升級的時點起停止 `server` mode 支援。
 
-**Scope of the check (and what it does not catch).** 這個檢查只是一條單向 lower-bound `version >= MinimumOpencodeVersion`。它抓得到「user 裝的 opencode 太舊、缺我們依賴的 server-mode 行為」這條；它**不**抓「user 裝的是比 floor 新但 upstream 引入 regression」的情況 — 見 POC report P3，opencode 1.14.48 比 floor 新但 server-mode SSE 已壞。對 newer-but-broken 的防線是 per-job 失敗偵測（Bug A detector + `server_mode_regression` 分類 + 不做 auto-fallback，spec C4），worker 大聲 fail job，operator 介入調查 — 不是靠 version check 攔下來。
+**Scope of the check (and what it does not catch).** 這個檢查只是一條單向 lower-bound `version >= MinimumOpencodeVersion`。它抓得到「user 裝的 opencode 太舊、缺我們依賴的 server-mode 行為」這條；它**不**抓「user 裝的是比 floor 新但 upstream 引入 regression」的情況 — 見 POC report § Historical bisect (1.14.41 → 1.14.48 SSE-close regression evidence)，floor 以上的新版可能 server-mode 已壞。對 newer-but-broken 的防線是 per-job 失敗偵測（Bug A detector + `server_mode_regression` 分類 + 不做 auto-fallback，spec C4），worker 大聲 fail job，operator 介入調查 — 不是靠 version check 攔下來。
 
 **Why lower-bound floor instead of exact-match or compat matrix.** Exact-match (`version == MinimumOpencodeVersion`) 在 operator 升 opencode 後立刻拒絕啟動，每個 patch 都要動 worker code，operational pain 大於價值。Compat matrix (「support any version ≥ N + 對每版做相容測試」) 要嘛要 per-version branch、要嘛 silent best-effort，failure surface 變糊。Floor 是中間路：低於 floor 一律 fail-fast，floor 以上交給 per-job 失敗偵測接住；team 只 own floor 自身那個版本，更高版本的 upstream 行為由 operator 自負風險（明示 trade-off）。
 
@@ -44,13 +44,17 @@ POC（在 feature branch 跑）：
 
 ```bash
 git checkout poc/opencode-server-mode
-go run ./cmd/dev/poc-opencode-server \
+go run ./cmd/dev/poc-opencode-server -all \
     -fixture ./testdata/harbor-4images \
     -opencode $(which opencode) \
-    -concurrency 8 \
-    -repeats 100 \
-    -isolated-xdg-data /tmp/poc-opencode-xdg-data
+    -opencode-head $(which opencode) \
+    -replay-count 100 \
+    -run-timeout 120s \
+    -isolated-xdg-data /tmp/poc-opencode-xdg-data \
+    -report-path REPORT.md
 ```
+
+跨版本比對 P3/P8 時把 `-opencode-head` 指向待驗證版本的 binary（例如某個 release tag 的 darwin/linux build）；同版本回歸時 `-opencode-head` 跟 `-opencode` 相同。
 
 Worker（Phase 3.2，server-mode opt-in）：
 
@@ -217,13 +221,13 @@ POC 通過 = 下列**全部同時**綠：
 | #  | Criterion                                                                                                                                         | Verification                                                                                  |
 | -- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | P1 | `opencode serve` cold start → `/health` 200 `{healthy:true}` < 10s                                                                                | POC 量測；assert < 10000ms                                                                    |
-| P2 | 單 session replay harbor-4images fixture (opencode 1.14.29) → 成功 case 的 text part 含可解析 `===ASK_RESULT===` JSON、`answer` 欄位非空；失敗 case 必須分類為 `server_mode_regression` 或 `provider_retry_transient` | 跑 100 attempts；assert `server_mode_regression_count=0`；`provider_retry_transient_count` 獨立統計進 REPORT |
-| P3 | 同 P2 但 opencode HEAD                                                                                                                            | 跑 100 attempts；assert `server_mode_regression_count=0`；`provider_retry_transient_count` 獨立統計進 REPORT |
+| P2 | 單 session replay harbor-4images fixture (against `MinimumOpencodeVersion` baseline) → 成功 case 的 text part 含可解析 `===ASK_RESULT===` JSON、`answer` 欄位非空；失敗 case 必須分類為 `server_mode_regression` 或 `provider_retry_transient` | 跑 100 attempts；assert `server_mode_regression_count=0`；`provider_retry_transient_count` 獨立統計進 REPORT |
+| P3 | 同 P2 但 opencode HEAD（HEAD 定義：最近通過 P3 的 opencode binary；若無更新版本通過 P3，HEAD ≡ baseline，P3 在此狀態下退化為對 baseline 的二次驗證，仍要求 `server_mode_regression_count=0`） | 跑 100 attempts；assert `server_mode_regression_count=0`；`provider_retry_transient_count` 獨立統計進 REPORT |
 | P4 | 8 並發 sessions × 5 batches = 40 calls，每 session 拿到自己 prompt 的答案 (hash 比對 unique)                                                       | assert 40/40 success + 0 cross-session bleed                                                  |
 | P5 | Per-session `directory` 隔離：8 sessions 各跑 `read marker.txt`，每個 cwd 放唯一 marker，assert 各 session 只讀到自己的                            | assert 8/8 isolated                                                                           |
 | P6 | `--pure` 等價機制 (or 驗證 server mode 預設不載 `.opencode/` plugin)：cwd 放毒 plugin 確認沒被載入                                                 | assert poison plugin 沒執行                                                                   |
 | P7 | Bug A 偵測：mock provider 回空 SSE → worker 邏輯 identify 為失敗 (`finish=other` + `tokens.output=0`)，**不可** log「執行成功」                    | assert log 為失敗、status 為 failed                                                           |
-| P8 | `/session`, `/session/{id}/message`, `/event` schema 在 1.14.29 vs HEAD 無 breaking 變更 (OpenAPI spec snapshot non-breaking)                     | fetch `/doc`，diff；assert 沒移除 required field、沒重命名                                    |
+| P8 | `/session`, `/session/{id}/message`, `/event` schema 在 baseline vs HEAD 無 breaking 變更 (OpenAPI spec snapshot non-breaking)；當 HEAD ≡ baseline（無更新版本通過 P3）時，schema diff trivially empty 視為通過 | fetch `/doc`，diff；assert 沒移除 required field、沒重命名                                    |
 | P9 | **Lazy lifecycle**：POC 起 supervisor，第一 job 來才 spawn server；模擬 8 個 job 完成後 idle ≥ `idle_timeout` (POC 用 30s 而非 prod 的 5min)，server 自動 stop；下個 job 再來 server re-spawn 成功；re-spawn 後至少再成功 replay 一次同 fixture | assert spawn → busy → idle-stop → re-spawn 一條完整 cycle；post-respawn happy-path 至少成功一次；若只落在 `provider_retry_transient`，記錄但不直接判 lifecycle red |
 | P10 | **Storage isolation**：POC 跑 server 時設 `XDG_DATA_HOME=/tmp/poc-opencode-xdg-data`；replay fixture；assert (a) `/tmp/poc-opencode-xdg-data/opencode/opencode.db` 有 session 紀錄，(b) user 的 `~/.local/share/opencode/opencode.db` mtime / size 不變 | assert 兩條都成立 |
 
@@ -276,7 +280,7 @@ POC 程式不需 production-grade。產出 `REPORT.md` 紀錄每條的 raw 數�
 
 ## Open Questions
 
-- **O1** opencode HEAD 的 `/event` SSE 是否會 reliably 發 `session.status idle`？(失敗 v1.14.29 case 沒發。若 HEAD 也沒修，server-mode SSE consumer 要找替代 completion 訊號 — 例如 correlate `message.part.updated` 的 `time.end` 跟 POST response。POC P2/P3 驗證時順帶確認。)
+- **O1** opencode HEAD 的 `/event` SSE 是否會 reliably 發 `session.status idle`？(歷次 POC 在 worker 進入 SSE 等待後 session_status 偶有 `busy` 卡住沒翻 `idle` 的 case，雖然 assistant text 已完整送達。若 HEAD 也沒修，server-mode SSE consumer 要找替代 completion 訊號 — 例如 correlate `message.part.updated` 的 `time.end` 跟 POST response。POC P2/P3 驗證時順帶確認。)
 - **O2** `opencode serve` 對 `OPENCODE_PERMISSION` env 行為？agentdock 沒設、multica 設 `{"*":"allow"}`。server mode 可能要改用 per-session permission rule POST 進去，不再靠 env。POC P5 驗證時順帶確認。
 - **O3** Loopback binding 下 `OPENCODE_SERVER_PASSWORD` 仍必須提供？POC 驗（不提供時 `cli/cmd/serve.ts` 會 print warning，要確認功能上是否可呼叫）。
 - **O4** `opencode serve` SIGTERM 對 in-flight session 的處理？若直接 abandon，F4 已寫顯式 drain step；POC 不驗（生產 corner case）。

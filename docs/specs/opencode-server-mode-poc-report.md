@@ -1,5 +1,18 @@
 # Opencode Server Mode POC Report
 
+> **Methodology & criteria definitions** — see [`opencode-server-mode.md` § Phase 3.1](./opencode-server-mode.md) for the formal P1–P10 criterion text. POC source code lives on the `poc/opencode-server-mode` branch under `cmd/dev/poc-opencode-server/`.
+>
+> **Failure classification** (applies to P2/P3/P9 replay attempts):
+> - `provider_retry_transient` — upstream provider noise (rate limits, API retries, `session.status=retry`, `session.error` with `IsRetryable=true`, scan-timeout before assistant text). Spawn-mode also sees these; not a server-mode gate.
+> - `server_mode_regression` — worker ↔ `opencode serve` transport / contract layer broken (SSE channel closed without termination event, mid-flight cut after meaningful text, HTTP transport failure, unparseable answer, Bug A pattern). This is what gates ship.
+>
+> **Run configuration for this report:**
+> - opencode provider: `opencode-go/deepseek-v4-flash` (paid OpenCode Zen) — chosen to avoid free-tier rate-limit bursts that contaminate the `provider_retry_transient` counter on earlier `opencode/minimax-m2.5-free` runs
+> - `-replay-count`: 100 (P2 / P3 / P7 false-positive batch)
+> - `-run-timeout`: 120s
+> - fixture: `testdata/harbor-4images` (sanitized multimodal: 1 prompt + 4 PNG)
+> - isolated XDG: `/tmp/poc-opencode-xdg-data`
+
 Generated at: 2026-05-14T02:20:38+08:00
 
 Baseline opencode: `1.14.41`
@@ -148,3 +161,25 @@ P9 respawn summary: start_count=2 respawned=true happy_path=true started_at=2026
 ```text
 P10 summary: isolated_db=/tmp/poc-opencode-xdg-data/opencode/opencode.db sessions=1 user_db_unchanged=true
 ```
+
+## Appendix — Historical bisect: 1.14.41 → 1.14.48 SSE-close regression
+
+The above run sets `Baseline = HEAD = 1.14.41` because no newer opencode version has yet passed P3 against the harbor-4images fixture; every version from 1.14.42 onward exhibits a server-mode SSE-close regression that hard-fails P3. This appendix records that evidence so spec/plan citations to "POC report § Historical bisect" have a substantive anchor.
+
+> This appendix is annotated post-generation (not part of the POC `-all` stdout). The raw bisect data lives in the `poc/opencode-server-mode` branch's REPORT.md @ commit `0e76d3a` (Baseline=1.14.29, HEAD=1.14.48 — P3 ❌ recorded) and in the `-criteria=p3 -replay-count=5 -run-timeout=120s` runs captured for the Dockerfile.release pin bump (PR #256).
+
+### Bisect data
+
+| opencode version | P3 outcome | regression / attempts | First-failure signature |
+|---|---|---|---|
+| 1.14.29 | ✅ green | 0 / 100 (poc branch REPORT @ 0e76d3a) | — |
+| 1.14.41 | ✅ green | 0 / 100 (this report; 0 / 5 in PR #256 bisect on darwin-arm64) | — |
+| 1.14.42 | ❌ red | 3 / 3 (PR #256 bisect) | `/event` SSE close at ≤12 ms after subscription; no termination event; no `session.error` |
+| 1.14.43 | ❌ red | 3 / 3 (PR #256 bisect) | same SSE-close pattern |
+| 1.14.48 | ❌ red | 100 / 100 (poc branch REPORT @ 0e76d3a; HEAD pin) | same SSE-close pattern |
+
+### Implications
+
+1. `Dockerfile.release` pins `OPENCODE_VERSION=1.14.41` (PR #256) so the shipped worker image carries the last known-good version.
+2. `MinimumOpencodeVersion` (Phase 3.2 Task 3.2-4) mirrors this pin — `1.14.41` — until a newer opencode version passes a fresh POC `-all -replay-count=100` run.
+3. The lower-bound version check defends against "operator installed too-old opencode" but **does not** catch "operator installed too-new but broken opencode". The defense for newer-but-broken is per-job failure detection (Bug A detector + `server_mode_regression` classification + no auto-fallback per spec C4).

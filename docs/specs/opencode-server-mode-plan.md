@@ -83,7 +83,7 @@ POC code is throwaway. Acceptance is per P-criterion in spec Success Criteria. T
 - [ ] HTTP errors and SSE disconnects surface as Go errors (not silent empty channel)
 
 **Verification:**
-- [ ] POC main runs `Start → CreateSession → SendPrompt → consume → Stop` against opencode 1.14.29; stdout shows the answer JSON
+- [ ] POC main runs `Start → CreateSession → SendPrompt → consume → Stop` against the floor opencode version; stdout shows the answer JSON
 - [ ] Inject `kill -SIGSTOP <opencode-pid>` mid-stream → client returns error within 30s, not hang
 
 **Dependencies:** 3.1-2.
@@ -103,12 +103,12 @@ POC code is throwaway. Acceptance is per P-criterion in spec Success Criteria. T
 
 ### Task 3.1-4: P1 + P2 + P3 — single-session validity & cold start
 
-**Description:** Aggregate runner for P1 (cold start ≤ 10s), P2 (1.14.29 fixture replay × 100 attempts), P3 (HEAD fixture replay × 100 attempts). Records latency, success/fail, raw stderr tail, and classifies any failed attempt as either `server_mode_regression` or `provider_retry_transient`.
+**Description:** Aggregate runner for P1 (cold start ≤ 10s), P2 (baseline fixture replay × 100 attempts), P3 (HEAD fixture replay × 100 attempts). Records latency, success/fail, raw stderr tail, and classifies any failed attempt as either `server_mode_regression` or `provider_retry_transient`. HEAD is the most recent opencode version that has passed P3 against this fixture; when no such later version exists, HEAD ≡ baseline (P3 effectively re-runs P2 and must still hit `server_mode_regression_count = 0`).
 
 **Acceptance criteria:**
 - [ ] P1: 5 cold-start cycles measured, max < 10000ms
-- [ ] P2: 100 attempts against opencode 1.14.29; `server_mode_regression_count = 0`
-- [ ] P3: 100 attempts against opencode HEAD; `server_mode_regression_count = 0`
+- [ ] P2: 100 attempts against the baseline opencode version; `server_mode_regression_count = 0`
+- [ ] P3: 100 attempts against opencode HEAD (as defined above); `server_mode_regression_count = 0`
 - [ ] `provider_retry_transient_count` is reported separately for P2 and P3
 - [ ] Each successful replay returns `===ASK_RESULT===` JSON with non-empty `answer`
 - [ ] Any unclassified failure counts as `server_mode_regression`
@@ -196,7 +196,7 @@ POC code is throwaway. Acceptance is per P-criterion in spec Success Criteria. T
 
 ### Task 3.1-8: P8 — schema cross-version diff
 
-**Description:** Fetch `/doc` (or equivalent OpenAPI endpoint) on opencode 1.14.29 and HEAD; diff the schemas focused on `/session`, `/session/{id}/message`, `/event`. Assert no required field removed, no endpoint renamed, no breaking type change.
+**Description:** Fetch `/doc` (or equivalent OpenAPI endpoint) on the baseline opencode version and HEAD; diff the schemas focused on `/session`, `/session/{id}/message`, `/event`. Assert no required field removed, no endpoint renamed, no breaking type change. When HEAD ≡ baseline (no newer version has passed P3), the diff is trivially empty and P8 reports green; the substantive cross-version check resumes once a candidate HEAD is being qualified.
 
 **Acceptance criteria:**
 - [ ] Both versions expose an OpenAPI endpoint and POC fetches both
@@ -250,7 +250,7 @@ POC code is throwaway. Acceptance is per P-criterion in spec Success Criteria. T
 - [ ] Exit code 0 only when all criteria pass under their classification rules; `provider_retry_transient` counts alone do not force non-zero
 
 **Verification:**
-- [ ] Run on macOS with both opencode 1.14.29 and HEAD installed
+- [ ] Run on macOS with the baseline opencode version and HEAD both installed (or pointed at the same binary when no newer version is being qualified)
 - [ ] Manually break P2 (e.g. point at a non-existent fixture) → REPORT marks red, exit non-zero
 
 **Dependencies:** 3.1-4 through 3.1-9.
@@ -678,7 +678,7 @@ PRs map to Stages 1-4 below. Each PR leaves `opencode.mode` defaulting to `spawn
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| HEAD vs 1.14.29 schema drift between POC and Phase 3.2 ship | High | POC 3.1-8 (P8) is a hard ship gate; CI pins opencode version; spec change-management requires re-running P8 on opencode upgrade |
+| HEAD vs baseline schema drift between POC and Phase 3.2 ship | High | POC 3.1-8 (P8) is a hard ship gate; CI pins opencode version; spec change-management requires re-running P8 on opencode upgrade |
 | Lazy lifecycle boot lock race spawns multiple servers under thunder | High | POC 3.1-9 (P9) explicitly tests 8-goroutine concurrent first-job; production task 3.2-8 reuses `sync.Once` + state machine pattern |
 | SSE consumer mishandles `data:` prefix or heartbeat events | Medium | POC 3.1-3..4 100x replay against real SSE flow; reuse `shared/queue/stream.go` parser after thin adapter; unit test heartbeat-only sequences |
 | Bug A detector false positives (legitimate `finish=other` cases) | Medium | POC P7 negative-corpus check (P2 successful runs); detector uses AND of three conditions (`finish=other` AND `tokens.output=0` AND no text part), stricter than any single signal |
@@ -686,7 +686,7 @@ PRs map to Stages 1-4 below. Each PR leaves `opencode.mode` defaulting to `spawn
 | `import_direction_test.go` fails because server-mode reaches into shared/ | Medium | server-mode code stays in `worker/agent/`; only public API of `shared/queue/stream.go` is consumed; pre-merge run of import-direction test in each PR |
 | Spawn extraction (3.2-2) accidentally changes behavior | Medium | Extract-only PR; existing `runner_test.go` is the regression net; reviewer asked to verify diff is move-only |
 | Stage 3 PR pulls an `app/` change for Bug A copy mapping | Low-Medium | Flagged in 3.2-11 task notes; if needed, surface explicitly to reviewer; keep change minimal (one switch case in result_listener) |
-| Newer opencode silently breaks server-mode (e.g. P3 SSE regression on 1.14.48) | High | Version check (3.2-4) only enforces a lower bound, so newer-but-broken versions are NOT caught at boot; defense is per-job failure detection (Bug A detector + `server_mode_regression` classification + no auto-fallback per spec C4) — failure surfaces loudly, operator investigates, floor bumps only after fresh POC pass |
+| Newer opencode silently breaks server-mode (precedent: 1.14.42 → 1.14.48 SSE-close regression documented in POC report § Historical bisect) | High | Version check (3.2-4) only enforces a lower bound, so newer-but-broken versions are NOT caught at boot; defense is per-job failure detection (Bug A detector + `server_mode_regression` classification + no auto-fallback per spec C4) — failure surfaces loudly, operator investigates, floor bumps only after fresh POC pass |
 
 ## Open questions (deferred to implementation)
 
