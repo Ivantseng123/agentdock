@@ -15,6 +15,11 @@ import (
 // mode (zero value, e.g. Runner constructed via NewRunner without a
 // follow-up NewRunnerFromConfig) also routes to spawn, so a partially
 // constructed Runner doesn't silently end up in server mode.
+//
+// `gemini` is included even though there is no built-in gemini agent
+// today (see worker/config/builtin_agents.go) — the dispatcher should
+// route any future agent name through the spawn path by default, and
+// this is forward-defensive coverage for when one is added.
 func TestDispatchTarget_Matrix(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -61,7 +66,7 @@ func TestRunOne_ServerStub_ReturnsExplicitError(t *testing.T) {
 		context.Background(),
 		slog.Default(),
 		config.AgentConfig{Command: "opencode"},
-		"/tmp",
+		t.TempDir(),
 		"unused prompt",
 		RunOptions{},
 	)

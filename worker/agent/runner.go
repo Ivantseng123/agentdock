@@ -31,9 +31,9 @@ type RunOptions struct {
 }
 
 type Runner struct {
-	agents       []config.AgentConfig
-	githubToken  string
-	opencodeCfg  config.OpencodeConfig
+	agents      []config.AgentConfig
+	githubToken string
+	opencodeCfg config.OpencodeConfig
 }
 
 func NewRunner(agents []config.AgentConfig) *Runner {
@@ -102,8 +102,10 @@ func (r *Runner) dispatchTarget(agent config.AgentConfig) string {
 // ships runOneServer as a stub that errors out, so even when the
 // dispatcher picks "server" the worker stays alive via Run's
 // agent-chain failure path (the stub error surfaces, next provider in
-// the chain takes over). Stage 2's lazy supervisor lands without
-// further plumbing changes here.
+// the chain takes over). The dispatcher's signature won't need to
+// change for Stage 2 — but Stage 2 will add new Runner fields (e.g. a
+// `*Supervisor`) and populate them inside `NewRunnerFromConfig`, so
+// Runner construction *will* evolve when the real server-mode lands.
 func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (output string, err error) {
 	if r.dispatchTarget(agent) == "server" {
 		return r.runOneServer(ctx, logger, agent, workDir, prompt, opts)
