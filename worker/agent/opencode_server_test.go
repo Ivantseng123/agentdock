@@ -16,17 +16,18 @@ import (
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
-// primedSupervisor builds a Supervisor in the "started" state pointed
+// primedSupervisor builds a Supervisor in the running state pointed
 // at a test HTTP server. Bypasses the real `opencode serve` spawn so
 // runOneServer can be exercised end-to-end against httptest fakes
 // without a real opencode binary. Test-only — production boot uses
-// NewSupervisor + Start.
+// NewSupervisor + lazy Acquire.
 func primedSupervisor(baseURL, password string, pid int) *Supervisor {
 	return &Supervisor{
-		baseURL:  baseURL,
-		password: password,
-		pid:      pid,
-		started:  true,
+		baseURL:        baseURL,
+		password:       password,
+		pid:            pid,
+		state:          stateRunning,
+		activeSessions: make(map[string]struct{}),
 	}
 }
 

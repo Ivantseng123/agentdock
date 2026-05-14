@@ -95,6 +95,11 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 	defer cancel()
 
 	sup := r.supervisor
+	if err := sup.Acquire(ctx); err != nil {
+		return "", fmt.Errorf("acquire opencode supervisor: %w", err)
+	}
+	defer sup.Release()
+
 	client := NewClient(sup.BaseURL(), sup.Password(), nil)
 
 	if opts.OnStarted != nil {
@@ -111,6 +116,8 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 	if err != nil {
 		return "", fmt.Errorf("create opencode session: %w", err)
 	}
+	sup.SetActiveSession(sessionID)
+	defer sup.ClearActiveSession(sessionID)
 	logger.Info("opencode session 已建立",
 		"phase", "處理中",
 		"command", agent.Command,

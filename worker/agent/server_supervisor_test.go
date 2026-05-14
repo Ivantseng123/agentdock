@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -245,6 +246,286 @@ func TestSupervisor_Stop_Idempotent(t *testing.T) {
 	sup := NewSupervisor(SupervisorConfig{BinaryPath: "/never-started"})
 	if err := sup.Stop(context.Background()); err != nil {
 		t.Errorf("Stop on never-started supervisor: %v", err)
+	}
+}
+
+// Stage 3 lazy lifecycle tests. The supervisor in Stage 3 boots in
+// `idle` state; the first Acquire triggers spawn. Release decrements
+// the active count and arms an idle timer (when IdleTimeout > 0).
+
+func TestSupervisor_Acquire_LazySpawnAndRelease(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	if got := sup.State(); got != stateIdle {
+		t.Errorf("pre-Acquire State = %s, want idle", got)
+	}
+	if pid := sup.ChildPID(); pid != 0 {
+		t.Errorf("pre-Acquire ChildPID = %d, want 0", pid)
+	}
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if got := sup.State(); got != stateRunning {
+		t.Errorf("post-Acquire State = %s, want running", got)
+	}
+	if sup.ChildPID() == 0 {
+		t.Error("post-Acquire ChildPID = 0")
+	}
+	if sup.BaseURL() != srv.URL {
+		t.Errorf("BaseURL = %q, want %q", sup.BaseURL(), srv.URL)
+	}
+
+	sup.Release()
+	if got := sup.State(); got != stateRunning {
+		t.Errorf("post-Release State = %s, want running (no IdleTimeout)", got)
+	}
+}
+
+func TestSupervisor_Acquire_ConcurrentCoalesceSingleSpawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	const N = 8
+	var wg sync.WaitGroup
+	pids := make([]int, N)
+	urls := make([]string, N)
+	errs := make([]error, N)
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			err := sup.Acquire(context.Background())
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			pids[i] = sup.ChildPID()
+			urls[i] = sup.BaseURL()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	var firstPID int
+	var firstURL string
+	for i := 0; i < N; i++ {
+		if errs[i] != nil {
+			t.Errorf("Acquire[%d]: %v", i, errs[i])
+			continue
+		}
+		if firstPID == 0 {
+			firstPID = pids[i]
+			firstURL = urls[i]
+			continue
+		}
+		if pids[i] != firstPID {
+			t.Errorf("Acquire[%d] PID = %d, want %d (coalescence broken — multiple spawns)", i, pids[i], firstPID)
+		}
+		if urls[i] != firstURL {
+			t.Errorf("Acquire[%d] URL = %q, want %q", i, urls[i], firstURL)
+		}
+	}
+
+	// Drain all Releases to confirm activeCount tracks correctly.
+	for i := 0; i < N; i++ {
+		sup.Release()
+	}
+	sup.mu.Lock()
+	got := sup.activeCount
+	sup.mu.Unlock()
+	if got != 0 {
+		t.Errorf("activeCount after N Releases = %d, want 0", got)
+	}
+}
+
+func TestSupervisor_Acquire_IdleStopThenRespawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{
+		BinaryPath:  binPath,
+		IdleTimeout: 100 * time.Millisecond,
+	})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire 1: %v", err)
+	}
+	pid1 := sup.ChildPID()
+	if pid1 == 0 {
+		t.Fatal("PID is 0 after first Acquire")
+	}
+	sup.Release()
+
+	// Idle timer fires after 100ms; internal stop adds another ~50ms
+	// for the sleep child to die. 3s is plenty of headroom.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if sup.State() == stateIdle {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if sup.State() != stateIdle {
+		t.Fatalf("supervisor state = %s, want idle after IdleTimeout", sup.State())
+	}
+	if alive, _ := processAlive(pid1); alive {
+		t.Errorf("PID %d still alive after idle stop", pid1)
+	}
+	if sup.ChildPID() != 0 {
+		t.Errorf("ChildPID = %d after idle stop, want 0", sup.ChildPID())
+	}
+
+	// Re-acquire must trigger fresh spawn — different PID.
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire 2: %v", err)
+	}
+	pid2 := sup.ChildPID()
+	if pid2 == 0 {
+		t.Fatal("PID is 0 after second Acquire")
+	}
+	if pid2 == pid1 {
+		t.Errorf("re-Acquire produced same PID %d (no respawn)", pid2)
+	}
+	sup.Release()
+}
+
+func TestSupervisor_Drain_RejectsPostDrainAcquire(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	pid := sup.ChildPID()
+	sup.Release()
+
+	if err := sup.Drain(context.Background()); err != nil {
+		t.Errorf("Drain: %v", err)
+	}
+	if alive, _ := processAlive(pid); alive {
+		t.Errorf("PID %d still alive after Drain", pid)
+	}
+
+	err := sup.Acquire(context.Background())
+	if err == nil {
+		t.Fatal("Acquire after Drain succeeded")
+	}
+	if !strings.Contains(err.Error(), "shutting down") {
+		t.Errorf("Acquire post-Drain error = %v, want 'shutting down' substring", err)
+	}
+}
+
+func TestSupervisor_Drain_AbortsActiveSessions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+
+	var (
+		abortedMu sync.Mutex
+		aborted   []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != supervisorAuthUsername || p == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"healthy":true,"version":"fake"}`))
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/session/") && strings.HasSuffix(r.URL.Path, "/abort") {
+			parts := strings.Split(r.URL.Path, "/")
+			if len(parts) >= 4 {
+				abortedMu.Lock()
+				aborted = append(aborted, parts[2])
+				abortedMu.Unlock()
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	pid := sup.ChildPID()
+	sup.SetActiveSession("ses_1")
+	sup.SetActiveSession("ses_2")
+	sup.SetActiveSession("ses_3")
+
+	if err := sup.Drain(context.Background()); err != nil {
+		t.Errorf("Drain: %v", err)
+	}
+	if alive, _ := processAlive(pid); alive {
+		t.Errorf("PID %d still alive after Drain", pid)
+	}
+
+	abortedMu.Lock()
+	got := append([]string(nil), aborted...)
+	abortedMu.Unlock()
+	if len(got) != 3 {
+		t.Fatalf("aborted = %v, want 3 abort calls", got)
+	}
+	seen := map[string]bool{}
+	for _, id := range got {
+		seen[id] = true
+	}
+	for _, want := range []string{"ses_1", "ses_2", "ses_3"} {
+		if !seen[want] {
+			t.Errorf("session %q never aborted (got %v)", want, got)
+		}
+	}
+}
+
+func TestSupervisor_Acquire_RejectedDuringShutdown(t *testing.T) {
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: "/never-spawned"})
+	sup.mu.Lock()
+	sup.shuttingDown = true
+	sup.mu.Unlock()
+
+	err := sup.Acquire(context.Background())
+	if err == nil {
+		t.Fatal("Acquire on shuttingDown supervisor succeeded")
+	}
+	if !strings.Contains(err.Error(), "shutting down") {
+		t.Errorf("error = %v, want 'shutting down'", err)
 	}
 }
 
