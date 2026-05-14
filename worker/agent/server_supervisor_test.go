@@ -514,6 +514,63 @@ func TestSupervisor_Drain_AbortsActiveSessions(t *testing.T) {
 	}
 }
 
+func TestSupervisor_KillChildFlipsToCrashed_ThenRespawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	pid := sup.ChildPID()
+	if pid == 0 {
+		t.Fatal("PID is 0 after Acquire")
+	}
+
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill child: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if sup.State() == stateCrashed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if sup.State() != stateCrashed {
+		t.Fatalf("supervisor state = %s, want crashed after SIGKILL", sup.State())
+	}
+
+	// Release the slot we acquired before the crash so re-Acquire's
+	// idle-timer reset path is clean. (activeCount was 1; the wait
+	// goroutine doesn't touch activeCount on unexpected exit, so we
+	// still hold the slot — release is necessary even though the
+	// child is dead.)
+	sup.Release()
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("re-Acquire after crash: %v", err)
+	}
+	newPID := sup.ChildPID()
+	if newPID == 0 {
+		t.Error("post-crash respawn PID is 0")
+	}
+	if newPID == pid {
+		t.Errorf("post-crash respawn PID = %d, want a different PID (no actual respawn)", newPID)
+	}
+	if sup.State() != stateRunning {
+		t.Errorf("post-respawn state = %s, want running", sup.State())
+	}
+	sup.Release()
+}
+
 func TestSupervisor_Acquire_RejectedDuringShutdown(t *testing.T) {
 	sup := NewSupervisor(SupervisorConfig{BinaryPath: "/never-spawned"})
 	sup.mu.Lock()

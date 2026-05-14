@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -43,6 +45,13 @@ import (
 //     duration_ms, stdout_len, exit_code) so Jaeger filters by
 //     `error=true` keep working across modes.
 //
+// Stage 3 Task 3.2-9 retry-once: when an attempt fails with a
+// recoverable transport-layer error (supervisor crashed, connection
+// refused, EOF mid-stream) the function transparently retries against a
+// fresh session and (after Acquire) a fresh server subprocess. A second
+// failure within retry surfaces as a hard error — no third attempt, no
+// fallback to spawn mode (spec C4).
+//
 // Supervisor is owned by the worker's Runner; calling runOneServer
 // with r.supervisor == nil is a programming error (the dispatcher only
 // routes here when Mode == server, which is mutually exclusive with a
@@ -71,10 +80,10 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 		span.SetAttributes(attrs...)
 		// Span status parity with runOneSpawn (cross-review M4): mark
 		// span as Error not only on Go err but also when exitCode > 0
-		// with nil err. Stage 2 only emits exitCode ∈ {-1, 0}, so the
-		// second branch is currently unreachable; Stage 3 Task 3.2-11's
-		// Bug A detector will emit positive exit codes, and Jaeger
-		// filters by `error=true` need this branch to keep working.
+		// with nil err. Stage 2 only emits exitCode ∈ {-1, 0}; Stage 3
+		// Task 3.2-11's Bug A detector will emit positive exit codes,
+		// and Jaeger filters by `error=true` need this branch to keep
+		// working.
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "agent run failed")
@@ -95,6 +104,41 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 	defer cancel()
 
 	sup := r.supervisor
+	const maxAttempts = 2
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		attemptOutput, attemptErr := r.runOneServerAttempt(ctx, logger, sup, agent, workDir, prompt, opts, attempt)
+		if attemptErr == nil {
+			exitCode = 0
+			return attemptOutput, nil
+		}
+		// Last attempt: surface error as-is (caller's runner.Run loops
+		// the agent chain). Don't double-wrap.
+		if attempt+1 >= maxAttempts {
+			return "", attemptErr
+		}
+		// Decide whether to retry. Only crashes / transport failures
+		// recover. 4xx, business-logic errors, and ctx cancellations
+		// surface immediately — retry can't fix them.
+		if !isRecoverableSupervisorCrash(attemptErr, sup) {
+			return "", attemptErr
+		}
+		logger.Warn("opencode server-mode retry-once 觸發",
+			"phase", "處理中",
+			"command", agent.Command,
+			"attempt", attempt+1,
+			"error", attemptErr,
+		)
+	}
+	// Loop above always returns explicitly; this is unreachable.
+	return "", errors.New("opencode server-mode retry-once exhausted (logic bug)")
+}
+
+// runOneServerAttempt is one Acquire/CreateSession/SendPrompt/Wait
+// cycle. Acquire is per-attempt so a crashed supervisor gets a fresh
+// spawn on retry (Stage 3 Task 3.2-9 spec line "fresh session against
+// the recovered server"). Returns the trimmed assistant text or a
+// transport / request error that the outer retry loop classifies.
+func (r *Runner) runOneServerAttempt(ctx context.Context, logger *slog.Logger, sup *Supervisor, agent config.AgentConfig, workDir, prompt string, opts RunOptions, attempt int) (string, error) {
 	if err := sup.Acquire(ctx); err != nil {
 		return "", fmt.Errorf("acquire opencode supervisor: %w", err)
 	}
@@ -102,7 +146,11 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 
 	client := NewClient(sup.BaseURL(), sup.Password(), nil)
 
-	if opts.OnStarted != nil {
+	// OnStarted fires only on attempt 0 — the pool status registry
+	// records one PID per job, and refiring on retry with the same
+	// supervisor PID would overwrite with identical data and noise
+	// the lifecycle log.
+	if opts.OnStarted != nil && attempt == 0 {
 		opts.OnStarted(sup.ChildPID(), agent.Command)
 	}
 	logger.Info("opencode server-mode session 啟動",
@@ -110,6 +158,7 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 		"command", agent.Command,
 		"supervisor_pid", sup.ChildPID(),
 		"base_url", sup.BaseURL(),
+		"attempt", attempt,
 	)
 
 	sessionID, err := client.CreateSession(ctx, workDir)
@@ -160,15 +209,17 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 		}
 	}()
 
-	output, err = run.Wait()
+	output, err := run.Wait()
 	<-drainDone
 
 	if err != nil {
 		return "", err
 	}
-	exitCode = 0
 	trimmed := strings.TrimSpace(output)
 	if trimmed == "" {
+		// Stage 2 placeholder. Stage 3 Task 3.2-11 promotes empty
+		// output (under the three-condition Bug A AND-gate) to an
+		// explicit failure.
 		logger.Warn("opencode 答案為空",
 			"phase", "失敗",
 			"command", agent.Command,
@@ -176,4 +227,48 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 		)
 	}
 	return trimmed, nil
+}
+
+// isRecoverableSupervisorCrash returns true when the error chain looks
+// like a transport-layer failure that retry-once can fix: either the
+// supervisor's state has already flipped to `crashed` (cmd.Wait
+// observed unexpected exit), or the error contains classic transport
+// signatures (connection refused / EOF / ErrUnexpectedEOF). Errors
+// that don't recover — 4xx from a healthy server, ctx cancellation,
+// Bug A (Stage 3 Task 3.2-11) — return false and surface immediately
+// without burning the retry budget.
+//
+// The state check covers the clean case where cmd.Wait already
+// observed the dead child by the time the HTTP request returned; the
+// error-signature fallback covers the race window where the child is
+// dead but the wait goroutine hasn't flipped state yet (TCP RST
+// arrives ahead of waitpid).
+func isRecoverableSupervisorCrash(err error, sup *Supervisor) bool {
+	if err == nil {
+		return false
+	}
+	if sup != nil && sup.State() == stateCrashed {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "connection refused") {
+		return true
+	}
+	if strings.Contains(msg, "EOF") {
+		// Covers `EOF` and `unexpected EOF` from POSTs that lose the
+		// connection mid-stream (Go HTTP client wraps with "Post url:
+		// EOF"). Pairs with errors.Is checks above for the cases
+		// where the error chain preserves the typed sentinel.
+		return true
+	}
+	if strings.Contains(msg, "broken pipe") {
+		return true
+	}
+	return false
 }
