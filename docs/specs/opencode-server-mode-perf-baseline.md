@@ -194,6 +194,63 @@ The harnesses are deterministic in method; the data has run-to-run noise. Re-run
 - Server timing breakdown: `OPENCODE_BUG_REPRO=1 go -C worker test ./agent -run TestServerModeTimingBreakdown -count=1 -timeout 20m -v`
 - Server session reuse: `OPENCODE_BUG_REPRO=1 go -C worker test ./agent -run TestServerModeSessionReuse -count=1 -timeout 20m -v`
 
+## Amendment 2026-05-15 — default flipped to server
+
+The Verdict section above recommended a follow-up PR to flip the default
+from `spawn` to `server`, gated on running this harness in a Linux pod
+first. That follow-up shipped on 2026-05-15 **without** the Linux-pod
+gate: per operator decision, pod deployment itself becomes the FUP-1
+measurement window rather than an out-of-band benchmark.
+
+What changed in code:
+
+- `worker/config/defaults.go`: `cfg.Opencode.Mode` default is now
+  `OpencodeModeServer` (was `OpencodeModeSpawn`).
+- Init template (`cmd/agentdock/init.go`) and configuration docs
+  (`docs/configuration-worker.md` + `.en.md`) reframed; spawn is
+  documented as the legacy opt-out path operators must explicitly
+  request.
+- Spec doc (`docs/specs/opencode-server-mode.md`) C2 criterion and
+  yaml example annotated with this deviation; plan doc
+  (`docs/specs/opencode-server-mode-plan.md`) Checkpoint F amended.
+
+Spec deviations explicitly accepted:
+
+- **Spec C2 timing gate** ("≥ 2 weeks of zero answer-drop in
+  production before flipping the default") — skipped. The post-flip
+  period in production becomes the observation window.
+- **FUP-1 ordering** — runs in parallel with production operation
+  rather than as a precondition. Operators monitor
+  `OpencodeServer`-component logs (Bug A detection, `crashed` state
+  recurrence, RSS pressure) and can fall back by writing
+  `opencode.mode: spawn` into worker.yaml if symptoms appear.
+
+What did NOT change:
+
+- The Verdict section above (raw measurements, methodology, headline
+  trade-off table) remains the source-of-truth for the spawn-vs-server
+  comparison on the dev box.
+- Spec C3 (spawn legacy stays in code ≥2 weeks past flip before
+  deletion is discussed) and C4 (no auto-fallback) — both preserved.
+  The `OpencodeModeSpawn` constant, dispatcher, validator, and
+  `runOneSpawn` path stay in place.
+- The `MinimumOpencodeVersion = 1.14.41` floor.
+
+Boot-time preconditions operators must verify before pulling the next
+image (or set `opencode.mode: spawn` explicitly to skip them):
+
+- `worker.yaml` defines `agents.opencode` — worker boot fast-fails
+  otherwise (see `worker/worker.go:92-106`), with the explicit error
+  `opencode provider not configured ...`.
+- Installed `opencode` binary at or above `MinimumOpencodeVersion`
+  (1.14.41 today). Pod images are immutable so this should hold on
+  pod deployments; laptop deployments require operator pre-flight.
+
+If the post-flip observation surfaces issues that out-of-band
+Linux-pod measurement would have caught, the corrective path is to
+re-enable spawn explicitly in `worker.yaml` (no code revert needed)
+and file a follow-up FUP capturing the regression evidence.
+
 ## Follow-up tasks
 
 The Stage 4 finding leaves four work items open. Owners + dates TBD; recommended order of attack:

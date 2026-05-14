@@ -115,7 +115,7 @@ agents:
     skill_dir: .opencode/skills
 
 opencode:                 # 新增 (V3): runtime 設定，跟 queue: / redis: / secrets: 同階
-  mode: spawn             # spawn (default Phase 3.2 首版) | server (≥2 週監測後翻)
+  mode: server            # server (default since 2026-05-15 amendment) | spawn (legacy opt-out)
   idle_timeout: 5m        # server idle 多久後 stop (lazy lifecycle 用)
   storage_dir: ""         # empty → 自動 ~/.local/share/agentdock-worker/opencode；
                           # 用來 isolate XDG_DATA_HOME，避開跟 user 自己 opencode 的 SQLite WAL 衝突
@@ -274,7 +274,9 @@ POC 程式不需 production-grade。產出 `REPORT.md` 紀錄每條的 raw 數�
 **Compatibility / migration**：
 
 - **C1** 首版 default `opencode.mode: spawn` (server 為 opt-in)
+  - **Amendment 2026-05-15**：C1 描述 3.x 首版的 default 行為；隨 C2 default 翻轉，C1 已不適用於 4.x 之後版本，保留作為歷史記錄。
 - **C2** server mode 在 prod 跑 ≥ 2 週、零 answer-drop 後，default 翻 `server`
+  - **Amendment 2026-05-15**：default 已先翻為 `server`，未走 ≥ 2 週 prod observation gate。Operator override，pod 部署本身作為觀察窗口；deviation 細節與 boot-time pre-flight checklist 詳見 `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment 2026-05-15。
 - **C3** Default 翻完之後 spawn path 還留 ≥ 2 週才議刪除
 - **C4** 不做 server-mode → spawn-mode 的 auto-fallback：失敗就明確 fail，避免 mask bug、避免雙倍 latency 沒 recovery
 

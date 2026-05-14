@@ -197,19 +197,23 @@ func marshalWorkerYAML(cfg *workerconfig.Config, path string) ([]byte, error) {
 		"# OPTIONAL: OTel tracing. Empty endpoint = silent skip; non-empty\n"+
 			"# = OTLP gRPC exporter (e.g. jaeger-collector.istio-system:4317).\n"+
 			"# Env override: OTEL_EXPORTER_OTLP_ENDPOINT.")
-	// opencode: block is serialized via DefaultsMap (mode=spawn, idle_timeout=5m,
-	// storage_dir=""), but server-mode is opt-in for Phase 3.2 and most operators
-	// won't touch it. Strip the active block and prepend a documented commented-
-	// out template instead — defaults still apply at runtime via ApplyDefaults
-	// when the block is absent.
+	// opencode: block is serialized via DefaultsMap (mode=server, idle_timeout=5m,
+	// storage_dir=""). Server mode is the default after the spec C2 deviation
+	// recorded in docs/specs/opencode-server-mode-perf-baseline.md amendment.
+	// Strip the active block and prepend a documented commented-out template
+	// instead — defaults still apply at runtime via ApplyDefaults when the
+	// block is absent. Operators wanting the legacy spawn path uncomment the
+	// block and set `mode: spawn`.
 	text = stripOpencodeBlock(text)
-	opencodeComment := "# opencode: (opt-in; Phase 3.2 server-mode rollout — omit to use the legacy spawn mode)\n" +
-		"# Omit the entire block to keep per-job `opencode run` (default; safe for laptop deployments).\n" +
+	opencodeComment := "# opencode: (defaults to server mode — omit the block to keep that default)\n" +
+		"# `opencode serve` runs as one long-lived child of the worker; per-job traffic goes via HTTP+SSE.\n" +
+		"# Set `mode: spawn` explicitly to opt back into the legacy per-job `opencode run` path.\n" +
 		"# See docs/configuration-worker.md § Opencode 區塊 for trade-offs.\n" +
-		"# Spec C2: default flips to `server` after >=2 weeks of zero answer-drop in production.\n" +
+		"# Spec C2 deviation: default flipped before the 2-week prod observation window;\n" +
+		"# see docs/specs/opencode-server-mode-perf-baseline.md amendment for rationale.\n" +
 		"#\n" +
 		"# opencode:\n" +
-		"#   mode: spawn         # spawn (per-job exec) | server (long-running `opencode serve` subprocess)\n" +
+		"#   mode: server        # server (default; long-running `opencode serve` subprocess) | spawn (legacy per-job exec)\n" +
 		"#   idle_timeout: 5m    # how long the server child stays warm after the last job (server mode only)\n" +
 		"#   storage_dir: \"\"     # XDG_DATA_HOME for the server child; empty = runtime-resolved per-worker\n" +
 		"#\n" +
