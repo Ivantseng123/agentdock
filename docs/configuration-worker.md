@@ -196,7 +196,7 @@ opencode:
 
 ### `mode` 選擇
 
-- **`server`（預設、無 silent drop）** — worker pool 全程共用一個 `opencode serve --pure` 子進程，per-job 透過 HTTP + SSE 串接到該 server。Stage 4 在 dev box 上量到 100% healthy output（vs spawn 100% silent drop）。代價：每 job ~+11s wallclock（真實 LLM round trip，spawn 因為提早結束所以沒付這個成本）；persistent subprocess 約 +470 MB RSS。Server crash 走 retry-once（spec C4：不 fallback 到 spawn）。**Boot-time 前提**：worker.yaml 必須有 `agents.opencode` 區塊；installed opencode binary ≥ `MinimumOpencodeVersion`（目前 `1.14.41`）。兩個條件缺一就 worker boot 失敗（fail-fast，非 silent degrade）。
+- **`server`（預設、無 silent drop）** — worker pool 全程共用一個 `opencode serve --pure` 子進程，per-job 透過 HTTP + SSE 串接到該 server。Stage 4 在 dev box 上量到 100% healthy output（vs spawn 100% silent drop）。代價：每 job ~+11s wallclock（真實 LLM round trip，spawn 因為提早結束所以沒付這個成本）；persistent subprocess 約 +470 MB RSS。Server crash 走 retry-once（spec C4：不 fallback 到 spawn）。**Boot-time gate**：installed opencode binary 必須 ≥ `MinimumOpencodeVersion`（目前 `1.14.41`）。低於 floor → worker boot 失敗（fail-fast，非 silent degrade）。Worker.yaml 內 `agents.opencode` 區塊若整段省略，runtime 會自動套用 `worker/config/builtin_agents.go` 的內建 opencode entry（normal deployment 無須額外設定）；只在 operator 顯式覆寫 `agents.opencode.command` 卻指到不存在 binary 時才會由 version check 攔下。
 - **`spawn`（legacy、有已知 silent-answer-drop 故障）** — 每個 job spawn 新的 `opencode run` 進程。Stage 4 在 dev box 上以 30/30 比例重現「spawn 短答案 ask 回傳空白」(`docs/specs/opencode-server-mode-perf-baseline.md`)；ADR-0005 把同樣症狀 trace 到 opencode CLI 內部 dispose race。保留作為 legacy 路徑供 operator 明確 opt-out 用，依 spec C3 至少維護到預設翻轉後 ≥2 週才會議刪除。
 - **Spec C2 偏差** — spec C2 原本規定：`mode: server` 在 production 連續跑 ≥2 週、零 answer-drop 後，預設值才從 `spawn` 翻為 `server`；perf baseline 又加上「Linux pod 重新量過 RSS / latency 後才 flip」的 gate。本次預設翻轉略過上述兩條 gate，改以 pod 部署本身作為 FUP-1 量測窗口。詳見 `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment。
 
@@ -212,7 +212,7 @@ opencode `serve` 把 session DB、log、cache 寫到 `XDG_DATA_HOME` 下。worke
 
 ### 已知限制
 
-- **預設翻轉前要 pre-flight worker.yaml** — server mode 啟動硬性要求 worker.yaml 內 `agents.opencode` 區塊存在 + installed opencode binary ≥ `MinimumOpencodeVersion`。Upgrade image 前請先確認既有 worker.yaml 滿足這兩條，否則拉新 image 後 worker boot 立刻失敗（fail-fast，非 silent degrade）。想沿用 legacy 行為的 operator 把 `opencode.mode: spawn` 顯式寫進 worker.yaml 即可。
+- **預設翻轉前要 pre-flight image / binary** — server mode 啟動要求 installed opencode binary ≥ `MinimumOpencodeVersion`（worker/agent/opencode_version.go）。Upgrade image 前請先確認 image 內 `opencode` 為 `1.14.41` 或以上，否則拉新 image 後 worker boot 立刻失敗（fail-fast，非 silent degrade）。Laptop deployment 要自行確認本機 `opencode --version`。想沿用 legacy 行為的 operator 把 `opencode.mode: spawn` 顯式寫進 worker.yaml 即可。
 - **Binary swap 不會觸發 re-check** — `opencode -v` 在 worker 啟動時檢查一次。worker 跑起來後若 operator 換掉 binary（e.g. `~/.opencode/bin/opencode` 升版），新版本**不會**被重新驗證；既有 worker 直到下次重啟才會 pick up。pod 部署這條沒差（image 不可變）；laptop deployment 須自行管控。
 - **無 server → spawn auto-fallback** — server mode 失敗直接 fail，不會 silently fallback 回 spawn（spec C4）。對應地，server crash 透過 retry-once + 重新 spawn 子進程恢復（Stage 3 §F4）；連續兩次 fail 才硬性失敗。
 - **C2 觀察期間建議** — 啟用 server mode 後請主動觀察 worker 日誌的 `OpencodeServer` 相關 phase；若出現 Bug A 偵測（`LLM 回應為空`）或 `crashed` state 頻繁，先把 `mode: spawn` 顯式寫進 worker.yaml 回退，再診斷。

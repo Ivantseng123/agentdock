@@ -274,6 +274,7 @@ POC 程式不需 production-grade。產出 `REPORT.md` 紀錄每條的 raw 數�
 **Compatibility / migration**：
 
 - **C1** 首版 default `opencode.mode: spawn` (server 為 opt-in)
+  - **Amendment 2026-05-15**：C1 描述 3.x 首版的 default 行為；隨 C2 default 翻轉，C1 已不適用於 4.x 之後版本，保留作為歷史記錄。
 - **C2** server mode 在 prod 跑 ≥ 2 週、零 answer-drop 後，default 翻 `server`
   - **Amendment 2026-05-15**：default 已先翻為 `server`，未走 ≥ 2 週 prod observation gate。Operator override，pod 部署本身作為觀察窗口；deviation 細節與 boot-time pre-flight checklist 詳見 `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment 2026-05-15。
 - **C3** Default 翻完之後 spawn path 還留 ≥ 2 週才議刪除
