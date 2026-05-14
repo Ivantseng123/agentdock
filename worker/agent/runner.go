@@ -34,6 +34,13 @@ type Runner struct {
 	agents      []config.AgentConfig
 	githubToken string
 	opencodeCfg config.OpencodeConfig
+	// supervisor is the long-running `opencode serve` child shared by
+	// the worker pool when cfg.Opencode.Mode == "server". Populated by
+	// worker boot via SetOpencodeSupervisor after the version check
+	// passes and Supervisor.Start succeeds. nil under Mode = "spawn"
+	// or when constructed via NewRunner (no Config). runOneServer
+	// guards against the nil case.
+	supervisor *Supervisor
 }
 
 func NewRunner(agents []config.AgentConfig) *Runner {
@@ -53,6 +60,14 @@ func NewRunnerFromConfig(cfg *config.Config) *Runner {
 	runner.githubToken = cfg.GitHub.Token
 	runner.opencodeCfg = cfg.Opencode
 	return runner
+}
+
+// SetOpencodeSupervisor wires the long-running opencode serve handle
+// into the Runner so runOneServer can dispatch per-job HTTP/SSE work
+// through it. Called by worker boot only when cfg.Opencode.Mode ==
+// "server", after Supervisor.Start succeeds.
+func (r *Runner) SetOpencodeSupervisor(s *Supervisor) {
+	r.supervisor = s
 }
 
 func (r *Runner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string, opts RunOptions) (string, error) {

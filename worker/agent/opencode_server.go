@@ -3,33 +3,141 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
+	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/Ivantseng123/agentdock/shared/tracing"
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
-// runOneServer is the entry point for opencode's server-mode run path
-// (long-running `opencode serve` subprocess shared by the worker pool over
-// HTTP/SSE). Stage 1 ships this as a stub so operators who flip
-// `opencode.mode: server` before the Phase 3.2 supervisor lands receive a
-// loud, explicit error from the existing agent-chain failure path rather
-// than a silent degradation.
+// runOneServer is the server-mode counterpart to runOneSpawn. It drives
+// one ask job through the worker-process-scoped Supervisor (long-running
+// `opencode serve` child) plus a per-job HTTP/SSE Client. See plan Task
+// 3.2-7 for the acceptance contract.
 //
-// Implementation lands in Stage 2:
-//   - Task 3.2-5 wires the supervisor (Start/Stop/BaseURL/Password).
-//   - Task 3.2-6 wires the HTTP/SSE client (CreateSession, SendPrompt).
-//   - Task 3.2-7 fills this function with the supervisor + client glue.
+// Contract parity with runOneSpawn (Stage 1 cross-review pre-mortems
+// 6.1 + 6.3):
 //
-// Until those land, `Run`'s agent-chain fallback at runner.go's Run()
-// catches the error, logs the failure, and tries the next provider — so
-// the worker stays alive and ask jobs degrade visibly rather than wedge.
-func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (string, error) {
-	logger.Error(
-		"opencode server-mode 尚未實作 (Stage 2+)",
-		"phase", "失敗",
-		"command", agent.Command,
-		"mode", r.opencodeCfg.Mode,
-		"hint", "Stage 1 PR only ships the dispatcher; flip opencode.mode back to spawn until Stage 2 (Task 3.2-5..3.2-7) lands.",
+//   - OnStarted fires with supervisor.ChildPID() and agent.Command so
+//     the pool's status registry has a valid PID to track. Server mode
+//     has no per-job exec'd process — the supervisor's child is the
+//     only OS process running the work, so reusing its PID across
+//     every job is the honest signal.
+//   - OnEvent fires for every queue.StreamEvent the BusEvent decoder
+//     produces (message_delta / tool_use / result), same taxonomy as
+//     ReadStreamJSONOpencode populates in spawn mode.
+//   - OnExit fires in a deferred closure with a synthetic exit code:
+//     0 on a clean answer, -1 when transport / request errors surface
+//     before Wait returns successfully. Bug A discrimination
+//     (finish=other + tokens.output=0) is plan Task 3.2-11 (Stage 3);
+//     promptResponse already carries those fields so the discriminator
+//     can lift in without altering this function's signature.
+//   - OTel span attributes mirror runOneSpawn's set (agent_type,
+//     duration_ms, stdout_len, exit_code) so Jaeger filters by
+//     `error=true` keep working across modes.
+//
+// Supervisor is owned by the worker's Runner; calling runOneServer
+// with r.supervisor == nil is a programming error (the dispatcher only
+// routes here when Mode == server, which is mutually exclusive with a
+// nil supervisor in production boot). A defensive guard surfaces an
+// explicit error rather than panicking on dereference.
+func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (output string, err error) {
+	if r.supervisor == nil {
+		return "", errors.New("opencode supervisor not initialized (runOneServer reached with nil supervisor — Runner construction bug)")
+	}
+
+	ctx, span := tracer.Start(ctx, tracing.SpanAgentExecute,
+		trace.WithAttributes(
+			attribute.String("agent_type", filepath.Base(agent.Command)),
+		),
 	)
-	return "", errors.New("opencode server mode not implemented yet (Stage 2+; flip opencode.mode to spawn or wait for Tasks 3.2-5..3.2-7)")
+	start := time.Now()
+	exitCode := -1
+	defer func() {
+		attrs := []attribute.KeyValue{
+			attribute.Int64("duration_ms", time.Since(start).Milliseconds()),
+			attribute.Int("stdout_len", len(output)),
+		}
+		if exitCode >= 0 {
+			attrs = append(attrs, attribute.Int("exit_code", exitCode))
+		}
+		span.SetAttributes(attrs...)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "agent run failed")
+		}
+		if opts.OnExit != nil {
+			opts.OnExit(exitCode)
+		}
+		span.End()
+	}()
+
+	timeout := agent.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	sup := r.supervisor
+	client := NewClient(sup.BaseURL(), sup.Password(), nil)
+
+	if opts.OnStarted != nil {
+		opts.OnStarted(sup.ChildPID(), agent.Command)
+	}
+	logger.Info("opencode server-mode session 啟動",
+		"phase", "處理中",
+		"command", agent.Command,
+		"supervisor_pid", sup.ChildPID(),
+		"base_url", sup.BaseURL(),
+	)
+
+	sessionID, err := client.CreateSession(ctx, workDir)
+	if err != nil {
+		return "", fmt.Errorf("create opencode session: %w", err)
+	}
+	logger.Info("opencode session 已建立",
+		"phase", "處理中",
+		"command", agent.Command,
+		"session_id", sessionID,
+	)
+
+	run, err := client.SendPrompt(ctx, sessionID, workDir, prompt)
+	if err != nil {
+		return "", fmt.Errorf("send opencode prompt: %w", err)
+	}
+
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for ev := range run.Events {
+			if opts.OnEvent != nil {
+				opts.OnEvent(ev)
+			}
+		}
+	}()
+
+	output, err = run.Wait()
+	<-drainDone
+
+	if err != nil {
+		return "", err
+	}
+	exitCode = 0
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		logger.Warn("opencode 答案為空",
+			"phase", "失敗",
+			"command", agent.Command,
+			"session_id", sessionID,
+		)
+	}
+	return trimmed, nil
 }

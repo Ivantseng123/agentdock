@@ -116,6 +116,31 @@ func Run(cfg *config.Config) error {
 			"detected", detected,
 			"required", agent.MinimumOpencodeVersion,
 		)
+
+		// Spawn the long-running `opencode serve` child. Always-on at
+		// Stage 2 (lazy lifecycle stays Task 3.2-8 / Stage 3). Worker
+		// pool's N goroutines share the single supervisor via per-
+		// request `x-opencode-directory` header isolation.
+		serverLogger := logging.ComponentLogger(slog.Default(), "OpencodeServer")
+		supervisor := agent.NewSupervisor(agent.SupervisorConfig{
+			BinaryPath: opencodeAgent.Command,
+			StorageDir: cfg.Opencode.StorageDir,
+			Logger:     serverLogger,
+		})
+		if err := supervisor.Start(context.Background()); err != nil {
+			return fmt.Errorf("start opencode supervisor: %w", err)
+		}
+		agentRunner.SetOpencodeSupervisor(supervisor)
+		defer func() {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stopCancel()
+			if err := supervisor.Stop(stopCtx); err != nil {
+				appLogger.Warn("opencode supervisor stop 失敗",
+					"phase", "失敗",
+					"error", err,
+				)
+			}
+		}()
 	}
 
 	secretKey, err := crypto.DecodeSecretKey(cfg.SecretKey)
