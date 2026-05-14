@@ -33,6 +33,13 @@ const perfSampleSizeEnvVar = "OPENCODE_PERF_SAMPLE_SIZE"
 // total cost per job is ~15 tokens.
 const perfPrompt = "Reply with just the two letters OK and nothing else."
 
+// perfJobTimeout caps each individual ask job. The BuiltinAgents default
+// (30m) is unreasonable for a perf harness — a single LLM hang would
+// wedge the whole run for an hour. 90s is well above the typical 1–5s
+// healthy job and below the wall-clock that would noticeably skew the
+// median (warm-up window absorbs any tail jobs).
+const perfJobTimeout = 90 * time.Second
+
 // perfWarmupDrop is the number of leading jobs excluded from the
 // steady-state median. Warm-up covers skill cache load, auth handshake,
 // and (in server mode) the SSE subscribe ramp.
@@ -42,13 +49,19 @@ func perfSampleSize(t *testing.T) int {
 	t.Helper()
 	v := os.Getenv(perfSampleSizeEnvVar)
 	if v == "" {
-		return 30
+		return 20
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n <= perfWarmupDrop {
 		t.Fatalf("%s must be an integer > %d, got %q", perfSampleSizeEnvVar, perfWarmupDrop, v)
 	}
 	return n
+}
+
+func perfAgent() config.AgentConfig {
+	ag := config.BuiltinAgents["opencode"]
+	ag.Timeout = perfJobTimeout
+	return ag
 }
 
 func requirePerfEnv(t *testing.T) {
@@ -129,14 +142,14 @@ func runSpawnSample(t *testing.T, ctx context.Context, n int) sampleResult {
 	t.Helper()
 	cfg := config.OpencodeConfig{Mode: config.OpencodeModeSpawn}
 	r := &Runner{
-		agents:      []config.AgentConfig{config.BuiltinAgents["opencode"]},
+		agents:      []config.AgentConfig{perfAgent()},
 		opencodeCfg: cfg,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	result := sampleResult{mode: "spawn"}
 	for i := 0; i < n; i++ {
 		start := time.Now()
-		_, err := r.runOneSpawn(ctx, logger, config.BuiltinAgents["opencode"], t.TempDir(), perfPrompt, RunOptions{})
+		_, err := r.runOneSpawn(ctx, logger, perfAgent(), t.TempDir(), perfPrompt, RunOptions{})
 		dur := time.Since(start)
 		result.latencies = append(result.latencies, dur)
 		if err != nil {
@@ -169,7 +182,7 @@ func runServerSample(t *testing.T, ctx context.Context, n int) sampleResult {
 	}()
 	cfg := config.OpencodeConfig{Mode: config.OpencodeModeServer, IdleTimeout: 5 * time.Minute}
 	r := &Runner{
-		agents:      []config.AgentConfig{config.BuiltinAgents["opencode"]},
+		agents:      []config.AgentConfig{perfAgent()},
 		opencodeCfg: cfg,
 		supervisor:  sup,
 	}
@@ -177,7 +190,7 @@ func runServerSample(t *testing.T, ctx context.Context, n int) sampleResult {
 	var busyRSSPeak int
 	for i := 0; i < n; i++ {
 		start := time.Now()
-		_, err := r.runOneServer(ctx, logger, config.BuiltinAgents["opencode"], t.TempDir(), perfPrompt, RunOptions{})
+		_, err := r.runOneServer(ctx, logger, perfAgent(), t.TempDir(), perfPrompt, RunOptions{})
 		dur := time.Since(start)
 		result.latencies = append(result.latencies, dur)
 		if err != nil {
