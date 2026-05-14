@@ -180,6 +180,45 @@ Resulting invocations:
 
 **Caveat:** `extra_args` is operator-supplied — the worker never injects flags for you. If you put `--dangerously-skip-permissions` in there, that's your call and your risk (the worker may be running on your laptop, not an isolated pod).
 
+## Opencode block (optional, opt-in)
+
+Phase 3.2 adds an opt-in `opencode` block that controls the execution model for the opencode subprocess. **Omit the entire block** to keep legacy spawn behavior — no setup needed.
+
+```yaml
+opencode:
+  mode: spawn         # spawn (default) | server
+  idle_timeout: 5m    # server mode only
+  storage_dir: ""     # server mode only; empty = runtime-resolved
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `mode` | string | `spawn` | `spawn` = legacy per-job process (`opencode run --pure ...`); `server` = one long-running `opencode serve` subprocess shared by the worker pool, per-job calls go through HTTP/SSE. |
+| `idle_timeout` | duration | `5m` | Server mode only. How long the `opencode serve` child stays alive after the pool quiesces (zero in-flight jobs) before auto-stop. Next job lazily respawns it. |
+| `storage_dir` | string | `""` | Server mode only. Isolated `XDG_DATA_HOME` for the `opencode serve` child. Empty = worker picks a per-worker dir at runtime (multi-worker host safety). |
+
+### Choosing `mode`
+
+- **`spawn` (default; recommended for production until spec C2 is satisfied)** — every job spawns a fresh `opencode run` process; identical to legacy behavior. No new footprint, no new failure mode. Stage 4 ships server-mode behind opt-in to gather production signal.
+- **`server` (opt-in)** — the worker pool shares one long-lived `opencode serve` subprocess; per-job work flows over HTTP + SSE. Cold-start overhead (skill cache, auth, binary load) amortizes across jobs, so steady-state per-job latency drops. Cost: higher idle memory (child stays warm until `idle_timeout`); server crashes go through retry-once (spec C4: no fallback to spawn).
+- **Default flip timeline** — spec C2: the default flips from `spawn` to `server` only after ≥2 weeks of zero answer-drop incidents in production. Until then `spawn` is the conservative default.
+
+### `idle_timeout` trade-off
+
+- Longer (e.g. `15m`) — short idle windows don't trigger respawn, so the next thunder of jobs gets immediate response; cost is sustained memory footprint.
+- Shorter (e.g. `30s`) — more aggressive memory reclaim; cost is a +5s class first-job latency on respawn (spec N2 budget).
+- Default `5m` balances warm-pool readiness against idle reclaim.
+
+### `storage_dir` notes
+
+`opencode serve` writes its session DB, log, and cache under `XDG_DATA_HOME`. On laptop deployments the worker MUST isolate this from the operator's own `~/.opencode` (spec § Boundaries Never: never contaminate the user's opencode state). Empty string = worker picks a unique per-worker dir at runtime. Set an explicit path only when you need a specific mount point; if you do, never share the same `storage_dir` between two workers on the same host.
+
+### Known limitations
+
+- **Binary swap does not retrigger version check** — `opencode -v` is checked once at worker boot. If the operator replaces the binary while a worker is alive (e.g. upgrading `~/.opencode/bin/opencode`), the new version is **not** re-validated; the existing worker keeps running with whatever it observed at boot until the next restart. Immutable pod images don't hit this; laptop deployments own the risk.
+- **No server → spawn auto-fallback** — server mode failures fail loud; the worker does NOT silently fall back to spawn (spec C4). Server crashes recover via retry-once with a fresh subprocess (Stage 3 §F4); two consecutive failures within a single job hard-fail.
+- **Recommended monitoring during C2** — when running with `mode: server`, watch worker logs for the `OpencodeServer` component. If Bug A detection trips (`LLM 回應為空`) or the `crashed` state recurs, fall back to `mode: spawn` first, then diagnose.
+
 ## Agent streaming
 
 Claude supports `--output-format stream-json`. With `stream: true`, the worker tracks:
