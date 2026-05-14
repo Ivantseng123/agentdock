@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -112,9 +113,17 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 	defer cancel()
 
 	sup := r.supervisor
+	// onStartedFired tracks whether OnStarted has been delivered to
+	// the pool's status registry. Cross-review pr finding: the older
+	// `attempt == 0` gate skipped OnStarted when attempt 0 failed
+	// recoverably and attempt 1 succeeded, leaving status reporting /
+	// the kill registry without a PID for the job. Track the flip
+	// across attempts so the first SUCCESSFUL Acquire fires OnStarted,
+	// not the first ATTEMPT.
+	onStartedFired := &atomic.Bool{}
 	const maxAttempts = 2
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		attemptOutput, attemptErr := r.runOneServerAttempt(ctx, logger, sup, agent, workDir, prompt, opts, attempt)
+		attemptOutput, attemptErr := r.runOneServerAttempt(ctx, logger, sup, agent, workDir, prompt, opts, attempt, onStartedFired)
 		if attemptErr == nil {
 			exitCode = 0
 			return attemptOutput, nil
@@ -154,7 +163,7 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 // spawn on retry (Stage 3 Task 3.2-9 spec line "fresh session against
 // the recovered server"). Returns the trimmed assistant text or a
 // transport / request error that the outer retry loop classifies.
-func (r *Runner) runOneServerAttempt(ctx context.Context, logger *slog.Logger, sup *Supervisor, agent config.AgentConfig, workDir, prompt string, opts RunOptions, attempt int) (string, error) {
+func (r *Runner) runOneServerAttempt(ctx context.Context, logger *slog.Logger, sup *Supervisor, agent config.AgentConfig, workDir, prompt string, opts RunOptions, attempt int, onStartedFired *atomic.Bool) (string, error) {
 	if err := sup.Acquire(ctx); err != nil {
 		return "", fmt.Errorf("acquire opencode supervisor: %w", err)
 	}
@@ -162,11 +171,12 @@ func (r *Runner) runOneServerAttempt(ctx context.Context, logger *slog.Logger, s
 
 	client := NewClient(sup.BaseURL(), sup.Password(), nil)
 
-	// OnStarted fires only on attempt 0 — the pool status registry
-	// records one PID per job, and refiring on retry with the same
-	// supervisor PID would overwrite with identical data and noise
-	// the lifecycle log.
-	if opts.OnStarted != nil && attempt == 0 {
+	// OnStarted fires once per runOneServer call, at the first
+	// successful Acquire. CompareAndSwap so the second attempt's
+	// Acquire-after-retry still fires it if attempt 0's Acquire
+	// failed before this point (the pool's status registry needs
+	// a PID; missing one means /kill can't find the job).
+	if opts.OnStarted != nil && onStartedFired != nil && onStartedFired.CompareAndSwap(false, true) {
 		opts.OnStarted(sup.ChildPID(), agent.Command)
 	}
 	logger.Info("opencode server-mode session 啟動",
@@ -309,11 +319,12 @@ func isRecoverableSupervisorCrash(err error, sup *Supervisor) bool {
 	if strings.Contains(msg, "connection refused") {
 		return true
 	}
-	if strings.Contains(msg, "EOF") {
-		// Covers `EOF` and `unexpected EOF` from POSTs that lose the
-		// connection mid-stream (Go HTTP client wraps with "Post url:
-		// EOF"). Pairs with errors.Is checks above for the cases
-		// where the error chain preserves the typed sentinel.
+	if strings.Contains(msg, ": EOF") || strings.Contains(msg, "unexpected EOF") {
+		// Anchored matches: Go's HTTP client wraps post-EOF as
+		// `Post "url": EOF`, scanner errors as `... unexpected EOF`.
+		// The leading `: ` and `unexpected ` anchors avoid false
+		// positives like a future "session reached EOF state" message
+		// (cross-review pr finding).
 		return true
 	}
 	if strings.Contains(msg, "broken pipe") {

@@ -514,6 +514,65 @@ func TestSupervisor_Drain_AbortsActiveSessions(t *testing.T) {
 	}
 }
 
+// TestSupervisor_Drain_DuringSpawn verifies the cross-review pr fix
+// for the Drain-vs-Acquire race. Acquire enters stateStarting and
+// blocks inside spawn (the fake binary sleeps before printing the
+// listen URL). Drain fires while state is still stateStarting; per
+// the fix, Drain waits for spawn to settle and the spawn-completion
+// path in Acquire detects shuttingDown and tears the new child down
+// before transitioning to running.
+func TestSupervisor_Drain_DuringSpawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "opencode")
+	// Delay the listen URL by 500ms so Drain races into stateStarting.
+	script := fmt.Sprintf("#!/bin/sh\nsleep 0.5\necho \"opencode server listening on %s\"\nexec sleep 600\n", srv.URL)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write delayed fake binary: %v", err)
+	}
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: bin})
+
+	acquireErrCh := make(chan error, 1)
+	go func() {
+		acquireErrCh <- sup.Acquire(context.Background())
+	}()
+
+	// Let Acquire enter stateStarting and cmd.Start the child.
+	time.Sleep(100 * time.Millisecond)
+	if sup.State() != stateStarting {
+		t.Fatalf("supervisor state = %s, want starting (test timing race)", sup.State())
+	}
+
+	drainErr := sup.Drain(context.Background())
+	if drainErr != nil {
+		t.Errorf("Drain returned error: %v", drainErr)
+	}
+
+	select {
+	case acquireErr := <-acquireErrCh:
+		if acquireErr == nil {
+			t.Error("Acquire racing Drain should have errored")
+		}
+		if acquireErr != nil && !strings.Contains(acquireErr.Error(), "shutting down") {
+			t.Errorf("Acquire error = %v, want substring 'shutting down'", acquireErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Acquire did not return within 5s after Drain")
+	}
+
+	if sup.State() != stateIdle {
+		t.Errorf("post-Drain state = %s, want idle", sup.State())
+	}
+	if sup.ChildPID() != 0 {
+		t.Errorf("post-Drain ChildPID = %d, want 0 (child cleaned up)", sup.ChildPID())
+	}
+}
+
 func TestSupervisor_KillChildFlipsToCrashed_ThenRespawn(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh script not supported on windows")
@@ -571,15 +630,20 @@ func TestSupervisor_KillChildFlipsToCrashed_ThenRespawn(t *testing.T) {
 	sup.Release()
 }
 
-// TestSupervisor_MultiInstancePortIsolation verifies that N supervisors
+// TestSupervisor_MultiInstanceWiring verifies that N supervisors
 // started concurrently in the same process each get distinct listen
-// URLs and each /health probe succeeds. Stage 3 Task 3.2-12. The real
-// kernel-assigned port behavior comes from `opencode serve --port 0`;
-// fake binaries point at independent httptest servers (each on its own
-// kernel-assigned port via httptest.NewServer), which is the local
-// stand-in. Successful Start implies /health returned green for that
-// supervisor — Start blocks on the probe before returning nil.
-func TestSupervisor_MultiInstancePortIsolation(t *testing.T) {
+// URLs and each /health probe succeeds. Stage 3 Task 3.2-12.
+//
+// This is *not* a real kernel-port-collision stress test — the fake
+// binaries each point at their own httptest server (which already gets
+// a kernel-assigned port), so the per-instance URL distinction is a
+// foregone conclusion. What this test actually pins down is the
+// supervisor's per-instance wiring (BaseURL/Password/state) under
+// concurrent Start. The real `opencode serve --port 0` kernel-port
+// allocation lives in opencode itself and is out of scope for unit
+// tests; Manifest §1.7 and spec §F6 explicitly delegate collision
+// safety to the kernel.
+func TestSupervisor_MultiInstanceWiring(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh script not supported on windows")
 	}

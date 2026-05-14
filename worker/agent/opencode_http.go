@@ -330,9 +330,11 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 				// well above realistic per-job event counts; default
 				// case is paranoia for the impossible-in-practice case
 				// where drainer has stopped reading but channel isn't
-				// closed yet. Drop is acceptable — POST response also
-				// carries `tokens.output`, so cost data isn't unique
-				// to this event.
+				// closed yet. Token data is recoverable from the POST
+				// response; cost is uniquely emitted in this event and
+				// would be lost on the drop path. Acceptable trade-off:
+				// the drainer-stopped scenario implies the job is
+				// already failing somewhere else.
 			}
 		}
 		defer close(events)
@@ -362,10 +364,13 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 				hasStepFinish = true
 				continue
 			}
-			// Track that at least one text part landed via SSE; Stage 3
+			// Track that a non-empty text part landed via SSE; Stage 3
 			// Task 3.2-11's Bug A detector AND-gates on the absence of
-			// any text part as one of its three conditions.
-			if ev.Type == "message_delta" && sawText != nil {
+			// any *meaningful* text part. Empty-text deltas (TextBytes
+			// == 0) don't disqualify Bug A — opencode occasionally
+			// emits zero-byte text updates that carry no answer
+			// payload (cross-review pr finding).
+			if ev.Type == "message_delta" && ev.TextBytes > 0 && sawText != nil {
 				sawText.Store(true)
 			}
 			select {

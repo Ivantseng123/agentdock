@@ -27,14 +27,14 @@ import (
 // boot path uses Acquire/Release instead.
 
 const (
-	supervisorStartTimeout   = 10 * time.Second
-	supervisorStopGrace      = 5 * time.Second
-	supervisorHealthInterval = 200 * time.Millisecond
-	supervisorHealthRequest  = 2 * time.Second
-	supervisorStopTimeout    = 10 * time.Second
-	supervisorDrainBudget    = 30 * time.Second
-	supervisorAbortRequest   = 5 * time.Second
-	supervisorAuthUsername   = "opencode"
+	supervisorStartTimeout       = 10 * time.Second
+	supervisorStopGrace          = 5 * time.Second
+	supervisorHealthInterval     = 200 * time.Millisecond
+	supervisorHealthRequest      = 2 * time.Second
+	supervisorDrainBudget        = 30 * time.Second
+	supervisorDrainSettleBudget  = 10 * time.Second
+	supervisorAbortRequest       = 5 * time.Second
+	supervisorAuthUsername       = "opencode"
 )
 
 // supervisorListenLine matches opencode serve's startup line printed
@@ -119,8 +119,11 @@ type Supervisor struct {
 	// failure). Stage 3 Acquire coalesces concurrent first-job goroutines
 	// onto this channel rather than spinning a sync.Cond — channel close
 	// is broadcast-safe and composes with ctx.Done in a select.
+	// On spawn failure waiters re-check state under the lock and may
+	// retry spawn themselves; deliberate, since the failure could be
+	// transient (e.g. fake-binary-misconfigured-then-corrected) and
+	// caching the error here would block legitimate retry.
 	spawnReady chan struct{}
-	spawnErr   error
 	// activeSessions tracks the in-flight session IDs so Drain can issue
 	// POST /session/{id}/abort to each. Maintained by SetActiveSession /
 	// ClearActiveSession from runOneServer once a session is created.
@@ -178,7 +181,6 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.mu.Lock()
 	if err != nil {
 		s.state = stateIdle
-		s.spawnErr = err
 		close(s.spawnReady)
 		s.mu.Unlock()
 		return err
@@ -258,11 +260,31 @@ func (s *Supervisor) Acquire(ctx context.Context) error {
 			s.mu.Lock()
 			if err != nil {
 				s.state = stateIdle
-				s.spawnErr = err
 				close(s.spawnReady)
 				s.spawnReady = nil
 				s.mu.Unlock()
 				return err
+			}
+			// Drain may have flipped shuttingDown while spawn was
+			// running. If so, the spawn-completion path owns the
+			// teardown — Drain's `state == stateStarting` wait
+			// observes our spawnReady close, but Drain itself never
+			// learns about the child unless we hand it off. Tear
+			// it down inline rather than transitioning to running.
+			if s.shuttingDown {
+				cancelRun := s.cancel
+				exitCh := s.exitCh
+				pid := s.pid
+				s.state = stateStopping
+				readyCh := s.spawnReady
+				s.mu.Unlock()
+				_ = s.internalStop(context.Background(), cancelRun, exitCh, pid)
+				s.mu.Lock()
+				s.state = stateIdle
+				close(readyCh)
+				s.spawnReady = nil
+				s.mu.Unlock()
+				return errors.New("supervisor shutting down (spawn raced with drain)")
 			}
 			s.state = stateRunning
 			s.activeCount++
@@ -417,6 +439,29 @@ func (s *Supervisor) Drain(ctx context.Context) error {
 		s.idleTimer.Stop()
 		s.idleTimer = nil
 	}
+	// Wait out transient states (starting / stopping). shuttingDown
+	// latch above tells the Acquire spawn-completion path to tear its
+	// new child down rather than transition to running; idle stop in
+	// flight just runs to completion. After this loop state is one of
+	// {idle, running, crashed} — no orphan-child risk.
+	for s.state == stateStarting || s.state == stateStopping {
+		readyCh := s.spawnReady
+		s.mu.Unlock()
+		if readyCh == nil {
+			select {
+			case <-time.After(50 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		} else {
+			select {
+			case <-readyCh:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		s.mu.Lock()
+	}
 	if s.state != stateRunning {
 		s.mu.Unlock()
 		return nil
@@ -444,6 +489,12 @@ func (s *Supervisor) Drain(ctx context.Context) error {
 			)
 		}
 		drainErr = s.abortSessions(ctx, baseURL, password, sessions)
+
+		// Wait for in-flight runOneServer attempts to observe the
+		// abort and clear their session slots. Capped at
+		// supervisorDrainSettleBudget; on timeout we proceed to
+		// SIGTERM anyway and the warn surfaces stragglers.
+		s.waitActiveSessionsCleared(ctx)
 	}
 
 	stopErr := s.internalStop(ctx, cancelRun, exitCh, pid)
@@ -458,6 +509,40 @@ func (s *Supervisor) Drain(ctx context.Context) error {
 		return drainErr
 	}
 	return stopErr
+}
+
+// waitActiveSessionsCleared spins up to supervisorDrainSettleBudget
+// polling for the activeSessions map to empty. Bound is intentionally
+// shorter than the abort budget — POST aborts already had their own
+// 30s window; this is just letting the in-flight runOneServer
+// goroutines unwind their defers (ClearActiveSession + Release). On
+// timeout we proceed to SIGTERM; the warn log surfaces remaining
+// session IDs so an operator can correlate.
+func (s *Supervisor) waitActiveSessionsCleared(ctx context.Context) {
+	settleCtx, cancel := context.WithTimeout(ctx, supervisorDrainSettleBudget)
+	defer cancel()
+	for {
+		s.mu.Lock()
+		remaining := len(s.activeSessions)
+		s.mu.Unlock()
+		if remaining == 0 {
+			return
+		}
+		select {
+		case <-settleCtx.Done():
+			s.mu.Lock()
+			remaining = len(s.activeSessions)
+			s.mu.Unlock()
+			if s.cfg.Logger != nil && remaining > 0 {
+				s.cfg.Logger.Warn("opencode supervisor drain settle 超時，仍有 in-flight session",
+					"phase", "處理中",
+					"remaining", remaining,
+				)
+			}
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // abortSessions POSTs /session/{id}/abort for each active session, in

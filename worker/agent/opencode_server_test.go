@@ -286,6 +286,83 @@ func TestRunOneServer_RetryOnce_RecoversFromTransportError(t *testing.T) {
 	}
 }
 
+// TestRunOneServer_OnStarted_FiresOnFirstSuccessfulAcquire verifies
+// the cross-review pr fix for OnStarted on retry-once. Older code
+// gated OnStarted on `attempt == 0`, which skipped firing when
+// attempt 0 failed recoverably and attempt 1 succeeded — leaving the
+// pool's status registry without a PID for the job. Fix: track the
+// fire flag across attempts; first SUCCESSFUL Acquire fires it.
+func TestRunOneServer_OnStarted_FiresOnFirstSuccessfulAcquire(t *testing.T) {
+	var (
+		sessionCalls atomic.Int32
+		onStartedHit atomic.Int32
+		gotPID       atomic.Int64
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != supervisorAuthUsername || p != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			n := sessionCalls.Add(1)
+			if n == 1 {
+				// Attempt 0: hijack to simulate transport failure.
+				hj, _ := w.(http.Hijacker)
+				conn, _, _ := hj.Hijack()
+				_ = conn.Close()
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"id":"ses_retry_onstart"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			writeSSELines(w, r, []string{
+				`{"id":"e1","type":"message.part.updated","properties":{"part":{"type":"text","text":"ok"}}}`,
+			})
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/session/") && strings.HasSuffix(r.URL.Path, "/message"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"info":{"finish":"stop","tokens":{"input":1,"output":2}},"parts":[{"type":"text","text":"answer"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	sup := primedSupervisor(srv.URL, "secret", 12321)
+	r := &Runner{
+		opencodeCfg: config.OpencodeConfig{Mode: config.OpencodeModeServer},
+		supervisor:  sup,
+	}
+
+	output, err := r.runOneServer(
+		context.Background(),
+		slog.Default(),
+		config.AgentConfig{Command: "opencode"},
+		"/tmp/work",
+		"prompt",
+		RunOptions{
+			OnStarted: func(pid int, command string) {
+				onStartedHit.Add(1)
+				gotPID.Store(int64(pid))
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("runOneServer (retry expected to succeed): %v", err)
+	}
+	if output != "answer" {
+		t.Errorf("output = %q, want %q", output, "answer")
+	}
+	if got := onStartedHit.Load(); got != 1 {
+		t.Errorf("OnStarted call count = %d, want exactly 1 (first successful Acquire)", got)
+	}
+	if got := gotPID.Load(); got != 12321 {
+		t.Errorf("OnStarted PID = %d, want 12321", got)
+	}
+}
+
 // TestRunOneServer_RetryOnce_SecondFailureSurfaces verifies the hard-
 // fail behavior: both attempts hit transport failures, retry-once does
 // NOT escalate to a third attempt, and the second attempt's error is
