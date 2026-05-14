@@ -57,7 +57,9 @@ func TestRunOneServer_HappyPath_FiresAllCallbacks(t *testing.T) {
 		sseEvents: []string{
 			`{"id":"e1","type":"server.connected","properties":{}}`,
 			`{"id":"e2","type":"message.part.updated","properties":{"part":{"type":"text","text":"hi"}}}`,
-			`{"id":"e3","type":"message.part.updated","properties":{"part":{"type":"tool","tool":"read","state":{"input":{"file_path":"/etc/hosts"}}}}}`,
+			`{"id":"e3a","type":"message.part.updated","properties":{"part":{"type":"tool","tool":"read","state":{"status":"pending"}}}}`,
+			`{"id":"e3b","type":"message.part.updated","properties":{"part":{"type":"tool","tool":"read","state":{"status":"running","input":{"file_path":"/etc/hosts"}}}}}`,
+			`{"id":"e3c","type":"message.part.updated","properties":{"part":{"type":"tool","tool":"read","state":{"status":"completed","input":{"file_path":"/etc/hosts"}}}}}`,
 			`{"id":"e4","type":"message.part.updated","properties":{"part":{"type":"step-finish","tokens":{"input":2,"output":3},"cost":0.0005}}}`,
 		},
 	})
@@ -206,6 +208,69 @@ func TestRunOneServer_POSTMessageError_OnExitMinusOne(t *testing.T) {
 	}
 	if exitCode.Load() != -1 {
 		t.Errorf("OnExit code = %d, want -1", exitCode.Load())
+	}
+}
+
+// TestRunOneServer_SSECloseEarly_POSTAuthoritative verifies the M1
+// fix at the runOneServer layer: SSE close before POST completes
+// must NOT abort the job — runOneServer logs the SSE error at warn
+// level and lets POST be authoritative. End user gets their answer.
+func TestRunOneServer_SSECloseEarly_POSTAuthoritative(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); !ok || u != supervisorAuthUsername || p != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"id":"ses_sse_drops"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			// Send connect event then close immediately
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			flusher, _ := w.(http.Flusher)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", `{"id":"e1","type":"server.connected","properties":{}}`)
+			if flusher != nil {
+				flusher.Flush()
+			}
+			// handler returns → stream closes
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/session/") && strings.HasSuffix(r.URL.Path, "/message"):
+			// POST returns successfully even though SSE has closed
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"info":{"finish":"stop","tokens":{"output":2}},"parts":[{"type":"text","text":"survives SSE close"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	sup := primedSupervisor(srv.URL, "secret", 33333)
+	r := &Runner{
+		opencodeCfg: config.OpencodeConfig{Mode: config.OpencodeModeServer},
+		supervisor:  sup,
+	}
+	var exitCode atomic.Int64
+	exitCode.Store(-99)
+	output, err := r.runOneServer(
+		context.Background(),
+		slog.Default(),
+		config.AgentConfig{Command: "opencode"},
+		"/tmp/work",
+		"prompt",
+		RunOptions{
+			OnExit: func(code int) { exitCode.Store(int64(code)) },
+		},
+	)
+	if err != nil {
+		t.Fatalf("runOneServer should succeed despite SSE close: %v", err)
+	}
+	if output != "survives SSE close" {
+		t.Errorf("output = %q, want %q (POST is authoritative)", output, "survives SSE close")
+	}
+	if exitCode.Load() != 0 {
+		t.Errorf("OnExit code = %d, want 0", exitCode.Load())
 	}
 }
 

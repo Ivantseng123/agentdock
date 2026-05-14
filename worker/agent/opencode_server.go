@@ -69,9 +69,17 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 			attrs = append(attrs, attribute.Int("exit_code", exitCode))
 		}
 		span.SetAttributes(attrs...)
+		// Span status parity with runOneSpawn (cross-review M4): mark
+		// span as Error not only on Go err but also when exitCode > 0
+		// with nil err. Stage 2 only emits exitCode ∈ {-1, 0}, so the
+		// second branch is currently unreachable; Stage 3 Task 3.2-11's
+		// Bug A detector will emit positive exit codes, and Jaeger
+		// filters by `error=true` need this branch to keep working.
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "agent run failed")
+		} else if exitCode > 0 {
+			span.SetStatus(codes.Error, fmt.Sprintf("agent exited %d", exitCode))
 		}
 		if opts.OnExit != nil {
 			opts.OnExit(exitCode)
@@ -117,9 +125,30 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 	drainDone := make(chan struct{})
 	go func() {
 		defer close(drainDone)
-		for ev := range run.Events {
-			if opts.OnEvent != nil {
-				opts.OnEvent(ev)
+		for {
+			select {
+			case ev, ok := <-run.Events:
+				if !ok {
+					return
+				}
+				if opts.OnEvent != nil {
+					opts.OnEvent(ev)
+				}
+			case sseErr, ok := <-run.SSEErrors:
+				if !ok {
+					continue
+				}
+				// SSE is telemetry only — POST is authoritative. Warn
+				// the operator so an SSE disruption (proxy disconnect,
+				// floor+1 upstream regression, etc.) is correlatable
+				// with downstream behavior, but never abort the job
+				// (cross-review M1 fix).
+				logger.Warn("opencode SSE 中斷",
+					"phase", "處理中",
+					"command", agent.Command,
+					"session_id", sessionID,
+					"error", sseErr,
+				)
 			}
 		}
 	}()

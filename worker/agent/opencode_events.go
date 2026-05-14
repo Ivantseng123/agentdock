@@ -38,12 +38,21 @@ type opencodeBusEventEnvelope struct {
 // `text` (final assistant answer), `tool` (tool_use events), and
 // `step-finish` (token counters + cost). `reasoning` and `step-start`
 // are recognized but produce no event.
+//
+// State.Status is required to gate `tool` part emission: opencode
+// upstream emits `message.part.updated` for `pending` → `running` →
+// `completed` (or `error`) transitions of the same tool call. We
+// follow opencode/src/cli/cmd/run.ts:623's gate and only emit a
+// downstream `tool_use` event on the terminal `completed`/`error`
+// status, so Slack counters reflect one event per tool call instead
+// of three.
 type opencodeAssistantPart struct {
-	Type   string `json:"type"`
-	Text   string `json:"text,omitempty"`
-	Tool   string `json:"tool,omitempty"`
-	State  *struct {
-		Input map[string]any `json:"input"`
+	Type  string `json:"type"`
+	Text  string `json:"text,omitempty"`
+	Tool  string `json:"tool,omitempty"`
+	State *struct {
+		Status string         `json:"status,omitempty"`
+		Input  map[string]any `json:"input,omitempty"`
 	} `json:"state,omitempty"`
 	Tokens *struct {
 		Input  int `json:"input"`
@@ -67,26 +76,33 @@ type opencodeMessagePartUpdated struct {
 // decodeOpencodeBusEvent translates one raw BusEvent JSON line into a
 // `queue.StreamEvent`. Returns (ev, true, nil) when the event maps to a
 // downstream-visible signal; (zero, false, nil) when the event is a
-// no-op (heartbeats, recognized-but-irrelevant types); error only on
-// JSON-shape failures.
+// no-op (heartbeats, intermediate tool states, recognized-but-irrelevant
+// types); error only on JSON-shape failures.
 //
 // Mapping mirrors `ReadStreamJSONOpencode`'s taxonomy so consumers can
 // stay parser-agnostic:
 //
 //   - server.connected, server.heartbeat, message.updated,
-//     session.status, session.error → no-op for Stage 2 happy path.
+//     session.status, message.part.delta → no-op.
+//   - session.error → emit `error` event so Stage 3 Task 3.2-9 / 3.2-11
+//     can read it for retry / failure classification without re-touching
+//     the decoder. Stage 2 happy path treats `error` as informational
+//     (POST response is still the authoritative completion signal).
 //   - message.part.updated + part.type=text → message_delta (TextBytes
 //     = len(text)). Mirrors the per-delta event ReadStreamJSONOpencode
 //     emits for each `text` NDJSON line.
-//   - message.part.updated + part.type=tool → tool_use, with ToolName
-//     pulled from part.tool and ToolInputFirstArg from part.state.input
-//     using the same priority order as extractFirstArg in
-//     shared/queue/stream.go.
+//   - message.part.updated + part.type=tool → tool_use, **only when
+//     part.state.status ∈ {completed, error}**. Intermediate pending /
+//     running updates are dropped so a single tool call yields exactly
+//     one downstream tool_use (matching opencode run.ts:623). Without
+//     this gate, Slack's status display inflates `toolCalls` /
+//     `filesRead` ~3x per tool call.
 //   - message.part.updated + part.type=step-finish → result, carrying
-//     part.tokens and part.cost. (ReadStreamJSONOpencode synthesizes a
-//     terminal result event after the scanner closes; the BusEvent
-//     stream emits one per step. Both shapes downstream-equivalent
-//     for Slack render's cost / token totals.)
+//     part.tokens and part.cost. Server emits one of these per step;
+//     the SSE consumer in opencode_http.go accumulates them and emits
+//     ONE terminal `result` event at stream end so downstream
+//     `worker/pool/status.go` (which OVERWRITES on `result`) records
+//     cumulative tokens, not just the last step's.
 //
 // Bug A detection (Task 3.2-11) will examine `finish=other` +
 // `tokens.output=0` on the POST /session/{id}/message response, not on
@@ -98,9 +114,16 @@ func decodeOpencodeBusEvent(raw []byte) (queue.StreamEvent, bool, error) {
 	}
 	switch env.Type {
 	case "server.connected", "server.heartbeat",
-		"message.updated", "session.status", "session.error",
+		"message.updated", "session.status",
 		"message.part.delta":
 		return queue.StreamEvent{}, false, nil
+	case "session.error":
+		// Surface upstream errors as a typed event so Stage 3's
+		// retry / Bug A classifier can see them. Stage 2 happy path
+		// doesn't act on this beyond letting it ride to downstream
+		// consumers (which currently ignore unknown event types,
+		// matching spawn-mode's behavior on the same upstream noise).
+		return queue.StreamEvent{Type: "error"}, true, nil
 	case "message.part.updated":
 		var updated opencodeMessagePartUpdated
 		if err := json.Unmarshal(env.Properties, &updated); err != nil {
@@ -121,14 +144,19 @@ func mapOpencodePart(part opencodeAssistantPart) (queue.StreamEvent, bool) {
 			TextBytes: len(part.Text),
 		}, true
 	case "tool":
-		var input map[string]any
-		if part.State != nil {
-			input = part.State.Input
+		// Gate on terminal status only (opencode run.ts:623). Pending /
+		// running intermediates yield empty input + would inflate
+		// downstream counters 3x.
+		if part.State == nil {
+			return queue.StreamEvent{}, false
+		}
+		if part.State.Status != "completed" && part.State.Status != "error" {
+			return queue.StreamEvent{}, false
 		}
 		return queue.StreamEvent{
 			Type:              "tool_use",
 			ToolName:          titleCaseFirstASCII(part.Tool),
-			ToolInputFirstArg: firstArgFromInput(input),
+			ToolInputFirstArg: firstArgFromInput(part.State.Input),
 		}, true
 	case "step-finish":
 		event := queue.StreamEvent{

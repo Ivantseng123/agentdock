@@ -117,11 +117,19 @@ func (c *Client) CreateSession(ctx context.Context, directory string) (string, e
 // queue.StreamEvent via decodeOpencodeBusEvent, and a POST worker that
 // blocks until the server returns the final AssistantMessage. Caller
 // must call Wait or Close before discarding the run.
+//
+// SSEErrors carries non-fatal SSE-side errors (transport disconnects,
+// scanner failures). Wait does NOT short-circuit on these — POST is
+// the authoritative completion signal per spec line 92. Callers
+// (runOneServer) should drain SSEErrors at warn level so operators
+// can correlate SSE disruption with downstream issues without aborting
+// otherwise-successful POST requests. (Cross-review M1 fix: SSE close
+// alone must not fail a job whose POST is still computing.)
 type PromptRun struct {
-	Events <-chan queue.StreamEvent
+	Events    <-chan queue.StreamEvent
+	SSEErrors <-chan error
 
 	cancel       context.CancelFunc
-	sseErrCh     <-chan error
 	responseCh   <-chan promptResponse
 	closeOnce    sync.Once
 	closedSignal chan struct{}
@@ -135,10 +143,11 @@ type promptResponse struct {
 }
 
 // Wait blocks until the POST /session/{id}/message request completes,
-// returning the assembled final assistant text on success. If the SSE
-// stream errors first (e.g. transport close, /event 4xx) Wait surfaces
-// that error instead. Wait always cancels both goroutines on return —
-// callers do not need to defer Close after a successful Wait.
+// returning the assembled final assistant text on success. POST is
+// authoritative; SSE-side errors do not abort Wait — they surface via
+// PromptRun.SSEErrors so the caller can log them without failing the
+// request. Wait always cancels both goroutines on return; callers do
+// not need to defer Close after a successful Wait.
 //
 // Bug A detection (Task 3.2-11) will read `finish` and `tokensOut` on
 // the same response; Stage 2 only exposes `finalText` + transport
@@ -146,21 +155,20 @@ type promptResponse struct {
 // can lift the discriminator in without expanding this signature.
 func (r *PromptRun) Wait() (string, error) {
 	defer r.Close()
-	select {
-	case resp, ok := <-r.responseCh:
-		if !ok {
-			return "", errors.New("opencode prompt response channel closed before sending")
-		}
-		if resp.err != nil {
-			return "", resp.err
-		}
-		return resp.finalText, nil
-	case sseErr := <-r.sseErrCh:
-		return "", fmt.Errorf("opencode /event SSE: %w", sseErr)
+	resp, ok := <-r.responseCh
+	if !ok {
+		return "", errors.New("opencode prompt response channel closed before sending")
 	}
+	if resp.err != nil {
+		return "", resp.err
+	}
+	return resp.finalText, nil
 }
 
-// Close cancels both goroutines and waits for them to exit. Idempotent.
+// Close cancels both goroutines but does NOT block waiting for their
+// exit. Callers that need synchronous teardown should call Wait first,
+// which drains responseCh and the deferred Close runs after.
+// Idempotent — safe to call multiple times.
 func (r *PromptRun) Close() {
 	r.cancel()
 	r.cleanup()
@@ -205,8 +213,8 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID, directory, prompt st
 
 	return &PromptRun{
 		Events:       events,
+		SSEErrors:    sseErrCh,
 		cancel:       cancel,
-		sseErrCh:     sseErrCh,
 		responseCh:   responseCh,
 		closedSignal: closedSignal,
 	}, nil
@@ -214,8 +222,19 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID, directory, prompt st
 
 // subscribeEvents fires GET /event, drains SSE lines on a goroutine,
 // strips the `data: ` prefix and pushes decoded events to `events`.
-// Recoverable signals (heartbeats, unmapped event types) silently
-// dropped. Errors surface via sseErrCh.
+// Recoverable signals (heartbeats, intermediate tool states) silently
+// dropped. Per-step `result` events are accumulated internally and
+// surfaced as ONE cumulative terminal `result` event on goroutine
+// exit, so worker/pool/status.go's overwrite-on-result semantics
+// record full-job tokens / cost instead of just the last step
+// (cross-review M3 fix).
+//
+// SSE-side errors (scanner failures, decode errors, premature stream
+// close) are reported through sseErrCh as informational — POST is the
+// authoritative completion signal and PromptRun.Wait does not short-
+// circuit on these (cross-review M1 fix). Callers (runOneServer)
+// should log them at warn level so an operator can correlate SSE
+// disruption with downstream behavior.
 func (c *Client) subscribeEvents(ctx context.Context, directory string, events chan<- queue.StreamEvent, sseErrCh chan<- error) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/event", nil)
 	if err != nil {
@@ -236,8 +255,39 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 	}
 
 	go func() {
+		var (
+			cumInputTokens  int
+			cumOutputTokens int
+			cumCostUSD      float64
+			hasStepFinish   bool
+			sentTerminal    bool
+		)
+		emitTerminal := func() {
+			if sentTerminal || !hasStepFinish {
+				return
+			}
+			sentTerminal = true
+			select {
+			case events <- queue.StreamEvent{
+				Type:         "result",
+				InputTokens:  cumInputTokens,
+				OutputTokens: cumOutputTokens,
+				CostUSD:      cumCostUSD,
+			}:
+			default:
+				// events buffer (clientEventChannelSize=256) is sized
+				// well above realistic per-job event counts; default
+				// case is paranoia for the impossible-in-practice case
+				// where drainer has stopped reading but channel isn't
+				// closed yet. Drop is acceptable — POST response also
+				// carries `tokens.output`, so cost data isn't unique
+				// to this event.
+			}
+		}
 		defer close(events)
 		defer resp.Body.Close()
+		defer emitTerminal()
+
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 		for scanner.Scan() {
@@ -254,6 +304,13 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 			if !ok {
 				continue
 			}
+			if ev.Type == "result" {
+				cumInputTokens += ev.InputTokens
+				cumOutputTokens += ev.OutputTokens
+				cumCostUSD += ev.CostUSD
+				hasStepFinish = true
+				continue
+			}
 			select {
 			case events <- ev:
 			case <-ctx.Done():
@@ -264,10 +321,17 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 			trySendErr(sseErrCh, fmt.Errorf("scan SSE stream: %w", err))
 			return
 		}
-		if ctx.Err() != nil {
-			return
+		// SSE close without ctx cancellation: surface as informational
+		// SSE error. Wait() does NOT abort on these; runOneServer logs
+		// them at warn level. Floor-version (1.14.41) keeps SSE open
+		// for the duration of the prompt, so seeing this in practice
+		// indicates either a proxy/middlebox disconnect, a worker
+		// upgrading past floor and hitting the 1.14.42+ SSE-close
+		// regression documented in POC report § Historical bisect, or
+		// something else worth flagging.
+		if ctx.Err() == nil {
+			trySendErr(sseErrCh, errors.New("SSE stream closed before request completion (POST is authoritative)"))
 		}
-		trySendErr(sseErrCh, errors.New("SSE stream closed unexpectedly"))
 	}()
 	return nil
 }

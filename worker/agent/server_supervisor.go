@@ -202,7 +202,10 @@ func (s *Supervisor) Password() string {
 }
 
 // ChildPID returns the OS process ID of the spawned `opencode serve`.
-// Zero before Start succeeds or after Stop completes.
+// Zero before Start succeeds. Returns the stale-but-dead PID after
+// Stop completes — Stop does not reset internal fields. Treat the
+// value as informational (registry display, span attrs); do not use
+// it to send signals or check liveness after Stop.
 func (s *Supervisor) ChildPID() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
