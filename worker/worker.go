@@ -83,6 +83,66 @@ func Run(cfg *config.Config) error {
 	agentRunner := agent.NewRunnerFromConfig(cfg)
 	agentRunner.LogVersions(context.Background(), appLogger)
 
+	if cfg.Opencode.Mode == config.OpencodeModeServer {
+		// Deliberately stricter than LogVersions's warn-and-continue: server
+		// mode wires HTTP/SSE contracts validated only against
+		// MinimumOpencodeVersion (see worker/agent/opencode_version.go and
+		// docs/specs/opencode-server-mode-poc-report.md). Booting below
+		// floor or with a broken binary would silently degrade ask answers,
+		// so this gate fails fast at the same phase as LogVersions.
+		versionLogger := logging.ComponentLogger(slog.Default(), "OpencodeVersion")
+		opencodeAgent, ok := cfg.Agents["opencode"]
+		if !ok {
+			versionLogger.Error("opencode.mode=server 但 worker.yaml agents.opencode 未定義",
+				"phase", "失敗",
+				"hint", "在 agents.opencode 加入定義，或將 opencode.mode 改回 spawn",
+			)
+			return fmt.Errorf("opencode provider not configured (worker.yaml agents.opencode missing while opencode.mode=server)")
+		}
+		detected, err := agent.CheckOpencodeVersion(context.Background(), opencodeAgent.Command)
+		if err != nil {
+			versionLogger.Error("opencode server-mode 版本檢查失敗",
+				"phase", "失敗",
+				"command", opencodeAgent.Command,
+				"detected", detected,
+				"required", agent.MinimumOpencodeVersion,
+				"error", err,
+			)
+			return fmt.Errorf("opencode server-mode version check failed: %w", err)
+		}
+		versionLogger.Info("opencode server-mode 版本通過門檻",
+			"phase", "完成",
+			"command", opencodeAgent.Command,
+			"detected", detected,
+			"required", agent.MinimumOpencodeVersion,
+		)
+
+		// Spawn the long-running `opencode serve` child. Always-on at
+		// Stage 2 (lazy lifecycle stays Task 3.2-8 / Stage 3). Worker
+		// pool's N goroutines share the single supervisor via per-
+		// request `x-opencode-directory` header isolation.
+		serverLogger := logging.ComponentLogger(slog.Default(), "OpencodeServer")
+		supervisor := agent.NewSupervisor(agent.SupervisorConfig{
+			BinaryPath: opencodeAgent.Command,
+			StorageDir: cfg.Opencode.StorageDir,
+			Logger:     serverLogger,
+		})
+		if err := supervisor.Start(context.Background()); err != nil {
+			return fmt.Errorf("start opencode supervisor: %w", err)
+		}
+		agentRunner.SetOpencodeSupervisor(supervisor)
+		defer func() {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stopCancel()
+			if err := supervisor.Stop(stopCtx); err != nil {
+				appLogger.Warn("opencode supervisor stop 失敗",
+					"phase", "失敗",
+					"error", err,
+				)
+			}
+		}()
+	}
+
 	secretKey, err := crypto.DecodeSecretKey(cfg.SecretKey)
 	if err != nil {
 		return fmt.Errorf("invalid secret_key: %w", err)
