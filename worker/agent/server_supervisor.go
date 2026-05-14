@@ -698,7 +698,15 @@ func (s *Supervisor) spawn(ctx context.Context) error {
 	}
 
 	runCtx, cancelRun := context.WithCancel(context.Background())
+	// --pure skips external (project-level) plugins like oh-my-openagent
+	// the same way `opencode run --pure` does in spawn mode. Without it,
+	// every CreateSession / SendPrompt cycle re-loads every project
+	// plugin found at the worker's cwd, costing ~6–14s per job on a dev
+	// box. Memory project_opencode_pure_flag documents the spawn-side
+	// rule; Stage 2 missed adding it to the server invocation. Internal
+	// auth plugins still load, so credentials stay intact.
 	cmd := exec.CommandContext(runCtx, s.cfg.BinaryPath, "serve",
+		"--pure",
 		"--port", "0",
 		"--hostname", "127.0.0.1",
 	)
