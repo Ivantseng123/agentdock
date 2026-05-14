@@ -96,18 +96,29 @@ The bench harness itself looks correct: spawn-mode numbers are tight and match e
 
 Investigation of these is **out of scope for Stage 4**. Stage 4 ships the harness + finding so the next iteration has data to drive the fix.
 
-## Reproducibility note
+## Reproducibility
 
 The harness is deterministic in its method; the data has run-to-run noise. Re-running on the same dev box should produce similar order-of-magnitude numbers. Re-running on a different host (different OS, different LLM-provider routing, different opencode version) may yield very different numbers — that's expected and is what the next phase of investigation should explore. The reviewer should NOT treat the specific milliseconds in the table above as ground truth; treat the **relative order of magnitude** between spawn and server as the signal.
-
-## Reproducibility
 
 - The harness is checked into `worker/agent/perf_benchmark_test.go`. Reviewer can re-run on a different host (or with `OPENCODE_PERF_SAMPLE_SIZE=100`) to validate.
 - The reviewer reproducibility checkpoint is: same prompt, same opencode binary version (1.14.41+), same auth provider; **NOT** same network, OS, or hardware — those are noted as inherent variance.
 - If a future opencode release silently regresses server mode (precedent: 1.14.42–1.14.47 SSE-close regression, see `docs/specs/opencode-server-mode-poc-report.md § Historical bisect`), re-running this harness post-upgrade is the gate.
 
-## Future work (not blocking Stage 4 merge)
+## Follow-up tasks (gate the spec C2 default flip)
 
-- Run `OPENCODE_PERF_SAMPLE_SIZE=100` once the spec C2 observation period starts, to validate at the spec's nominal N.
-- Repeat measurements in a Linux pod (gha-runner or staging cluster) to surface OS-class deltas. Add as a follow-up task; this baseline doc lands the dev-box numbers as the Phase 3.2 ship gate.
-- Establish a periodic perf regression check (e.g. quarterly) to catch upstream opencode regressions before they hit production. Cadence to be decided post-C2.
+The FAIL verdict above blocks the spec C2 default flip from `mode: spawn` to `mode: server`. The following work items are the path back to a `mode: server` default:
+
+- **FUP-1: Investigate per-request workdir handling.** Run a controlled experiment where two consecutive jobs share the same workdir vs. use different workdirs; compare wall-clock latency. If amortization vanishes on workdir change, the root cause is per-directory skill / config reload inside `opencode serve`. Likely fix lands in opencode upstream OR in the worker by reusing a job-scoped workdir mapping.
+- **FUP-2: Re-measure in a Linux pod.** The dev-box baseline above is darwin/arm64; production targets are Linux pods. Re-run the harness in a staging cluster (gha-runner OR an internal slke namespace) to surface OS-class deltas; budget verdict on those numbers is the second gate before spec C2 flip.
+- **FUP-3: Higher-fidelity fixture.** The short-prompt `Reply OK` fixture amplifies LLM-provider variance (21.6% on spawn, 33.4% on server). A longer prompt (e.g. issue-triage-style ~500 tokens) would dampen variance and make the +200ms N1 budget meaningfully observable. Re-run after the fixture upgrade.
+- **FUP-4: Periodic regression check.** Once the harness is trustworthy, run it quarterly (or on opencode-binary upgrade) to catch upstream regressions before prod. Cadence + owner TBD post-C2.
+
+Until FUP-1/2/3 produce green numbers, **`mode: server` stays opt-in only** and `mode: spawn` remains the default. Operators who try `mode: server` should monitor the `OpencodeServer` component logs per `docs/configuration-worker.md § Opencode 區塊 → 已知限制`.
+
+## Known limitations of the deliverable itself
+
+Beyond the perf finding, the harness has methodology weaknesses worth flagging for the next iteration:
+
+- **`procRSSMB` returns 0 on `ps` failure.** The harness `t.Logf`s a warning when this happens but does not fail the test. A future re-run on a host where `ps` is broken could trivially PASS N3 (`0 ≤ 0 + 200`). Strict mode would `t.Fatal` on any zero sample.
+- **Per-job timeout 90s vs. N2 budget +5s.** A job that takes 89s passes the per-job cap but fails N2 by 84s. Fine for FAIL verdicts (loud is loud); ambiguous for PASS verdicts where +200ms differences hide inside the variance floor.
+- **Idle RSS sampled before `Drain`.** Strict idle would require triggering the 5m `IdleTimeout` first. The harness reports the post-loop-pre-Drain sample; reviewer should read "idle" as "busy-to-quiet transition" not "fully quiesced".

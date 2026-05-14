@@ -75,9 +75,9 @@ func requirePerfEnv(t *testing.T) {
 }
 
 // procRSSMB shells out to ps for resident set size of pid. Returns 0
-// when the process is gone or the call fails; the caller logs 0 as
-// "unmeasurable" rather than aborting the run. Works on darwin + linux
-// without cgo.
+// when the process is gone or the call fails; the caller is responsible
+// for noticing a 0 result and treating it as unmeasurable (see
+// rssOrWarn). Works on darwin + linux without cgo.
 func procRSSMB(pid int) int {
 	if pid <= 0 {
 		return 0
@@ -92,6 +92,22 @@ func procRSSMB(pid int) int {
 		return 0
 	}
 	return kb / 1024
+}
+
+// rssOrWarn wraps procRSSMB with a t.Logf when the sample is 0. A zero
+// RSS is the signal that ps failed (or the process exited) — leaving
+// it unflagged would let a re-run on a host where ps is broken trivially
+// pass the N3 budget (`0 <= 0 + 200`). Strict mode would `t.Fatal` here;
+// the harness chooses to warn-and-continue because not every runner
+// ships ps. Operators must read the warning lines and discount any
+// table row that includes a zero sample.
+func rssOrWarn(t *testing.T, mode, what string, pid int) int {
+	t.Helper()
+	rss := procRSSMB(pid)
+	if rss == 0 {
+		t.Logf("RSS=0 for %s/%s (pid=%d) — ps probably failed; treat the corresponding table row as unmeasurable", mode, what, pid)
+	}
+	return rss
 }
 
 // medianDuration returns the median of a copy of d (sorted). Returns 0
@@ -161,7 +177,7 @@ func runSpawnSample(t *testing.T, ctx context.Context, n int) sampleResult {
 	result.steadyMedian = medianDuration(result.latencies[perfWarmupDrop:])
 	// Spawn mode has no persistent child; idle RSS == busy RSS == this
 	// test process's RSS sampled after the run.
-	result.idleRSS = procRSSMB(os.Getpid())
+	result.idleRSS = rssOrWarn(t, "spawn", "test-process", os.Getpid())
 	result.busyRSS = result.idleRSS
 	return result
 }
@@ -199,7 +215,7 @@ func runServerSample(t *testing.T, ctx context.Context, n int) sampleResult {
 		}
 		// Sample peak busy RSS mid-run while the child is alive.
 		if pid := sup.ChildPID(); pid > 0 {
-			rss := procRSSMB(pid) + procRSSMB(os.Getpid())
+			rss := rssOrWarn(t, "server", "supervisor-child", pid) + rssOrWarn(t, "server", "test-process", os.Getpid())
 			if rss > busyRSSPeak {
 				busyRSSPeak = rss
 			}
@@ -213,9 +229,9 @@ func runServerSample(t *testing.T, ctx context.Context, n int) sampleResult {
 	// which isn't worth the wall clock — busy/idle delta is small in
 	// server mode where the child is persistent.
 	if pid := sup.ChildPID(); pid > 0 {
-		result.idleRSS = procRSSMB(pid) + procRSSMB(os.Getpid())
+		result.idleRSS = rssOrWarn(t, "server", "supervisor-child", pid) + rssOrWarn(t, "server", "test-process", os.Getpid())
 	} else {
-		result.idleRSS = procRSSMB(os.Getpid())
+		result.idleRSS = rssOrWarn(t, "server", "test-process", os.Getpid())
 	}
 	return result
 }
