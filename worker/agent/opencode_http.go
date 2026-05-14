@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
@@ -125,6 +126,13 @@ func (c *Client) CreateSession(ctx context.Context, directory string) (string, e
 // can correlate SSE disruption with downstream issues without aborting
 // otherwise-successful POST requests. (Cross-review M1 fix: SSE close
 // alone must not fail a job whose POST is still computing.)
+//
+// Finish / TokensOut / SawTextPart expose the three signals Stage 3
+// Task 3.2-11's Bug A detector AND-gates on. Finish and TokensOut are
+// cached from the POST response by Wait; SawTextPart is set by the
+// SSE consumer when any `message_delta` event is forwarded. Always
+// call Wait first, then the accessors — pre-Wait reads return zero
+// values.
 type PromptRun struct {
 	Events    <-chan queue.StreamEvent
 	SSEErrors <-chan error
@@ -133,6 +141,12 @@ type PromptRun struct {
 	responseCh   <-chan promptResponse
 	closeOnce    sync.Once
 	closedSignal chan struct{}
+
+	sawText *atomic.Bool
+
+	respMu        sync.Mutex
+	lastFinish    string
+	lastTokensOut int
 }
 
 type promptResponse struct {
@@ -149,20 +163,55 @@ type promptResponse struct {
 // request. Wait always cancels both goroutines on return; callers do
 // not need to defer Close after a successful Wait.
 //
-// Bug A detection (Task 3.2-11) will read `finish` and `tokensOut` on
-// the same response; Stage 2 only exposes `finalText` + transport
-// errors here. promptResponse keeps those fields populated so 3.2-11
-// can lift the discriminator in without expanding this signature.
+// Caches `finish` and `tokensOut` into PromptRun so the Bug A detector
+// in `runOneServer` can read them after Wait without expanding this
+// signature.
 func (r *PromptRun) Wait() (string, error) {
 	defer r.Close()
 	resp, ok := <-r.responseCh
 	if !ok {
 		return "", errors.New("opencode prompt response channel closed before sending")
 	}
+	r.respMu.Lock()
+	r.lastFinish = resp.finish
+	r.lastTokensOut = resp.tokensOut
+	r.respMu.Unlock()
 	if resp.err != nil {
 		return "", resp.err
 	}
 	return resp.finalText, nil
+}
+
+// Finish returns the POST response's `info.finish` reason, cached by
+// Wait. Returns "" before Wait completes or on a transport-error path
+// (no body decoded). Stage 3 Task 3.2-11 reads "other" here as one of
+// three Bug A conditions.
+func (r *PromptRun) Finish() string {
+	r.respMu.Lock()
+	defer r.respMu.Unlock()
+	return r.lastFinish
+}
+
+// TokensOut returns the POST response's `info.tokens.output`, cached
+// by Wait. Returns 0 before Wait completes or when the body omits the
+// tokens block. Stage 3 Task 3.2-11 reads 0 here as one of three Bug
+// A conditions.
+func (r *PromptRun) TokensOut() int {
+	r.respMu.Lock()
+	defer r.respMu.Unlock()
+	return r.lastTokensOut
+}
+
+// SawTextPart returns true when the SSE consumer forwarded at least
+// one `message_delta` event during this run. Used by Bug A detection
+// (Task 3.2-11) — when finish=other + tokens=0 + !SawTextPart all
+// hold, the run is the silent-drop signature and the job is failed
+// with the user-facing copy "LLM 回應為空，請稍後再試或改用 @bot issue".
+func (r *PromptRun) SawTextPart() bool {
+	if r.sawText == nil {
+		return false
+	}
+	return r.sawText.Load()
 }
 
 // Close cancels both goroutines but does NOT block waiting for their
@@ -195,7 +244,8 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID, directory, prompt st
 	runCtx, cancel := context.WithCancel(ctx)
 	events := make(chan queue.StreamEvent, clientEventChannelSize)
 	sseErrCh := make(chan error, 1)
-	if err := c.subscribeEvents(runCtx, directory, events, sseErrCh); err != nil {
+	sawText := &atomic.Bool{}
+	if err := c.subscribeEvents(runCtx, directory, events, sseErrCh, sawText); err != nil {
 		cancel()
 		return nil, err
 	}
@@ -217,6 +267,7 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID, directory, prompt st
 		cancel:       cancel,
 		responseCh:   responseCh,
 		closedSignal: closedSignal,
+		sawText:      sawText,
 	}, nil
 }
 
@@ -235,7 +286,7 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID, directory, prompt st
 // circuit on these (cross-review M1 fix). Callers (runOneServer)
 // should log them at warn level so an operator can correlate SSE
 // disruption with downstream behavior.
-func (c *Client) subscribeEvents(ctx context.Context, directory string, events chan<- queue.StreamEvent, sseErrCh chan<- error) error {
+func (c *Client) subscribeEvents(ctx context.Context, directory string, events chan<- queue.StreamEvent, sseErrCh chan<- error, sawText *atomic.Bool) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/event", nil)
 	if err != nil {
 		return fmt.Errorf("build event request: %w", err)
@@ -279,9 +330,11 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 				// well above realistic per-job event counts; default
 				// case is paranoia for the impossible-in-practice case
 				// where drainer has stopped reading but channel isn't
-				// closed yet. Drop is acceptable — POST response also
-				// carries `tokens.output`, so cost data isn't unique
-				// to this event.
+				// closed yet. Token data is recoverable from the POST
+				// response; cost is uniquely emitted in this event and
+				// would be lost on the drop path. Acceptable trade-off:
+				// the drainer-stopped scenario implies the job is
+				// already failing somewhere else.
 			}
 		}
 		defer close(events)
@@ -310,6 +363,15 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 				cumCostUSD += ev.CostUSD
 				hasStepFinish = true
 				continue
+			}
+			// Track that a non-empty text part landed via SSE; Stage 3
+			// Task 3.2-11's Bug A detector AND-gates on the absence of
+			// any *meaningful* text part. Empty-text deltas (TextBytes
+			// == 0) don't disqualify Bug A — opencode occasionally
+			// emits zero-byte text updates that carry no answer
+			// payload (cross-review pr finding).
+			if ev.Type == "message_delta" && ev.TextBytes > 0 && sawText != nil {
+				sawText.Store(true)
 			}
 			select {
 			case events <- ev:
