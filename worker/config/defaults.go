@@ -70,7 +70,7 @@ func ApplyDefaults(cfg *Config) {
 		cfg.RepoCache.MaxAge = 10 * time.Minute
 	}
 	if cfg.Opencode.Mode == "" {
-		cfg.Opencode.Mode = OpencodeModeSpawn
+		cfg.Opencode.Mode = OpencodeModeServer
 	}
 	if cfg.Opencode.IdleTimeout <= 0 {
 		cfg.Opencode.IdleTimeout = 5 * time.Minute
