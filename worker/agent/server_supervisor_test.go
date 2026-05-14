@@ -571,6 +571,67 @@ func TestSupervisor_KillChildFlipsToCrashed_ThenRespawn(t *testing.T) {
 	sup.Release()
 }
 
+// TestSupervisor_MultiInstancePortIsolation verifies that N supervisors
+// started concurrently in the same process each get distinct listen
+// URLs and each /health probe succeeds. Stage 3 Task 3.2-12. The real
+// kernel-assigned port behavior comes from `opencode serve --port 0`;
+// fake binaries point at independent httptest servers (each on its own
+// kernel-assigned port via httptest.NewServer), which is the local
+// stand-in. Successful Start implies /health returned green for that
+// supervisor — Start blocks on the probe before returning nil.
+func TestSupervisor_MultiInstancePortIsolation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	const N = 4
+	var (
+		servers     [N]*httptest.Server
+		supervisors [N]*Supervisor
+	)
+	for i := 0; i < N; i++ {
+		servers[i] = newFakeHealthServer(t, "")
+		binPath := writeFakeOpencodeServeBinary(t, servers[i].URL, "sleep")
+		supervisors[i] = NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	}
+	defer func() {
+		for _, sup := range supervisors {
+			_ = sup.Stop(context.Background())
+		}
+		for _, srv := range servers {
+			srv.Close()
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make([]error, N)
+	for i := 0; i < N; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = supervisors[i].Start(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	seenURL := make(map[string]int)
+	for i := 0; i < N; i++ {
+		if errs[i] != nil {
+			t.Errorf("supervisor[%d].Start: %v", i, errs[i])
+			continue
+		}
+		url := supervisors[i].BaseURL()
+		if url == "" {
+			t.Errorf("supervisor[%d] BaseURL = empty", i)
+			continue
+		}
+		seenURL[url]++
+	}
+	if len(seenURL) != N {
+		t.Errorf("supervisor URLs not unique across %d instances: %v", N, seenURL)
+	}
+}
+
 func TestSupervisor_Acquire_RejectedDuringShutdown(t *testing.T) {
 	sup := NewSupervisor(SupervisorConfig{BinaryPath: "/never-spawned"})
 	sup.mu.Lock()
