@@ -407,6 +407,163 @@ func TestIsRecoverableSupervisorCrash(t *testing.T) {
 	}
 }
 
+// TestRunOneServer_BugA_TriggersOnSilentDropSignature verifies the
+// Stage 3 Task 3.2-11 strict three-condition AND-gate: finish=other +
+// tokens.output=0 + no message_delta event over SSE → fail loud with
+// the user-facing copy. The error string matches the spec verbatim so
+// the existing failure render in app/workflow/ask.go HandleResult
+// shows it to the user without app-side changes.
+func TestRunOneServer_BugA_TriggersOnSilentDropSignature(t *testing.T) {
+	srv := newFakeOpencodeServer(t, fakeOpencodeBehavior{
+		sessionID:    "ses_bug_a",
+		finalText:    "",
+		finishReason: "other",
+		outputTokens: 0,
+		sseEvents: []string{
+			`{"id":"e1","type":"server.connected","properties":{}}`,
+			// No `message.part.updated` text events — silent drop.
+		},
+	})
+	defer srv.Close()
+
+	sup := primedSupervisor(srv.URL, "secret", 65432)
+	r := &Runner{
+		opencodeCfg: config.OpencodeConfig{Mode: config.OpencodeModeServer},
+		supervisor:  sup,
+	}
+
+	output, err := r.runOneServer(
+		context.Background(),
+		slog.Default(),
+		config.AgentConfig{Command: "opencode"},
+		"/tmp/work",
+		"prompt",
+		RunOptions{},
+	)
+	if err == nil {
+		t.Fatal("expected Bug A error, got nil")
+	}
+	if !errors.Is(err, errOpencodeEmptyStream) {
+		t.Errorf("error %v is not errOpencodeEmptyStream", err)
+	}
+	if got := err.Error(); got != "LLM 回應為空，請稍後再試或改用 @bot issue" {
+		t.Errorf("error message = %q, want spec copy verbatim", got)
+	}
+	if output != "" {
+		t.Errorf("output = %q, want empty on Bug A failure", output)
+	}
+}
+
+// TestRunOneServer_BugA_NotTriggered_WhenTextReceived verifies the
+// AND-gate's text-part clause: even if finish=other + tokens=0, a
+// single message_delta event over SSE is enough to disqualify the
+// Bug A signature. Runs return the (empty) text payload as-is.
+func TestRunOneServer_BugA_NotTriggered_WhenTextReceived(t *testing.T) {
+	srv := newFakeOpencodeServer(t, fakeOpencodeBehavior{
+		sessionID:    "ses_no_bugA_text",
+		finalText:    "",
+		finishReason: "other",
+		outputTokens: 0,
+		sseEvents: []string{
+			`{"id":"e1","type":"message.part.updated","properties":{"part":{"type":"text","text":"partial"}}}`,
+		},
+	})
+	defer srv.Close()
+
+	sup := primedSupervisor(srv.URL, "secret", 65431)
+	r := &Runner{
+		opencodeCfg: config.OpencodeConfig{Mode: config.OpencodeModeServer},
+		supervisor:  sup,
+	}
+
+	output, err := r.runOneServer(
+		context.Background(),
+		slog.Default(),
+		config.AgentConfig{Command: "opencode"},
+		"/tmp/work",
+		"prompt",
+		RunOptions{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error (saw text, should not be Bug A): %v", err)
+	}
+	if output != "" {
+		t.Errorf("output = %q, want empty (POST body had empty parts)", output)
+	}
+}
+
+// TestRunOneServer_BugA_NotTriggered_WhenTokensNonZero verifies the
+// AND-gate's tokens clause: finish=other + no text + tokens>0 is not
+// Bug A (the model produced something, even if no text emerged).
+func TestRunOneServer_BugA_NotTriggered_WhenTokensNonZero(t *testing.T) {
+	srv := newFakeOpencodeServer(t, fakeOpencodeBehavior{
+		sessionID:    "ses_no_bugA_tokens",
+		finalText:    "",
+		finishReason: "other",
+		outputTokens: 5,
+		sseEvents: []string{
+			`{"id":"e1","type":"server.connected","properties":{}}`,
+		},
+	})
+	defer srv.Close()
+
+	sup := primedSupervisor(srv.URL, "secret", 65430)
+	r := &Runner{
+		opencodeCfg: config.OpencodeConfig{Mode: config.OpencodeModeServer},
+		supervisor:  sup,
+	}
+
+	output, err := r.runOneServer(
+		context.Background(),
+		slog.Default(),
+		config.AgentConfig{Command: "opencode"},
+		"/tmp/work",
+		"prompt",
+		RunOptions{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error (tokens>0, not Bug A): %v", err)
+	}
+	_ = output
+}
+
+// TestRunOneServer_BugA_NotTriggered_WhenFinishStop verifies the
+// AND-gate's finish-reason clause: finish=stop is a normal termination
+// regardless of token count or text presence. Most no-op-style
+// answers ("say OK") would hit finish=stop + tokens>0 but this case
+// (finish=stop + tokens=0) still must not trip Bug A.
+func TestRunOneServer_BugA_NotTriggered_WhenFinishStop(t *testing.T) {
+	srv := newFakeOpencodeServer(t, fakeOpencodeBehavior{
+		sessionID:    "ses_no_bugA_finish",
+		finalText:    "",
+		finishReason: "stop",
+		outputTokens: 0,
+		sseEvents: []string{
+			`{"id":"e1","type":"server.connected","properties":{}}`,
+		},
+	})
+	defer srv.Close()
+
+	sup := primedSupervisor(srv.URL, "secret", 65429)
+	r := &Runner{
+		opencodeCfg: config.OpencodeConfig{Mode: config.OpencodeModeServer},
+		supervisor:  sup,
+	}
+
+	output, err := r.runOneServer(
+		context.Background(),
+		slog.Default(),
+		config.AgentConfig{Command: "opencode"},
+		"/tmp/work",
+		"prompt",
+		RunOptions{},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error (finish=stop, not Bug A): %v", err)
+	}
+	_ = output
+}
+
 // TestRunOneServer_SSECloseEarly_POSTAuthoritative verifies the M1
 // fix at the runOneServer layer: SSE close before POST completes
 // must NOT abort the job — runOneServer logs the SSE error at warn

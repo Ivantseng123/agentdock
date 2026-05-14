@@ -52,6 +52,14 @@ import (
 // failure within retry surfaces as a hard error — no third attempt, no
 // fallback to spawn mode (spec C4).
 //
+// Stage 3 Task 3.2-11 Bug A: when the POST response carries `finish=
+// other` AND `tokens.output=0` AND the SSE consumer saw no text part,
+// the run hits the silent-drop signature and we mark the job failed
+// with the user-facing copy `LLM 回應為空，請稍後再試或改用 @bot issue`.
+// The three-condition AND-gate matches POC P7 (false-positive 0/100 on
+// the P2 success corpus). Bug A does not trigger retry — the silent
+// drop is an application-level outcome, not transport.
+//
 // Supervisor is owned by the worker's Runner; calling runOneServer
 // with r.supervisor == nil is a programming error (the dispatcher only
 // routes here when Mode == server, which is mutually exclusive with a
@@ -110,6 +118,14 @@ func (r *Runner) runOneServer(ctx context.Context, logger *slog.Logger, agent co
 		if attemptErr == nil {
 			exitCode = 0
 			return attemptOutput, nil
+		}
+		// Bug A: silent-drop signature. Mark span as application failure
+		// (exitCode=1, distinct from transport-layer -1) and surface
+		// immediately — retry can't fix a server that already returned
+		// `finish=other` + 0 output tokens.
+		if errors.Is(attemptErr, errOpencodeEmptyStream) {
+			exitCode = 1
+			return "", attemptErr
 		}
 		// Last attempt: surface error as-is (caller's runner.Run loops
 		// the agent chain). Don't double-wrap.
@@ -215,19 +231,52 @@ func (r *Runner) runOneServerAttempt(ctx context.Context, logger *slog.Logger, s
 	if err != nil {
 		return "", err
 	}
-	trimmed := strings.TrimSpace(output)
-	if trimmed == "" {
-		// Stage 2 placeholder. Stage 3 Task 3.2-11 promotes empty
-		// output (under the three-condition Bug A AND-gate) to an
-		// explicit failure.
-		logger.Warn("opencode 答案為空",
+
+	// Bug A AND-gate (Stage 3 Task 3.2-11): finish=other AND tokens.output=0
+	// AND no text part received via SSE. All three must hold — POC P7
+	// false-positive rate 0/100 on the P2 success corpus. Two-of-three
+	// is explicitly rejected by spec rationale.
+	if run.Finish() == "other" && run.TokensOut() == 0 && !run.SawTextPart() {
+		logger.Warn("Agent 執行失敗 (空 stream)",
 			"phase", "失敗",
 			"command", agent.Command,
 			"session_id", sessionID,
+			"finish", run.Finish(),
+			"tokens_output", run.TokensOut(),
+			"saw_text_part", run.SawTextPart(),
+		)
+		return "", errOpencodeEmptyStream
+	}
+
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		// Defensive: above gate is strict, but a trimmed-empty answer
+		// that didn't trip Bug A still warrants a warn so the operator
+		// can investigate. Job is not failed in this branch — the
+		// answer just happens to be whitespace.
+		logger.Warn("opencode 答案為空 (未命中 Bug A 三條件)",
+			"phase", "處理中",
+			"command", agent.Command,
+			"session_id", sessionID,
+			"finish", run.Finish(),
+			"tokens_output", run.TokensOut(),
+			"saw_text_part", run.SawTextPart(),
 		)
 	}
 	return trimmed, nil
 }
+
+// errOpencodeEmptyStream is the sentinel surfaced by Bug A detection.
+// Its message doubles as the Slack-visible failure copy spec mandates:
+// the worker error string flows verbatim into `r.Error` and is
+// rendered by app/workflow/ask.go's failed-path as
+// `:x: 思考失敗：<r.Error>`. The wrapping prefix from runner.go
+// ("all agents failed: opencode:") makes this less clean than a
+// direct app-side render special-case, but the spec § Boundaries
+// Ask first guard explicitly says do not widen scope to app/ without
+// approval. Stage 3 leaves the Slack copy slightly noisy; a follow-
+// up PR can clean it up by special-casing this sentinel in app/.
+var errOpencodeEmptyStream = errors.New("LLM 回應為空，請稍後再試或改用 @bot issue")
 
 // isRecoverableSupervisorCrash returns true when the error chain looks
 // like a transport-layer failure that retry-once can fix: either the
