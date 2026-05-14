@@ -177,28 +177,28 @@ agents:
 
 **留意：** `extra_args` 是 operator 自己選的 flag，worker 不會預設幫你加任何東西。如果你寫了 `--dangerously-skip-permissions` 之類的開關，那是你的選擇，也是你的風險（worker 可能跑在你的筆電上，而不是 pod 裡）。
 
-## Opencode 區塊（選用，opt-in）
+## Opencode 區塊
 
-Phase 3.2 新增 opt-in 的 `opencode` 區塊，控制 opencode 子進程的執行模型。**省略整個區塊**即等同 legacy spawn 行為，無需任何設定即可運作。
+Worker 提供 top-level `opencode:` 區塊（跟 `queue:`、`redis:` 同階）控制 opencode 子進程的執行模型。**省略整個區塊**即沿用預設 `mode: server`。Operator 想退回 legacy per-job spawn 模式，必須顯式寫上 `mode: spawn`。
 
 ```yaml
 opencode:
-  mode: spawn         # spawn (預設) | server
+  mode: server        # server (預設) | spawn (legacy)
   idle_timeout: 5m    # 僅 server mode 生效
   storage_dir: ""     # 僅 server mode 生效；空字串 = runtime 自動決定
 ```
 
 | 欄位 | 型別 | 預設 | 說明 |
 |---|---|---|---|
-| `mode` | string | `spawn` | `spawn` = legacy 行為，每個 job `opencode run --pure ...` 開一個新進程；`server` = 整個 worker 共用一個長壽 `opencode serve` 子進程，per-job 走 HTTP/SSE。 |
+| `mode` | string | `server` | `server` = 整個 worker 共用一個長壽 `opencode serve` 子進程，per-job 走 HTTP/SSE（預設）；`spawn` = legacy 行為，每個 job 都 `opencode run --pure ...` 開一個新進程。 |
 | `idle_timeout` | duration | `5m` | server mode 才生效。worker pool quiesce（無 in-flight job）後 `opencode serve` 子進程等多久才自動 stop。下個 job 進來會 lazy 重新 spawn。 |
 | `storage_dir` | string | `""` | server mode 才生效。`opencode serve` 子進程的 isolated `XDG_DATA_HOME`。空字串 = worker 啟動時自動 resolve（多 worker 共用同主機時各自獨立目錄）。 |
 
 ### `mode` 選擇
 
-- **`spawn`（預設、有已知 silent-answer-drop 故障）** — 每個 job spawn 新的 `opencode run` 進程，legacy 路徑。Stage 4 在 dev box 上以 30/30 比例重現「spawn 短答案 ask 回傳空白」(`docs/specs/opencode-server-mode-perf-baseline.md`)；ADR-0005 把同樣症狀 trace 到 opencode CLI 內部 dispose race。Operator 應知道現在這個 default 有這個已知問題；翻成 `mode: server` 是建議的 mitigation，正式 default flip 排在 spec C2 流程。
-- **`server`（opt-in、推薦給不允許 silent drop 的 ask）** — worker pool 全程共用一個 `opencode serve --pure` 子進程，per-job 透過 HTTP + SSE 串接到該 server。Stage 4 在同樣 fixture 上量到 100% healthy output（vs spawn 100% silent drop）。代價：每 job ~+11s wallclock（真實 LLM round trip，spawn 因為提早結束所以沒付這個成本）；persistent subprocess 約 +470 MB RSS。Server crash 走 retry-once（spec C4：不 fallback 到 spawn）。
-- **預設翻轉時機** — spec C2 規定：`mode: server` 在 production 連續跑 ≥2 週、零 answer-drop 事件後，預設值才會從 `spawn` 翻為 `server`。Stage 4 perf baseline 建議盡快觸發 C2，因為 spawn 已實證有 silent drop 故障；實際翻轉動作會在 follow-up PR、Linux-pod 重新量過之後 land。
+- **`server`（預設、無 silent drop）** — worker pool 全程共用一個 `opencode serve --pure` 子進程，per-job 透過 HTTP + SSE 串接到該 server。Stage 4 在 dev box 上量到 100% healthy output（vs spawn 100% silent drop）。代價：每 job ~+11s wallclock（真實 LLM round trip，spawn 因為提早結束所以沒付這個成本）；persistent subprocess 約 +470 MB RSS。Server crash 走 retry-once（spec C4：不 fallback 到 spawn）。**Boot-time 前提**：worker.yaml 必須有 `agents.opencode` 區塊；installed opencode binary ≥ `MinimumOpencodeVersion`（目前 `1.14.41`）。兩個條件缺一就 worker boot 失敗（fail-fast，非 silent degrade）。
+- **`spawn`（legacy、有已知 silent-answer-drop 故障）** — 每個 job spawn 新的 `opencode run` 進程。Stage 4 在 dev box 上以 30/30 比例重現「spawn 短答案 ask 回傳空白」(`docs/specs/opencode-server-mode-perf-baseline.md`)；ADR-0005 把同樣症狀 trace 到 opencode CLI 內部 dispose race。保留作為 legacy 路徑供 operator 明確 opt-out 用，依 spec C3 至少維護到預設翻轉後 ≥2 週才會議刪除。
+- **Spec C2 偏差** — spec C2 原本規定：`mode: server` 在 production 連續跑 ≥2 週、零 answer-drop 後，預設值才從 `spawn` 翻為 `server`；perf baseline 又加上「Linux pod 重新量過 RSS / latency 後才 flip」的 gate。本次預設翻轉略過上述兩條 gate，改以 pod 部署本身作為 FUP-1 量測窗口。詳見 `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment。
 
 ### `idle_timeout` trade-off
 
@@ -212,9 +212,10 @@ opencode `serve` 把 session DB、log、cache 寫到 `XDG_DATA_HOME` 下。worke
 
 ### 已知限制
 
+- **預設翻轉前要 pre-flight worker.yaml** — server mode 啟動硬性要求 worker.yaml 內 `agents.opencode` 區塊存在 + installed opencode binary ≥ `MinimumOpencodeVersion`。Upgrade image 前請先確認既有 worker.yaml 滿足這兩條，否則拉新 image 後 worker boot 立刻失敗（fail-fast，非 silent degrade）。想沿用 legacy 行為的 operator 把 `opencode.mode: spawn` 顯式寫進 worker.yaml 即可。
 - **Binary swap 不會觸發 re-check** — `opencode -v` 在 worker 啟動時檢查一次。worker 跑起來後若 operator 換掉 binary（e.g. `~/.opencode/bin/opencode` 升版），新版本**不會**被重新驗證；既有 worker 直到下次重啟才會 pick up。pod 部署這條沒差（image 不可變）；laptop deployment 須自行管控。
 - **無 server → spawn auto-fallback** — server mode 失敗直接 fail，不會 silently fallback 回 spawn（spec C4）。對應地，server crash 透過 retry-once + 重新 spawn 子進程恢復（Stage 3 §F4）；連續兩次 fail 才硬性失敗。
-- **C2 跟蹤期間建議** — 啟用 server mode 後請主動觀察 worker 日誌的 `OpencodeServer` 相關 phase；若出現 Bug A 偵測（`LLM 回應為空`）或 `crashed` state 頻繁，先回退到 `mode: spawn` 再診斷。
+- **C2 觀察期間建議** — 啟用 server mode 後請主動觀察 worker 日誌的 `OpencodeServer` 相關 phase；若出現 Bug A 偵測（`LLM 回應為空`）或 `crashed` state 頻繁，先把 `mode: spawn` 顯式寫進 worker.yaml 回退，再診斷。
 
 ## Agent Stream
 

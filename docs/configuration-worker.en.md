@@ -180,28 +180,28 @@ Resulting invocations:
 
 **Caveat:** `extra_args` is operator-supplied — the worker never injects flags for you. If you put `--dangerously-skip-permissions` in there, that's your call and your risk (the worker may be running on your laptop, not an isolated pod).
 
-## Opencode block (optional, opt-in)
+## Opencode block
 
-Phase 3.2 adds an opt-in `opencode` block that controls the execution model for the opencode subprocess. **Omit the entire block** to keep legacy spawn behavior — no setup needed.
+The worker exposes a top-level `opencode:` block (sibling of `queue:` / `redis:`) controlling the execution model for the opencode subprocess. **Omit the entire block** to use the default `mode: server`. Operators wanting the legacy per-job spawn path must explicitly set `mode: spawn`.
 
 ```yaml
 opencode:
-  mode: spawn         # spawn (default) | server
+  mode: server        # server (default) | spawn (legacy)
   idle_timeout: 5m    # server mode only
   storage_dir: ""     # server mode only; empty = runtime-resolved
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `mode` | string | `spawn` | `spawn` = legacy per-job process (`opencode run --pure ...`); `server` = one long-running `opencode serve` subprocess shared by the worker pool, per-job calls go through HTTP/SSE. |
+| `mode` | string | `server` | `server` = one long-running `opencode serve` subprocess shared by the worker pool, per-job calls go through HTTP/SSE (default); `spawn` = legacy per-job process (`opencode run --pure ...`). |
 | `idle_timeout` | duration | `5m` | Server mode only. How long the `opencode serve` child stays alive after the pool quiesces (zero in-flight jobs) before auto-stop. Next job lazily respawns it. |
 | `storage_dir` | string | `""` | Server mode only. Isolated `XDG_DATA_HOME` for the `opencode serve` child. Empty = worker picks a per-worker dir at runtime (multi-worker host safety). |
 
 ### Choosing `mode`
 
-- **`spawn` (default; carries a known silent-answer-drop failure mode)** — every job spawns a fresh `opencode run` process. This is the legacy path. Stage 4 empirically reproduced spawn returning empty output on short-answer asks at a 30/30 rate on the dev box (see `docs/specs/opencode-server-mode-perf-baseline.md`); ADR-0005 traces the same symptom to a dispose race inside opencode CLI. Operators should be aware that the current default has this known issue; flipping to `mode: server` is the recommended mitigation while the spec C2 default flip is queued.
-- **`server` (opt-in; recommended for asks that must not silently drop)** — the worker pool shares one long-lived `opencode serve --pure` subprocess; per-job work flows over HTTP + SSE. Stage 4 measurement shows 100% healthy output on the same fixture where spawn silently dropped. Cost vs spawn: ~+11s per-job wallclock (real LLM round trip, which spawn was failing to do), and ~+470 MB RSS for the persistent subprocess. Server crashes go through retry-once (spec C4: no fallback to spawn).
-- **Default flip timeline** — spec C2 commits to flipping the default from `spawn` to `server` after ≥2 weeks of zero answer-drop incidents in production with `mode: server`. The Stage 4 perf baseline doc recommends invoking C2 sooner rather than later given the empirical spawn silent-drop; the flip itself will land in a follow-up PR after Linux-pod re-measurement.
+- **`server` (default; no silent drop)** — the worker pool shares one long-lived `opencode serve --pure` subprocess; per-job work flows over HTTP + SSE. Stage 4 measurement shows 100% healthy output on the same fixture where spawn silently dropped. Cost vs spawn: ~+11s per-job wallclock (real LLM round trip, which spawn was failing to do), and ~+470 MB RSS for the persistent subprocess. Server crashes go through retry-once (spec C4: no fallback to spawn). **Boot-time preconditions**: worker.yaml must define `agents.opencode`; the installed opencode binary must be ≥ `MinimumOpencodeVersion` (currently `1.14.41`). Either condition missing → worker fast-fails at boot rather than silently degrading.
+- **`spawn` (legacy; carries a known silent-answer-drop failure mode)** — every job spawns a fresh `opencode run` process. Stage 4 empirically reproduced spawn returning empty output on short-answer asks at a 30/30 rate on the dev box (see `docs/specs/opencode-server-mode-perf-baseline.md`); ADR-0005 traces the same symptom to a dispose race inside opencode CLI. Retained as the legacy opt-out path; per spec C3 it stays in the code for ≥2 weeks past the default flip before deletion is discussed.
+- **Spec C2 deviation** — spec C2 originally required ≥2 weeks of zero answer-drop with `mode: server` in production before flipping the default; the perf baseline added a "Linux-pod re-measurement of RSS/latency" gate on top. This default flip skips both, using pod deployment itself as the FUP-1 measurement window. See `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment for the rationale.
 
 ### `idle_timeout` trade-off
 
@@ -215,9 +215,10 @@ opencode:
 
 ### Known limitations
 
+- **Pre-flight worker.yaml before the default flip** — server mode at boot hard-requires `agents.opencode` defined in worker.yaml AND an installed opencode binary ≥ `MinimumOpencodeVersion`. Confirm both before pulling a new image; otherwise the worker fast-fails at boot (no silent degradation). To keep the legacy path, set `opencode.mode: spawn` explicitly in worker.yaml.
 - **Binary swap does not retrigger version check** — `opencode -v` is checked once at worker boot. If the operator replaces the binary while a worker is alive (e.g. upgrading `~/.opencode/bin/opencode`), the new version is **not** re-validated; the existing worker keeps running with whatever it observed at boot until the next restart. Immutable pod images don't hit this; laptop deployments own the risk.
 - **No server → spawn auto-fallback** — server mode failures fail loud; the worker does NOT silently fall back to spawn (spec C4). Server crashes recover via retry-once with a fresh subprocess (Stage 3 §F4); two consecutive failures within a single job hard-fail.
-- **Recommended monitoring during C2** — when running with `mode: server`, watch worker logs for the `OpencodeServer` component. If Bug A detection trips (`LLM 回應為空`) or the `crashed` state recurs, fall back to `mode: spawn` first, then diagnose.
+- **Recommended monitoring during the observation window** — when running with `mode: server`, watch worker logs for the `OpencodeServer` component. If Bug A detection trips (`LLM 回應為空`) or the `crashed` state recurs, set `mode: spawn` explicitly in worker.yaml to fall back, then diagnose.
 
 ## Agent streaming
 
