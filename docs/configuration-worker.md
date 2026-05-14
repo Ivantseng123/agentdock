@@ -196,9 +196,9 @@ opencode:
 
 ### `mode` 選擇
 
-- **`spawn`（預設、推薦於 production 直到 spec C2 達成）** — 每個 job spawn 新的 `opencode run` 進程；行為跟過去版本完全一致。沒新 footprint、沒新 failure mode。Stage 4 啟用 server mode 是 opt-in 試水溫。
-- **`server`（opt-in）** — worker pool 全程共用一個 `opencode serve` 子進程，per-job 透過 HTTP + SSE 串接到該 server。攤平了每 job 的 cold-start 開銷（skill cache、auth、binary load），steady-state per-job latency 預期更低。代價：worker idle 時記憶體佔用較高（child 持續存活直到 `idle_timeout`）；server crash 時走 retry-once（spec C4：不 fallback 到 spawn）。
-- **預設翻轉時機** — spec C2 規定：production 連續跑 ≥2 週、零 answer-drop 事件後，預設值才會從 `spawn` 翻為 `server`。在此之前 `spawn` 是 conservative default。
+- **`spawn`（預設、有已知 silent-answer-drop 故障）** — 每個 job spawn 新的 `opencode run` 進程，legacy 路徑。Stage 4 在 dev box 上以 30/30 比例重現「spawn 短答案 ask 回傳空白」(`docs/specs/opencode-server-mode-perf-baseline.md`)；ADR-0005 把同樣症狀 trace 到 opencode CLI 內部 dispose race。Operator 應知道現在這個 default 有這個已知問題；翻成 `mode: server` 是建議的 mitigation，正式 default flip 排在 spec C2 流程。
+- **`server`（opt-in、推薦給不允許 silent drop 的 ask）** — worker pool 全程共用一個 `opencode serve --pure` 子進程，per-job 透過 HTTP + SSE 串接到該 server。Stage 4 在同樣 fixture 上量到 100% healthy output（vs spawn 100% silent drop）。代價：每 job ~+11s wallclock（真實 LLM round trip，spawn 因為提早結束所以沒付這個成本）；persistent subprocess 約 +470 MB RSS。Server crash 走 retry-once（spec C4：不 fallback 到 spawn）。
+- **預設翻轉時機** — spec C2 規定：`mode: server` 在 production 連續跑 ≥2 週、零 answer-drop 事件後，預設值才會從 `spawn` 翻為 `server`。Stage 4 perf baseline 建議盡快觸發 C2，因為 spawn 已實證有 silent drop 故障；實際翻轉動作會在 follow-up PR、Linux-pod 重新量過之後 land。
 
 ### `idle_timeout` trade-off
 

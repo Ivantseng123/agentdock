@@ -199,9 +199,9 @@ opencode:
 
 ### Choosing `mode`
 
-- **`spawn` (default; recommended for production until spec C2 is satisfied)** — every job spawns a fresh `opencode run` process; identical to legacy behavior. No new footprint, no new failure mode. Stage 4 ships server-mode behind opt-in to gather production signal.
-- **`server` (opt-in)** — the worker pool shares one long-lived `opencode serve` subprocess; per-job work flows over HTTP + SSE. Cold-start overhead (skill cache, auth, binary load) amortizes across jobs, so steady-state per-job latency drops. Cost: higher idle memory (child stays warm until `idle_timeout`); server crashes go through retry-once (spec C4: no fallback to spawn).
-- **Default flip timeline** — spec C2: the default flips from `spawn` to `server` only after ≥2 weeks of zero answer-drop incidents in production. Until then `spawn` is the conservative default.
+- **`spawn` (default; carries a known silent-answer-drop failure mode)** — every job spawns a fresh `opencode run` process. This is the legacy path. Stage 4 empirically reproduced spawn returning empty output on short-answer asks at a 30/30 rate on the dev box (see `docs/specs/opencode-server-mode-perf-baseline.md`); ADR-0005 traces the same symptom to a dispose race inside opencode CLI. Operators should be aware that the current default has this known issue; flipping to `mode: server` is the recommended mitigation while the spec C2 default flip is queued.
+- **`server` (opt-in; recommended for asks that must not silently drop)** — the worker pool shares one long-lived `opencode serve --pure` subprocess; per-job work flows over HTTP + SSE. Stage 4 measurement shows 100% healthy output on the same fixture where spawn silently dropped. Cost vs spawn: ~+11s per-job wallclock (real LLM round trip, which spawn was failing to do), and ~+470 MB RSS for the persistent subprocess. Server crashes go through retry-once (spec C4: no fallback to spawn).
+- **Default flip timeline** — spec C2 commits to flipping the default from `spawn` to `server` after ≥2 weeks of zero answer-drop incidents in production with `mode: server`. The Stage 4 perf baseline doc recommends invoking C2 sooner rather than later given the empirical spawn silent-drop; the flip itself will land in a follow-up PR after Linux-pod re-measurement.
 
 ### `idle_timeout` trade-off
 
