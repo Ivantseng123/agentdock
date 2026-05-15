@@ -13,8 +13,8 @@ agents:
   opencode:
     command: opencode
 `)
-	if cfg.Opencode.Mode != OpencodeModeServer {
-		t.Errorf("Mode default = %q, want %q", cfg.Opencode.Mode, OpencodeModeServer)
+	if cfg.Opencode.Mode != OpencodeModeSpawn {
+		t.Errorf("Mode default = %q, want %q", cfg.Opencode.Mode, OpencodeModeSpawn)
 	}
 	if cfg.Opencode.IdleTimeout != 5*time.Minute {
 		t.Errorf("IdleTimeout default = %s, want 5m0s", cfg.Opencode.IdleTimeout)

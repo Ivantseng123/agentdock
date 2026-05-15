@@ -228,13 +228,12 @@ func TestInitWorker_YAML_NoBuiltinSnapshot(t *testing.T) {
 	}
 }
 
-// TestInitWorker_OpencodeBlockCommented pins the init template:
-// the generated worker.yaml carries a commented-out `# opencode:`
-// block documenting the three configurable fields, and does NOT
-// serialize an active `opencode:` block (defaults apply at runtime
-// via workerconfig.ApplyDefaults when the block is absent). Server
-// mode is the default after the spec C2 deviation; operators wanting
-// the legacy spawn path uncomment the block and set `mode: spawn`.
+// TestInitWorker_OpencodeBlockCommented pins the Phase 3.2 init
+// template change: the generated worker.yaml carries a commented-out
+// `# opencode:` block documenting the three opt-in fields, and does
+// NOT serialize an active `opencode:` block (defaults apply at runtime
+// via workerconfig.ApplyDefaults when the block is absent). Operators
+// uncomment the block to opt into server mode.
 func TestInitWorker_OpencodeBlockCommented(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.yaml")
@@ -246,7 +245,7 @@ func TestInitWorker_OpencodeBlockCommented(t *testing.T) {
 
 	for _, want := range []string{
 		"# opencode:",
-		"#   mode: server",
+		"#   mode: spawn",
 		"#   idle_timeout: 5m",
 		"#   storage_dir:",
 		"Spec C2",

@@ -670,7 +670,7 @@ PRs map to Stages 1-4 below. Each PR leaves `opencode.mode` defaulting to `spawn
 - [ ] POC report (`docs/specs/opencode-server-mode-poc-report.md`) and perf baseline docs in main
 - [ ] Init template + configuration docs synchronized
 - [ ] Stage 4 PR opened, reviewed, merged
-- [x] ~~Spec C2 observation period clock starts: ≥ 2 weeks of `mode: server` running in prod with zero answer-drop incidents before flipping default~~ — **Amendment 2026-05-15**: default flipped early without the 2-week prod observation gate (operator override). Observation window now runs with `mode: server` as the default; see `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment 2026-05-15 for the deviation rationale and boot-time pre-flight checklist.
+- [ ] Spec C2 observation period clock starts: ≥ 2 weeks of `mode: server` running in prod with zero answer-drop incidents before flipping default
 
 ---
 
