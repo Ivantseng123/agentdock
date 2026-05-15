@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.0.1](https://github.com/Ivantseng123/agentdock/compare/v4.0.0...v4.0.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **image:** bump opencode 1.14.41→1.15.0 ([26efaed](https://github.com/Ivantseng123/agentdock/commit/26efaed42a4e5aacb82bffbd8a0c35b1ed685a87))
+* **image:** bump opencode 1.14.41→1.15.0 ([91fd2b9](https://github.com/Ivantseng123/agentdock/commit/91fd2b9997fa87cd838d992388fe4c59e60865d9))
+
+
+### Reverts
+
+* chore(main) release 4.0.0 ([#257](https://github.com/Ivantseng123/agentdock/issues/257)) ([09d9a30](https://github.com/Ivantseng123/agentdock/commit/09d9a304cdb8980cb8112ca4d7f6f728de76f8a2))
+* docs(specs) opencode-server-mode design artifacts ([#258](https://github.com/Ivantseng123/agentdock/issues/258)) ([c761077](https://github.com/Ivantseng123/agentdock/commit/c7610776abaf87a79b2f9ca61240b9d2a9141e43))
+* docs(specs) publish opencode server-mode POC report ([#255](https://github.com/Ivantseng123/agentdock/issues/255)) ([c155004](https://github.com/Ivantseng123/agentdock/commit/c155004c0159e48a923bca1ff7a64c036da93aad))
+* feat(worker) opencode-server-mode Stage 1 ([#259](https://github.com/Ivantseng123/agentdock/issues/259)) ([17cc5ec](https://github.com/Ivantseng123/agentdock/commit/17cc5ecdcdc0670eeb5d99110a215a0e6e259893))
+* feat(worker) opencode-server-mode Stage 2 ([#260](https://github.com/Ivantseng123/agentdock/issues/260)) ([1bfa282](https://github.com/Ivantseng123/agentdock/commit/1bfa28205bb138e6b2839fa23a1c159924bd4f78))
+* feat(worker) opencode-server-mode Stage 3 ([#261](https://github.com/Ivantseng123/agentdock/issues/261)) ([f027b53](https://github.com/Ivantseng123/agentdock/commit/f027b5318cd212514ecf77067a3dff940b918afc))
+* feat(worker) opencode-server-mode Stage 4 ([#262](https://github.com/Ivantseng123/agentdock/issues/262)) ([87397df](https://github.com/Ivantseng123/agentdock/commit/87397df00173c447fae52d04713ea96944499591))
+* feat(worker)! flip default opencode.mode to server ([#263](https://github.com/Ivantseng123/agentdock/issues/263)) ([d0450b8](https://github.com/Ivantseng123/agentdock/commit/d0450b8108823f01541b95f2ab20c7cf374c1a04))
+* opencode-server-mode rollout ([#255](https://github.com/Ivantseng123/agentdock/issues/255) [#258](https://github.com/Ivantseng123/agentdock/issues/258)-[#263](https://github.com/Ivantseng123/agentdock/issues/263) + 4.0.0 release) ([504b357](https://github.com/Ivantseng123/agentdock/commit/504b357583397c416d7c106fc8aacaad11e7e5fb))
+
 ## [4.0.0](https://github.com/Ivantseng123/agentdock/compare/v3.9.0...v4.0.0) (2026-05-15)
 
 
