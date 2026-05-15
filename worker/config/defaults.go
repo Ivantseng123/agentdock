@@ -69,6 +69,14 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.RepoCache.MaxAge <= 0 {
 		cfg.RepoCache.MaxAge = 10 * time.Minute
 	}
+	if cfg.Opencode.Mode == "" {
+		cfg.Opencode.Mode = OpencodeModeServer
+	}
+	if cfg.Opencode.IdleTimeout <= 0 {
+		cfg.Opencode.IdleTimeout = 5 * time.Minute
+	}
+	// StorageDir defaults to empty as a sentinel for "resolve at runtime";
+	// the Stage 2 supervisor will choose a XDG_DATA_HOME path when it spawns.
 	resolveSecrets(cfg)
 }
 

@@ -228,6 +228,44 @@ func TestInitWorker_YAML_NoBuiltinSnapshot(t *testing.T) {
 	}
 }
 
+// TestInitWorker_OpencodeBlockCommented pins the init template:
+// the generated worker.yaml carries a commented-out `# opencode:`
+// block documenting the three configurable fields, and does NOT
+// serialize an active `opencode:` block (defaults apply at runtime
+// via workerconfig.ApplyDefaults when the block is absent). Server
+// mode is the default after the spec C2 deviation; operators wanting
+// the legacy spawn path uncomment the block and set `mode: spawn`.
+func TestInitWorker_OpencodeBlockCommented(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.yaml")
+	if err := runInitWorker(path, false, false); err != nil {
+		t.Fatalf("runInitWorker: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+
+	for _, want := range []string{
+		"# opencode:",
+		"#   mode: server",
+		"#   idle_timeout: 5m",
+		"#   storage_dir:",
+		"Spec C2",
+		"Runtime swap caveat",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("worker.yaml missing %q", want)
+		}
+	}
+
+	var parsed map[string]any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse generated yaml: %v", err)
+	}
+	if _, ok := parsed["opencode"]; ok {
+		t.Error("worker.yaml should NOT carry an active `opencode:` block; defaults apply at runtime")
+	}
+}
+
 func TestInitWorker_JSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.json")
