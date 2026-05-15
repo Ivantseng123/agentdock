@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.0.2](https://github.com/Ivantseng123/agentdock/compare/v4.0.1...v4.0.2) (2026-05-15)
+
+
+### Reverts
+
+* fix(image) bump opencode 1.14.41→1.15.0 ([#266](https://github.com/Ivantseng123/agentdock/issues/266)) ([acce422](https://github.com/Ivantseng123/agentdock/commit/acce4220f243a6eadd868ce7b5c98be7f31fa55e))
+* fix(image) bump opencode 1.14.41→1.15.0 ([#266](https://github.com/Ivantseng123/agentdock/issues/266)) ([f99833a](https://github.com/Ivantseng123/agentdock/commit/f99833a8b3ce7f978edaeb74acae861f82992aa7))
+
 ## [4.0.1](https://github.com/Ivantseng123/agentdock/compare/v4.0.0...v4.0.1) (2026-05-15)
 
 
