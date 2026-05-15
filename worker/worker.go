@@ -30,12 +30,6 @@ var (
 	Date    = "unknown"
 )
 
-// opencodeSupervisorDrainTimeout caps the supervisor Drain operation
-// on worker shutdown. Has to cover the 30s active-session abort budget
-// plus the ~10s SIGTERM grace inside Supervisor.Drain; 60s gives
-// headroom for an upstream slowdown to settle.
-const opencodeSupervisorDrainTimeout = 60 * time.Second
-
 // Run starts the worker process: initializes logging, connects Redis, builds
 // the pool, and waits for SIGTERM/SIGINT. Returns on clean shutdown or error.
 func Run(cfg *config.Config) error {
@@ -88,70 +82,6 @@ func Run(cfg *config.Config) error {
 
 	agentRunner := agent.NewRunnerFromConfig(cfg)
 	agentRunner.LogVersions(context.Background(), appLogger)
-
-	if cfg.Opencode.Mode == config.OpencodeModeServer {
-		// Deliberately stricter than LogVersions's warn-and-continue: server
-		// mode wires HTTP/SSE contracts validated only against
-		// MinimumOpencodeVersion (see worker/agent/opencode_version.go and
-		// docs/specs/opencode-server-mode-poc-report.md). Booting below
-		// floor or with a broken binary would silently degrade ask answers,
-		// so this gate fails fast at the same phase as LogVersions.
-		versionLogger := logging.ComponentLogger(slog.Default(), "OpencodeVersion")
-		opencodeAgent, ok := cfg.Agents["opencode"]
-		if !ok {
-			versionLogger.Error("opencode.mode=server 但 worker.yaml agents.opencode 未定義",
-				"phase", "失敗",
-				"hint", "在 agents.opencode 加入定義，或將 opencode.mode 改回 spawn",
-			)
-			return fmt.Errorf("opencode provider not configured (worker.yaml agents.opencode missing while opencode.mode=server)")
-		}
-		detected, err := agent.CheckOpencodeVersion(context.Background(), opencodeAgent.Command)
-		if err != nil {
-			versionLogger.Error("opencode server-mode 版本檢查失敗",
-				"phase", "失敗",
-				"command", opencodeAgent.Command,
-				"detected", detected,
-				"required", agent.MinimumOpencodeVersion,
-				"error", err,
-			)
-			return fmt.Errorf("opencode server-mode version check failed: %w", err)
-		}
-		versionLogger.Info("opencode server-mode 版本通過門檻",
-			"phase", "完成",
-			"command", opencodeAgent.Command,
-			"detected", detected,
-			"required", agent.MinimumOpencodeVersion,
-		)
-
-		// Wire the supervisor in lazy mode (Stage 3): worker boot does
-		// NOT spawn the `opencode serve` child. First Acquire by
-		// runOneServer triggers spawn; pool idle for IdleTimeout
-		// auto-stops the child. Worker SIGTERM goes through Drain,
-		// which aborts active sessions before SIGTERM-ing the child.
-		// Pool's N goroutines share the single supervisor via per-
-		// request `x-opencode-directory` header isolation.
-		serverLogger := logging.ComponentLogger(slog.Default(), "OpencodeServer")
-		supervisor := agent.NewSupervisor(agent.SupervisorConfig{
-			BinaryPath:  opencodeAgent.Command,
-			StorageDir:  cfg.Opencode.StorageDir,
-			IdleTimeout: cfg.Opencode.IdleTimeout,
-			Logger:      serverLogger,
-		})
-		agentRunner.SetOpencodeSupervisor(supervisor)
-		defer func() {
-			// Drain budget is 30s for active-session aborts + ~10s
-			// SIGTERM grace; 60s gives headroom for the abort phase to
-			// settle even when an upstream is slow.
-			drainCtx, drainCancel := context.WithTimeout(context.Background(), opencodeSupervisorDrainTimeout)
-			defer drainCancel()
-			if err := supervisor.Drain(drainCtx); err != nil {
-				appLogger.Warn("opencode supervisor drain 失敗",
-					"phase", "失敗",
-					"error", err,
-				)
-			}
-		}()
-	}
 
 	secretKey, err := crypto.DecodeSecretKey(cfg.SecretKey)
 	if err != nil {

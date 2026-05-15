@@ -1,42 +1,5 @@
 # Changelog
 
-## [4.0.0](https://github.com/Ivantseng123/agentdock/compare/v3.9.0...v4.0.0) (2026-05-14)
-
-
-### ⚠ BREAKING CHANGES
-
-* **worker/config:** default opencode.mode flips from spawn to server. worker pods without opencode.mode explicitly set in worker.yaml will fail boot if agents.opencode is undefined (worker.go:92-106 fast-fail in server mode), or if the installed opencode binary is below MinimumOpencodeVersion=1.14.41. pre-flight worker.yaml for these preconditions before rolling new images.
-
-### Features
-
-* **cmd/agentdock:** worker init template emits commented-out opencode block ([a647828](https://github.com/Ivantseng123/agentdock/commit/a647828ec52814b7c5ea707892acd77d0bb24ff6))
-* **worker/agent:** add always-on opencode serve supervisor ([b11aa62](https://github.com/Ivantseng123/agentdock/commit/b11aa62217ccb2614cce902a36dceb9d5e805930))
-* **worker/agent:** add opencode HTTP/SSE client for server mode ([fe2ed7e](https://github.com/Ivantseng123/agentdock/commit/fe2ed7e24217940e37b531c34c30c718e6dee727))
-* **worker/agent:** add perf benchmark harness for spawn vs server mode ([d24affa](https://github.com/Ivantseng123/agentdock/commit/d24affa9cfbf21ff9b519ec9fe43d8dc449e203e))
-* **worker/agent:** detect opencode silent-drop signature on finish-other empty stream ([f996a2a](https://github.com/Ivantseng123/agentdock/commit/f996a2a6089f09ed505a2b68328a4a03d76340d8))
-* **worker/agent:** enforce opencode minimum version in server mode ([304339e](https://github.com/Ivantseng123/agentdock/commit/304339ead602f44b919b27ac75252691feba9840))
-* **worker/agent:** lazy opencode serve lifecycle + SIGTERM drain teardown ([12499cb](https://github.com/Ivantseng123/agentdock/commit/12499cb40ddea521722a399308d65e4dc72e5c15))
-* **worker/agent:** retry-once on opencode server crash mid-job ([cebb064](https://github.com/Ivantseng123/agentdock/commit/cebb0643d782c5f960baec2014543d5327c61cbd))
-* **worker/agent:** wire opencode mode dispatcher with server-mode stub ([9607f79](https://github.com/Ivantseng123/agentdock/commit/9607f790512bf7cfeae82f3ae143ed1438820a49))
-* **worker/agent:** wire opencode server-mode happy path ([3e6cbb8](https://github.com/Ivantseng123/agentdock/commit/3e6cbb865b942ca0119df00b9e1d8a3699fb6bcc))
-* **worker/config:** add OpencodeConfig schema with mode enum and defaults ([095f8a1](https://github.com/Ivantseng123/agentdock/commit/095f8a1eca47322ee7ec24f3b6bc7834a2865c27))
-* **worker/config:** flip default opencode.mode to server ([0c5fd6a](https://github.com/Ivantseng123/agentdock/commit/0c5fd6a902daebc597beb2ec52d70e2a4dc99d0d))
-* **worker:** opencode-server-mode Stage 1 — foundation (config + dispatcher stub) ([ca4907b](https://github.com/Ivantseng123/agentdock/commit/ca4907b221ce2d123c2a5593af8e48d3b5fc0d40))
-* **worker:** opencode-server-mode Stage 2 — server-mode happy path (Tasks 3.2-4..3.2-7) ([e3ce7a9](https://github.com/Ivantseng123/agentdock/commit/e3ce7a9fe8653c6973bb1f9cfb6cbd1e7d1e0f14))
-* **worker:** opencode-server-mode Stage 3 — resilience (Tasks 3.2-8..3.2-12) ([4c86149](https://github.com/Ivantseng123/agentdock/commit/4c861496738b38136266f6cf19b251f970e9e827))
-* **worker:** opencode-server-mode Stage 4 — --pure fix + perf baseline + bug A/B repro ([1621b71](https://github.com/Ivantseng123/agentdock/commit/1621b719f0f9588d6b8d5c6506c0d6750aecf10a))
-
-
-### Bug Fixes
-
-* **app/workflow:** render clean copy for opencode empty-stream sentinel in slack ([1cc8f43](https://github.com/Ivantseng123/agentdock/commit/1cc8f4382d919fc1fec3a3f9dd2cba5afe8b4a21))
-* **image:** bump opencode 1.14.29→1.14.41 ([2302333](https://github.com/Ivantseng123/agentdock/commit/2302333d0622f0c89d0622c16e8e4ab88e3327f0))
-* **image:** bump opencode 1.14.29→1.14.41 ([474b045](https://github.com/Ivantseng123/agentdock/commit/474b045909b13a82b8ee5e8a75d0c1dae99a1334))
-* **worker/agent:** address cross-review pr findings on server-mode ([27aee02](https://github.com/Ivantseng123/agentdock/commit/27aee02844309b0c52f8697c01d696a7c0ba88e8))
-* **worker/agent:** address cross-review pr findings on stage 3 supervisor ([c27b310](https://github.com/Ivantseng123/agentdock/commit/c27b310f7a68fecadc9359ce3c6f572f94287bac))
-* **worker/agent:** address cross-review pr findings on stage 4 perf harness ([f62499d](https://github.com/Ivantseng123/agentdock/commit/f62499d24497fcda47451e914406bb6497541c92))
-* **worker/agent:** pass --pure to opencode serve to skip project-level plugins ([9892481](https://github.com/Ivantseng123/agentdock/commit/989248158975c076d8b2d3cba119b00d32c961e4))
-
 ## [3.9.0](https://github.com/Ivantseng123/agentdock/compare/v3.8.0...v3.9.0) (2026-05-12)
 
 

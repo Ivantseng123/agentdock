@@ -180,46 +180,6 @@ Resulting invocations:
 
 **Caveat:** `extra_args` is operator-supplied — the worker never injects flags for you. If you put `--dangerously-skip-permissions` in there, that's your call and your risk (the worker may be running on your laptop, not an isolated pod).
 
-## Opencode block
-
-The worker exposes a top-level `opencode:` block (sibling of `queue:` / `redis:`) controlling the execution model for the opencode subprocess. **Omit the entire block** to use the default `mode: server`. Operators wanting the legacy per-job spawn path must explicitly set `mode: spawn`.
-
-```yaml
-opencode:
-  mode: server        # server (default) | spawn (legacy)
-  idle_timeout: 5m    # server mode only
-  storage_dir: ""     # server mode only; empty = runtime-resolved
-```
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `mode` | string | `server` | `server` = one long-running `opencode serve` subprocess shared by the worker pool, per-job calls go through HTTP/SSE (default); `spawn` = legacy per-job process (`opencode run --pure ...`). |
-| `idle_timeout` | duration | `5m` | Server mode only. How long the `opencode serve` child stays alive after the pool quiesces (zero in-flight jobs) before auto-stop. Next job lazily respawns it. |
-| `storage_dir` | string | `""` | Server mode only. Isolated `XDG_DATA_HOME` for the `opencode serve` child. Empty = worker picks a per-worker dir at runtime (multi-worker host safety). |
-
-### Choosing `mode`
-
-- **`server` (default; no silent drop)** — the worker pool shares one long-lived `opencode serve --pure` subprocess; per-job work flows over HTTP + SSE. Stage 4 measurement shows 100% healthy output on the same fixture where spawn silently dropped. Cost vs spawn: ~+11s per-job wallclock (real LLM round trip, which spawn was failing to do), and ~+470 MB RSS for the persistent subprocess. Server crashes go through retry-once (spec C4: no fallback to spawn). **Boot-time gate**: the installed opencode binary must be ≥ `MinimumOpencodeVersion` (currently `1.14.41`). Below floor → worker fast-fails at boot rather than silently degrading. If the `agents.opencode` block is omitted from worker.yaml, the runtime auto-fills the built-in opencode entry from `worker/config/builtin_agents.go` (normal deployments need no extra setup); the version check fires only when the operator explicitly overrides `agents.opencode.command` to point at a missing or below-floor binary.
-- **`spawn` (legacy; carries a known silent-answer-drop failure mode)** — every job spawns a fresh `opencode run` process. Stage 4 empirically reproduced spawn returning empty output on short-answer asks at a 30/30 rate on the dev box (see `docs/specs/opencode-server-mode-perf-baseline.md`); ADR-0005 traces the same symptom to a dispose race inside opencode CLI. Retained as the legacy opt-out path; per spec C3 it stays in the code for ≥2 weeks past the default flip before deletion is discussed.
-- **Spec C2 deviation** — spec C2 originally required ≥2 weeks of zero answer-drop with `mode: server` in production before flipping the default; the perf baseline added a "Linux-pod re-measurement of RSS/latency" gate on top. This default flip skips both, using pod deployment itself as the FUP-1 measurement window. See `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment for the rationale.
-
-### `idle_timeout` trade-off
-
-- Longer (e.g. `15m`) — short idle windows don't trigger respawn, so the next thunder of jobs gets immediate response; cost is sustained memory footprint.
-- Shorter (e.g. `30s`) — more aggressive memory reclaim; cost is a +5s class first-job latency on respawn (spec N2 budget).
-- Default `5m` balances warm-pool readiness against idle reclaim.
-
-### `storage_dir` notes
-
-`opencode serve` writes its session DB, log, and cache under `XDG_DATA_HOME`. On laptop deployments the worker MUST isolate this from the operator's own `~/.opencode` (spec § Boundaries Never: never contaminate the user's opencode state). Empty string = worker picks a unique per-worker dir at runtime. Set an explicit path only when you need a specific mount point; if you do, never share the same `storage_dir` between two workers on the same host.
-
-### Known limitations
-
-- **Pre-flight image / binary before the default flip** — server mode at boot requires the installed opencode binary to be ≥ `MinimumOpencodeVersion` (worker/agent/opencode_version.go). Confirm the image (or the host binary, for laptop deployments) ships `opencode` `1.14.41` or above before pulling; otherwise the worker fast-fails at boot (no silent degradation). To keep the legacy path, set `opencode.mode: spawn` explicitly in worker.yaml.
-- **Binary swap does not retrigger version check** — `opencode -v` is checked once at worker boot. If the operator replaces the binary while a worker is alive (e.g. upgrading `~/.opencode/bin/opencode`), the new version is **not** re-validated; the existing worker keeps running with whatever it observed at boot until the next restart. Immutable pod images don't hit this; laptop deployments own the risk.
-- **No server → spawn auto-fallback** — server mode failures fail loud; the worker does NOT silently fall back to spawn (spec C4). Server crashes recover via retry-once with a fresh subprocess (Stage 3 §F4); two consecutive failures within a single job hard-fail.
-- **Recommended monitoring during the observation window** — when running with `mode: server`, watch worker logs for the `OpencodeServer` component. If Bug A detection trips (`LLM 回應為空`) or the `crashed` state recurs, set `mode: spawn` explicitly in worker.yaml to fall back, then diagnose.
-
 ## Agent streaming
 
 Claude supports `--output-format stream-json`. With `stream: true`, the worker tracks:

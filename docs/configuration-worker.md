@@ -177,46 +177,6 @@ agents:
 
 **留意：** `extra_args` 是 operator 自己選的 flag，worker 不會預設幫你加任何東西。如果你寫了 `--dangerously-skip-permissions` 之類的開關，那是你的選擇，也是你的風險（worker 可能跑在你的筆電上，而不是 pod 裡）。
 
-## Opencode 區塊
-
-Worker 提供 top-level `opencode:` 區塊（跟 `queue:`、`redis:` 同階）控制 opencode 子進程的執行模型。**省略整個區塊**即沿用預設 `mode: server`。Operator 想退回 legacy per-job spawn 模式，必須顯式寫上 `mode: spawn`。
-
-```yaml
-opencode:
-  mode: server        # server (預設) | spawn (legacy)
-  idle_timeout: 5m    # 僅 server mode 生效
-  storage_dir: ""     # 僅 server mode 生效；空字串 = runtime 自動決定
-```
-
-| 欄位 | 型別 | 預設 | 說明 |
-|---|---|---|---|
-| `mode` | string | `server` | `server` = 整個 worker 共用一個長壽 `opencode serve` 子進程，per-job 走 HTTP/SSE（預設）；`spawn` = legacy 行為，每個 job 都 `opencode run --pure ...` 開一個新進程。 |
-| `idle_timeout` | duration | `5m` | server mode 才生效。worker pool quiesce（無 in-flight job）後 `opencode serve` 子進程等多久才自動 stop。下個 job 進來會 lazy 重新 spawn。 |
-| `storage_dir` | string | `""` | server mode 才生效。`opencode serve` 子進程的 isolated `XDG_DATA_HOME`。空字串 = worker 啟動時自動 resolve（多 worker 共用同主機時各自獨立目錄）。 |
-
-### `mode` 選擇
-
-- **`server`（預設、無 silent drop）** — worker pool 全程共用一個 `opencode serve --pure` 子進程，per-job 透過 HTTP + SSE 串接到該 server。Stage 4 在 dev box 上量到 100% healthy output（vs spawn 100% silent drop）。代價：每 job ~+11s wallclock（真實 LLM round trip，spawn 因為提早結束所以沒付這個成本）；persistent subprocess 約 +470 MB RSS。Server crash 走 retry-once（spec C4：不 fallback 到 spawn）。**Boot-time gate**：installed opencode binary 必須 ≥ `MinimumOpencodeVersion`（目前 `1.14.41`）。低於 floor → worker boot 失敗（fail-fast，非 silent degrade）。Worker.yaml 內 `agents.opencode` 區塊若整段省略，runtime 會自動套用 `worker/config/builtin_agents.go` 的內建 opencode entry（normal deployment 無須額外設定）；只在 operator 顯式覆寫 `agents.opencode.command` 卻指到不存在 binary 時才會由 version check 攔下。
-- **`spawn`（legacy、有已知 silent-answer-drop 故障）** — 每個 job spawn 新的 `opencode run` 進程。Stage 4 在 dev box 上以 30/30 比例重現「spawn 短答案 ask 回傳空白」(`docs/specs/opencode-server-mode-perf-baseline.md`)；ADR-0005 把同樣症狀 trace 到 opencode CLI 內部 dispose race。保留作為 legacy 路徑供 operator 明確 opt-out 用，依 spec C3 至少維護到預設翻轉後 ≥2 週才會議刪除。
-- **Spec C2 偏差** — spec C2 原本規定：`mode: server` 在 production 連續跑 ≥2 週、零 answer-drop 後，預設值才從 `spawn` 翻為 `server`；perf baseline 又加上「Linux pod 重新量過 RSS / latency 後才 flip」的 gate。本次預設翻轉略過上述兩條 gate，改以 pod 部署本身作為 FUP-1 量測窗口。詳見 `docs/specs/opencode-server-mode-perf-baseline.md` § Amendment。
-
-### `idle_timeout` trade-off
-
-- 較長（例如 `15m`）— pool 短暫 idle 後新 job 立即可用，無 lazy spawn 延遲；代價是記憶體 footprint 拉長。
-- 較短（例如 `30s`）— 記憶體更積極回收；代價是 idle 後重新 spawn 帶 first-job +5s 級延遲（spec N2 budget）。
-- 預設 `5m` 是兼顧 thundering-jobs 暖機跟 idle 回收的中間值。
-
-### `storage_dir` 說明
-
-opencode `serve` 把 session DB、log、cache 寫到 `XDG_DATA_HOME` 下。worker 在 dev box（laptop deployment）跑時，必須跟 operator 自己的 opencode 隔離（spec § Boundaries Never：絕不污染 user 的 ~/.opencode）。空字串時 worker 會在 runtime 選一個獨立目錄（per-worker isolation）；顯式填路徑只在你需要明確指定 mount point 時用，多 worker 共用同主機切記別讓兩個 worker 用同一個 `storage_dir`。
-
-### 已知限制
-
-- **預設翻轉前要 pre-flight image / binary** — server mode 啟動要求 installed opencode binary ≥ `MinimumOpencodeVersion`（worker/agent/opencode_version.go）。Upgrade image 前請先確認 image 內 `opencode` 為 `1.14.41` 或以上，否則拉新 image 後 worker boot 立刻失敗（fail-fast，非 silent degrade）。Laptop deployment 要自行確認本機 `opencode --version`。想沿用 legacy 行為的 operator 把 `opencode.mode: spawn` 顯式寫進 worker.yaml 即可。
-- **Binary swap 不會觸發 re-check** — `opencode -v` 在 worker 啟動時檢查一次。worker 跑起來後若 operator 換掉 binary（e.g. `~/.opencode/bin/opencode` 升版），新版本**不會**被重新驗證；既有 worker 直到下次重啟才會 pick up。pod 部署這條沒差（image 不可變）；laptop deployment 須自行管控。
-- **無 server → spawn auto-fallback** — server mode 失敗直接 fail，不會 silently fallback 回 spawn（spec C4）。對應地，server crash 透過 retry-once + 重新 spawn 子進程恢復（Stage 3 §F4）；連續兩次 fail 才硬性失敗。
-- **C2 觀察期間建議** — 啟用 server mode 後請主動觀察 worker 日誌的 `OpencodeServer` 相關 phase；若出現 Bug A 偵測（`LLM 回應為空`）或 `crashed` state 頻繁，先把 `mode: spawn` 顯式寫進 worker.yaml 回退，再診斷。
-
 ## Agent Stream
 
 Claude 支援 `--output-format stream-json`，開啟 `stream: true` 可即時追蹤：
