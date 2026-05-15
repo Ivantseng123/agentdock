@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.0.3](https://github.com/Ivantseng123/agentdock/compare/v4.0.2...v4.0.3) (2026-05-15)
+
+
+### Bug Fixes
+
+* **worker:** restore opencode server mode (revert PR [#264](https://github.com/Ivantseng123/agentdock/issues/264)) ([974acd7](https://github.com/Ivantseng123/agentdock/commit/974acd7d18dfcb14f436ab11e95b4387304c861c))
+* **worker:** restore opencode server mode (revert PR [#264](https://github.com/Ivantseng123/agentdock/issues/264)) ([8cb6e0d](https://github.com/Ivantseng123/agentdock/commit/8cb6e0dfd4cc19c0022e589ab1c9d31f06a3ae18))
+
 ## [4.0.2](https://github.com/Ivantseng123/agentdock/compare/v4.0.1...v4.0.2) (2026-05-15)
 
 
