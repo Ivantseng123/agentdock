@@ -538,6 +538,39 @@ func TestAskWorkflow_HandleResult_FailureNoRetryButton(t *testing.T) {
 	}
 }
 
+// TestAskWorkflow_HandleResult_FailureCleansOpencodeBugACopy pins
+// the Bug A user-facing copy fix. When the worker surfaces the
+// opencode Bug A sentinel through the standard "all agents failed:
+// opencode: …" wrapper, Slack should display just the sentinel — not
+// the noisy chain that's meaningless to a non-engineer reader.
+//
+// Drift defense: this test anchors the literal `LLM 回應為空，請稍後
+// 再試或改用 @bot issue` on the app side; worker/agent/
+// opencode_server_test.go anchors the same string on the worker side.
+// Either side editing the literal without the other breaks one of
+// these tests.
+func TestAskWorkflow_HandleResult_FailureCleansOpencodeBugACopy(t *testing.T) {
+	w, slack := newTestAskWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", TaskType: "ask"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID:  "j1",
+		Status: "failed",
+		Error:  "all agents failed: opencode: LLM 回應為空，請稍後再試或改用 @bot issue",
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	wantClean := ":x: 思考失敗：LLM 回應為空，請稍後再試或改用 @bot issue"
+	if !strings.Contains(joined, wantClean) {
+		t.Errorf("expected clean copy %q, got: %v", wantClean, slack.Posted)
+	}
+	if strings.Contains(joined, "all agents failed:") {
+		t.Errorf("noisy prefix leaked into Slack: %v", slack.Posted)
+	}
+}
+
 func TestAskWorkflow_HandleResult_NilStateReturnsError(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
 	result := &queue.JobResult{JobID: "j1", Status: "completed"}

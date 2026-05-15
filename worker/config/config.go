@@ -20,6 +20,7 @@ type Config struct {
 	Queue        QueueConfig            `yaml:"queue"`
 	Tracing      TracingConfig          `yaml:"tracing"`
 	Redis        RedisConfig            `yaml:"redis"`
+	Opencode     OpencodeConfig         `yaml:"opencode"`
 	SecretKey    string                 `yaml:"secret_key"`
 	Secrets      map[string]string      `yaml:"secrets"`
 }
@@ -114,4 +115,28 @@ type RedisConfig struct {
 	Password string `yaml:"password"`
 	DB       int    `yaml:"db"`
 	TLS      bool   `yaml:"tls"`
+}
+
+// Opencode runtime mode. Server is opt-in (Phase 3.2 work); Spawn is the
+// historical default and remains the worker's behavior when no `opencode:`
+// block is present in worker.yaml.
+const (
+	OpencodeModeSpawn  = "spawn"
+	OpencodeModeServer = "server"
+)
+
+// OpencodeConfig is the top-level worker-scope block that influences how the
+// opencode agent is invoked. Only meaningful when "opencode" appears in
+// Providers; other agents (claude / codex / gemini) ignore this block.
+//
+// Mode picks between the legacy `opencode run` per-job process (spawn) and
+// the Phase 3.2 long-running `opencode serve` subprocess shared by the
+// worker pool (server). IdleTimeout governs the lazy supervisor's auto-stop
+// window in server mode. StorageDir is the isolated `XDG_DATA_HOME` for the
+// supervisor's child opencode; empty means "resolve at runtime" — Stage 2
+// supervisor owns the resolution.
+type OpencodeConfig struct {
+	Mode        string        `yaml:"mode"`
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
+	StorageDir  string        `yaml:"storage_dir"`
 }

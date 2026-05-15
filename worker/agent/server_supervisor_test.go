@@ -1,0 +1,803 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestSupervisorListenLineMatches(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"loopback-port-0-result", "opencode server listening on http://127.0.0.1:50000", "http://127.0.0.1:50000"},
+		{"https-variant", "opencode server listening on https://127.0.0.1:443", "https://127.0.0.1:443"},
+		{"hostname-with-trailing-text", "opencode server listening on http://127.0.0.1:8080 (ready)", "http://127.0.0.1:8080"},
+		{"unrelated-line", "some other line", ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := supervisorListenLine.FindStringSubmatch(tc.line)
+			var got string
+			if len(m) > 1 {
+				got = m[1]
+			}
+			if got != tc.want {
+				t.Errorf("FindStringSubmatch(%q) = %q, want %q", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGenerateSupervisorPassword_UniqueAndHex(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 32; i++ {
+		p, err := generateSupervisorPassword()
+		if err != nil {
+			t.Fatalf("generateSupervisorPassword: %v", err)
+		}
+		if len(p) != 48 {
+			t.Errorf("password length = %d, want 48", len(p))
+		}
+		if seen[p] {
+			t.Errorf("duplicate password generated: %q", p)
+		}
+		seen[p] = true
+		for _, r := range p {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+				t.Errorf("password %q contains non-hex char %q", p, r)
+				break
+			}
+		}
+	}
+}
+
+func TestBuildSupervisorEnv(t *testing.T) {
+	t.Run("with-storage-dir", func(t *testing.T) {
+		env := buildSupervisorEnv("secret", "/tmp/xdg")
+		if !containsExact(env, "OPENCODE_SERVER_PASSWORD=secret") {
+			t.Error("env missing OPENCODE_SERVER_PASSWORD")
+		}
+		if !containsExact(env, "XDG_DATA_HOME=/tmp/xdg") {
+			t.Error("env missing XDG_DATA_HOME")
+		}
+	})
+	t.Run("empty-storage-dir-omits-xdg", func(t *testing.T) {
+		env := buildSupervisorEnv("secret", "")
+		if !containsExact(env, "OPENCODE_SERVER_PASSWORD=secret") {
+			t.Error("env missing OPENCODE_SERVER_PASSWORD")
+		}
+		for _, e := range env {
+			if strings.HasPrefix(e, "XDG_DATA_HOME=") && e == "XDG_DATA_HOME=" {
+				t.Error("empty StorageDir leaked into XDG_DATA_HOME=")
+			}
+		}
+	})
+}
+
+func TestPollSupervisorHealth_OkAfterRetries(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		u, p, ok := r.BasicAuth()
+		if !ok || u != supervisorAuthUsername || p != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if hits.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"healthy":true,"version":"fake"}`))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pollSupervisorHealth(ctx, srv.URL, "secret"); err != nil {
+		t.Fatalf("pollSupervisorHealth: %v", err)
+	}
+	if hits.Load() < 3 {
+		t.Errorf("hits = %d, expected ≥ 3 to confirm retry", hits.Load())
+	}
+}
+
+func TestPollSupervisorHealth_NeverHealthyTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	err := pollSupervisorHealth(ctx, srv.URL, "secret")
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error %v not a context.DeadlineExceeded", err)
+	}
+}
+
+func TestPollSupervisorHealth_BadCredentialsErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := r.BasicAuth()
+		if !ok {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := pollSupervisorHealth(ctx, srv.URL, "secret")
+	if err == nil {
+		t.Fatal("expected error on persistent 401, got nil")
+	}
+}
+
+func TestIsExpectedExitOnSignal(t *testing.T) {
+	if isExpectedExitOnSignal(nil) != true {
+		t.Error("nil should be treated as expected (clean exit)")
+	}
+	other := errors.New("non-exec error")
+	if isExpectedExitOnSignal(other) {
+		t.Error("non-exec error should not be expected")
+	}
+}
+
+func TestSupervisor_StartStop_HappyPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	if err := sup.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := sup.BaseURL(); got != srv.URL {
+		t.Errorf("BaseURL = %q, want %q", got, srv.URL)
+	}
+	if sup.Password() == "" {
+		t.Error("Password is empty after Start")
+	}
+	pid := sup.ChildPID()
+	if pid == 0 {
+		t.Error("ChildPID is 0 after Start")
+	}
+	if err := sup.Stop(context.Background()); err != nil {
+		t.Errorf("Stop: %v", err)
+	}
+	if alive, err := processAlive(pid); alive || err == nil {
+		t.Errorf("process %d still alive after Stop (err=%v)", pid, err)
+	}
+}
+
+func TestSupervisor_Start_BinaryMissing(t *testing.T) {
+	sup := NewSupervisor(SupervisorConfig{
+		BinaryPath: filepath.Join(t.TempDir(), "does-not-exist"),
+	})
+	err := sup.Start(context.Background())
+	if err == nil {
+		_ = sup.Stop(context.Background())
+		t.Fatal("Start succeeded with missing binary")
+	}
+}
+
+func TestSupervisor_Start_BinaryCrashesBeforeReady(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 7\n"), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: bin})
+	err := sup.Start(context.Background())
+	if err == nil {
+		_ = sup.Stop(context.Background())
+		t.Fatal("Start succeeded with binary that exits before ready")
+	}
+}
+
+func TestSupervisor_Start_BinaryPrintsLineButNoHealth(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	// Point listen URL at a non-listening loopback port — health probe must
+	// surface ctx.Deadline rather than hang past supervisorStartTimeout.
+	binPath := writeFakeOpencodeServeBinary(t, "http://127.0.0.1:1", "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := sup.Start(ctx)
+	if err == nil {
+		_ = sup.Stop(context.Background())
+		t.Fatal("Start succeeded against non-listening URL")
+	}
+}
+
+func TestSupervisor_Stop_Idempotent(t *testing.T) {
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: "/never-started"})
+	if err := sup.Stop(context.Background()); err != nil {
+		t.Errorf("Stop on never-started supervisor: %v", err)
+	}
+}
+
+// Stage 3 lazy lifecycle tests. The supervisor in Stage 3 boots in
+// `idle` state; the first Acquire triggers spawn. Release decrements
+// the active count and arms an idle timer (when IdleTimeout > 0).
+
+func TestSupervisor_Acquire_LazySpawnAndRelease(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	if got := sup.State(); got != stateIdle {
+		t.Errorf("pre-Acquire State = %s, want idle", got)
+	}
+	if pid := sup.ChildPID(); pid != 0 {
+		t.Errorf("pre-Acquire ChildPID = %d, want 0", pid)
+	}
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	if got := sup.State(); got != stateRunning {
+		t.Errorf("post-Acquire State = %s, want running", got)
+	}
+	if sup.ChildPID() == 0 {
+		t.Error("post-Acquire ChildPID = 0")
+	}
+	if sup.BaseURL() != srv.URL {
+		t.Errorf("BaseURL = %q, want %q", sup.BaseURL(), srv.URL)
+	}
+
+	sup.Release()
+	if got := sup.State(); got != stateRunning {
+		t.Errorf("post-Release State = %s, want running (no IdleTimeout)", got)
+	}
+}
+
+func TestSupervisor_Acquire_ConcurrentCoalesceSingleSpawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	const N = 8
+	var wg sync.WaitGroup
+	pids := make([]int, N)
+	urls := make([]string, N)
+	errs := make([]error, N)
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			err := sup.Acquire(context.Background())
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			pids[i] = sup.ChildPID()
+			urls[i] = sup.BaseURL()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	var firstPID int
+	var firstURL string
+	for i := 0; i < N; i++ {
+		if errs[i] != nil {
+			t.Errorf("Acquire[%d]: %v", i, errs[i])
+			continue
+		}
+		if firstPID == 0 {
+			firstPID = pids[i]
+			firstURL = urls[i]
+			continue
+		}
+		if pids[i] != firstPID {
+			t.Errorf("Acquire[%d] PID = %d, want %d (coalescence broken — multiple spawns)", i, pids[i], firstPID)
+		}
+		if urls[i] != firstURL {
+			t.Errorf("Acquire[%d] URL = %q, want %q", i, urls[i], firstURL)
+		}
+	}
+
+	// Drain all Releases to confirm activeCount tracks correctly.
+	for i := 0; i < N; i++ {
+		sup.Release()
+	}
+	sup.mu.Lock()
+	got := sup.activeCount
+	sup.mu.Unlock()
+	if got != 0 {
+		t.Errorf("activeCount after N Releases = %d, want 0", got)
+	}
+}
+
+func TestSupervisor_Acquire_IdleStopThenRespawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{
+		BinaryPath:  binPath,
+		IdleTimeout: 100 * time.Millisecond,
+	})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire 1: %v", err)
+	}
+	pid1 := sup.ChildPID()
+	if pid1 == 0 {
+		t.Fatal("PID is 0 after first Acquire")
+	}
+	sup.Release()
+
+	// Idle timer fires after 100ms; internal stop adds another ~50ms
+	// for the sleep child to die. 3s is plenty of headroom.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if sup.State() == stateIdle {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if sup.State() != stateIdle {
+		t.Fatalf("supervisor state = %s, want idle after IdleTimeout", sup.State())
+	}
+	if alive, _ := processAlive(pid1); alive {
+		t.Errorf("PID %d still alive after idle stop", pid1)
+	}
+	if sup.ChildPID() != 0 {
+		t.Errorf("ChildPID = %d after idle stop, want 0", sup.ChildPID())
+	}
+
+	// Re-acquire must trigger fresh spawn — different PID.
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire 2: %v", err)
+	}
+	pid2 := sup.ChildPID()
+	if pid2 == 0 {
+		t.Fatal("PID is 0 after second Acquire")
+	}
+	if pid2 == pid1 {
+		t.Errorf("re-Acquire produced same PID %d (no respawn)", pid2)
+	}
+	sup.Release()
+}
+
+func TestSupervisor_Drain_RejectsPostDrainAcquire(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	pid := sup.ChildPID()
+	sup.Release()
+
+	if err := sup.Drain(context.Background()); err != nil {
+		t.Errorf("Drain: %v", err)
+	}
+	if alive, _ := processAlive(pid); alive {
+		t.Errorf("PID %d still alive after Drain", pid)
+	}
+
+	err := sup.Acquire(context.Background())
+	if err == nil {
+		t.Fatal("Acquire after Drain succeeded")
+	}
+	if !strings.Contains(err.Error(), "shutting down") {
+		t.Errorf("Acquire post-Drain error = %v, want 'shutting down' substring", err)
+	}
+}
+
+func TestSupervisor_Drain_AbortsActiveSessions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+
+	var (
+		abortedMu sync.Mutex
+		aborted   []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != supervisorAuthUsername || p == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"healthy":true,"version":"fake"}`))
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/session/") && strings.HasSuffix(r.URL.Path, "/abort") {
+			parts := strings.Split(r.URL.Path, "/")
+			if len(parts) >= 4 {
+				abortedMu.Lock()
+				aborted = append(aborted, parts[2])
+				abortedMu.Unlock()
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	pid := sup.ChildPID()
+	sup.SetActiveSession("ses_1")
+	sup.SetActiveSession("ses_2")
+	sup.SetActiveSession("ses_3")
+
+	if err := sup.Drain(context.Background()); err != nil {
+		t.Errorf("Drain: %v", err)
+	}
+	if alive, _ := processAlive(pid); alive {
+		t.Errorf("PID %d still alive after Drain", pid)
+	}
+
+	abortedMu.Lock()
+	got := append([]string(nil), aborted...)
+	abortedMu.Unlock()
+	if len(got) != 3 {
+		t.Fatalf("aborted = %v, want 3 abort calls", got)
+	}
+	seen := map[string]bool{}
+	for _, id := range got {
+		seen[id] = true
+	}
+	for _, want := range []string{"ses_1", "ses_2", "ses_3"} {
+		if !seen[want] {
+			t.Errorf("session %q never aborted (got %v)", want, got)
+		}
+	}
+}
+
+// TestSupervisor_Drain_DuringSpawn verifies the cross-review pr fix
+// for the Drain-vs-Acquire race. Acquire enters stateStarting and
+// blocks inside spawn (the fake binary sleeps before printing the
+// listen URL). Drain fires while state is still stateStarting; per
+// the fix, Drain waits for spawn to settle and the spawn-completion
+// path in Acquire detects shuttingDown and tears the new child down
+// before transitioning to running.
+func TestSupervisor_Drain_DuringSpawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "opencode")
+	// Delay the listen URL by 500ms so Drain races into stateStarting.
+	script := fmt.Sprintf("#!/bin/sh\nsleep 0.5\necho \"opencode server listening on %s\"\nexec sleep 600\n", srv.URL)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write delayed fake binary: %v", err)
+	}
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: bin})
+
+	acquireErrCh := make(chan error, 1)
+	go func() {
+		acquireErrCh <- sup.Acquire(context.Background())
+	}()
+
+	// Let Acquire enter stateStarting and cmd.Start the child.
+	time.Sleep(100 * time.Millisecond)
+	if sup.State() != stateStarting {
+		t.Fatalf("supervisor state = %s, want starting (test timing race)", sup.State())
+	}
+
+	drainErr := sup.Drain(context.Background())
+	if drainErr != nil {
+		t.Errorf("Drain returned error: %v", drainErr)
+	}
+
+	select {
+	case acquireErr := <-acquireErrCh:
+		if acquireErr == nil {
+			t.Error("Acquire racing Drain should have errored")
+		}
+		if acquireErr != nil && !strings.Contains(acquireErr.Error(), "shutting down") {
+			t.Errorf("Acquire error = %v, want substring 'shutting down'", acquireErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Acquire did not return within 5s after Drain")
+	}
+
+	if sup.State() != stateIdle {
+		t.Errorf("post-Drain state = %s, want idle", sup.State())
+	}
+	if sup.ChildPID() != 0 {
+		t.Errorf("post-Drain ChildPID = %d, want 0 (child cleaned up)", sup.ChildPID())
+	}
+}
+
+func TestSupervisor_KillChildFlipsToCrashed_ThenRespawn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	srv := newFakeHealthServer(t, "")
+	defer srv.Close()
+
+	binPath := writeFakeOpencodeServeBinary(t, srv.URL, "sleep")
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	defer func() { _ = sup.Stop(context.Background()) }()
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	pid := sup.ChildPID()
+	if pid == 0 {
+		t.Fatal("PID is 0 after Acquire")
+	}
+
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill child: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if sup.State() == stateCrashed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if sup.State() != stateCrashed {
+		t.Fatalf("supervisor state = %s, want crashed after SIGKILL", sup.State())
+	}
+
+	// Release the slot we acquired before the crash so re-Acquire's
+	// idle-timer reset path is clean. (activeCount was 1; the wait
+	// goroutine doesn't touch activeCount on unexpected exit, so we
+	// still hold the slot — release is necessary even though the
+	// child is dead.)
+	sup.Release()
+
+	if err := sup.Acquire(context.Background()); err != nil {
+		t.Fatalf("re-Acquire after crash: %v", err)
+	}
+	newPID := sup.ChildPID()
+	if newPID == 0 {
+		t.Error("post-crash respawn PID is 0")
+	}
+	if newPID == pid {
+		t.Errorf("post-crash respawn PID = %d, want a different PID (no actual respawn)", newPID)
+	}
+	if sup.State() != stateRunning {
+		t.Errorf("post-respawn state = %s, want running", sup.State())
+	}
+	sup.Release()
+}
+
+// TestSupervisor_MultiInstanceWiring verifies that N supervisors
+// started concurrently in the same process each get distinct listen
+// URLs and each /health probe succeeds. Stage 3 Task 3.2-12.
+//
+// This is *not* a real kernel-port-collision stress test — the fake
+// binaries each point at their own httptest server (which already gets
+// a kernel-assigned port), so the per-instance URL distinction is a
+// foregone conclusion. What this test actually pins down is the
+// supervisor's per-instance wiring (BaseURL/Password/state) under
+// concurrent Start. The real `opencode serve --port 0` kernel-port
+// allocation lives in opencode itself and is out of scope for unit
+// tests; Manifest §1.7 and spec §F6 explicitly delegate collision
+// safety to the kernel.
+func TestSupervisor_MultiInstanceWiring(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sh script not supported on windows")
+	}
+	const N = 4
+	var (
+		servers     [N]*httptest.Server
+		supervisors [N]*Supervisor
+	)
+	for i := 0; i < N; i++ {
+		servers[i] = newFakeHealthServer(t, "")
+		binPath := writeFakeOpencodeServeBinary(t, servers[i].URL, "sleep")
+		supervisors[i] = NewSupervisor(SupervisorConfig{BinaryPath: binPath})
+	}
+	defer func() {
+		for _, sup := range supervisors {
+			_ = sup.Stop(context.Background())
+		}
+		for _, srv := range servers {
+			srv.Close()
+		}
+	}()
+
+	var wg sync.WaitGroup
+	errs := make([]error, N)
+	for i := 0; i < N; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = supervisors[i].Start(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	seenURL := make(map[string]int)
+	for i := 0; i < N; i++ {
+		if errs[i] != nil {
+			t.Errorf("supervisor[%d].Start: %v", i, errs[i])
+			continue
+		}
+		url := supervisors[i].BaseURL()
+		if url == "" {
+			t.Errorf("supervisor[%d] BaseURL = empty", i)
+			continue
+		}
+		seenURL[url]++
+	}
+	if len(seenURL) != N {
+		t.Errorf("supervisor URLs not unique across %d instances: %v", N, seenURL)
+	}
+}
+
+func TestSupervisor_Acquire_RejectedDuringShutdown(t *testing.T) {
+	sup := NewSupervisor(SupervisorConfig{BinaryPath: "/never-spawned"})
+	sup.mu.Lock()
+	sup.shuttingDown = true
+	sup.mu.Unlock()
+
+	err := sup.Acquire(context.Background())
+	if err == nil {
+		t.Fatal("Acquire on shuttingDown supervisor succeeded")
+	}
+	if !strings.Contains(err.Error(), "shutting down") {
+		t.Errorf("error = %v, want 'shutting down'", err)
+	}
+}
+
+// newFakeHealthServer spins up an httptest server that responds 200 to
+// authenticated GET /health and 401 otherwise. The optional sessionsHandler
+// lets caller layer in additional routes for HTTP/SSE client tests.
+func newFakeHealthServer(t *testing.T, expectedPassword string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			u, p, ok := r.BasicAuth()
+			if !ok || u != supervisorAuthUsername {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if expectedPassword != "" && p != expectedPassword {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"healthy":true,"version":"fake"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+}
+
+// writeFakeOpencodeServeBinary creates a sh script that prints the
+// expected listen line and either sleeps (mode=sleep, default for happy
+// path) or exits (mode=exit, for crash-before-ready coverage).
+func writeFakeOpencodeServeBinary(t *testing.T, fakeBaseURL, mode string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "opencode")
+	var body string
+	switch mode {
+	case "exit":
+		body = "exit 0"
+	default:
+		// exec sleep replaces the shell process image so SIGTERM is
+		// delivered straight to sleep, which terminates immediately.
+		// (Avoids the trap-while-sleep race on some POSIX shells.)
+		body = "exec sleep 600"
+	}
+	script := fmt.Sprintf("#!/bin/sh\necho \"opencode server listening on %s\"\n%s\n", fakeBaseURL, body)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake binary: %v", err)
+	}
+	return bin
+}
+
+func processAlive(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, errors.New("invalid pid")
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false, err
+	}
+	err = p.Signal(syscall.Signal(0))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrProcessDone) {
+		return false, err
+	}
+	// macOS / linux: ESRCH from kill(2)
+	if isProcessNotFound(err) {
+		return false, err
+	}
+	return false, err
+}
+
+func isProcessNotFound(err error) bool {
+	var sysErr syscall.Errno
+	if errors.As(err, &sysErr) {
+		return sysErr == syscall.ESRCH
+	}
+	return false
+}
+
+func containsExact(env []string, want string) bool {
+	for _, e := range env {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+// Compile-time sanity: ensure exec.ExitError is reachable for sad-path
+// assertions even when no test directly returns one.
+var _ = (*exec.ExitError)(nil)

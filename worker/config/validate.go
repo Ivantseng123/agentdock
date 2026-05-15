@@ -42,6 +42,16 @@ func Validate(cfg *Config) error {
 		errs = append(errs, "repo_cache.max_age must be > 0")
 	}
 
+	switch cfg.Opencode.Mode {
+	case OpencodeModeSpawn, OpencodeModeServer:
+		// ok
+	default:
+		errs = append(errs, fmt.Sprintf("opencode.mode must be %q or %q, got %q", OpencodeModeSpawn, OpencodeModeServer, cfg.Opencode.Mode))
+	}
+	if cfg.Opencode.IdleTimeout <= 0 {
+		errs = append(errs, "opencode.idle_timeout must be > 0")
+	}
+
 	// NicknamePool: trim-normalise in place, then check length.
 	for i, raw := range cfg.NicknamePool {
 		trimmed := strings.TrimSpace(raw)
