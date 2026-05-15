@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
@@ -726,34 +725,6 @@ const askFallbackBanner = ":warning: 請驗證輸出答案,AGENT 並未遵守輸
 // swamped. Matches where Slack's own text readability starts to degrade.
 const askInlineThreshold = 2000
 
-// askOpencodeBugASentinel is the user-facing copy emitted by the
-// worker's opencode server-mode Bug A detector (see worker/agent/
-// opencode_server.go errOpencodeEmptyStream). When this string appears
-// as the innermost wrap of r.Error — typically prefixed by the chain
-// "all agents failed: opencode: …" from worker/agent/runner.go — we
-// render just the sentinel instead of the noisy chain.
-//
-// Match by suffix rather than `errors.Is` because the
-// import_direction_test forbids app→worker imports; pulling the
-// sentinel into `shared/` would be over-engineering for one const.
-// Two independent test anchors (worker/agent/opencode_server_test.go
-// and the matching app-side test) catch any drift between the two
-// hardcoded literals.
-const askOpencodeBugASentinel = "LLM 回應為空，請稍後再試或改用 @bot issue"
-
-// cleanAskFailureReason strips known noisy wrappers from the failure
-// reason before it lands in the Slack `:x: 思考失敗：…` line. The only
-// case handled today is the opencode Bug A sentinel which the worker
-// surfaces with a "all agents failed: opencode: " prefix; collapsing
-// it to just the sentinel hides the chain that's meaningless to a
-// non-engineer Slack reader.
-func cleanAskFailureReason(reason string) string {
-	if strings.HasSuffix(reason, askOpencodeBugASentinel) {
-		return askOpencodeBugASentinel
-	}
-	return reason
-}
-
 // HandleResult renders the agent output into the Slack thread. Failure paths
 // are posted without a retry button (Ask is best-effort). Parse failures and
 // answers are both final — no retry lane.
@@ -764,7 +735,7 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 	job := state.Job
 
 	if r.Status == "failed" {
-		text := fmt.Sprintf(":x: 思考失敗：%s", cleanAskFailureReason(r.Error))
+		text := fmt.Sprintf(":x: 思考失敗：%s", r.Error)
 		return w.post(job, text)
 	}
 
