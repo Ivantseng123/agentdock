@@ -30,12 +30,6 @@ var (
 	Date    = "unknown"
 )
 
-// opencodeSupervisorDrainTimeout caps the supervisor Drain operation
-// on worker shutdown. Has to cover the 30s active-session abort budget
-// plus the ~10s SIGTERM grace inside Supervisor.Drain; 60s gives
-// headroom for an upstream slowdown to settle.
-const opencodeSupervisorDrainTimeout = 60 * time.Second
-
 // Run starts the worker process: initializes logging, connects Redis, builds
 // the pool, and waits for SIGTERM/SIGINT. Returns on clean shutdown or error.
 func Run(cfg *config.Config) error {
@@ -123,29 +117,25 @@ func Run(cfg *config.Config) error {
 			"required", agent.MinimumOpencodeVersion,
 		)
 
-		// Wire the supervisor in lazy mode (Stage 3): worker boot does
-		// NOT spawn the `opencode serve` child. First Acquire by
-		// runOneServer triggers spawn; pool idle for IdleTimeout
-		// auto-stops the child. Worker SIGTERM goes through Drain,
-		// which aborts active sessions before SIGTERM-ing the child.
-		// Pool's N goroutines share the single supervisor via per-
+		// Spawn the long-running `opencode serve` child. Always-on at
+		// Stage 2 (lazy lifecycle stays Task 3.2-8 / Stage 3). Worker
+		// pool's N goroutines share the single supervisor via per-
 		// request `x-opencode-directory` header isolation.
 		serverLogger := logging.ComponentLogger(slog.Default(), "OpencodeServer")
 		supervisor := agent.NewSupervisor(agent.SupervisorConfig{
-			BinaryPath:  opencodeAgent.Command,
-			StorageDir:  cfg.Opencode.StorageDir,
-			IdleTimeout: cfg.Opencode.IdleTimeout,
-			Logger:      serverLogger,
+			BinaryPath: opencodeAgent.Command,
+			StorageDir: cfg.Opencode.StorageDir,
+			Logger:     serverLogger,
 		})
+		if err := supervisor.Start(context.Background()); err != nil {
+			return fmt.Errorf("start opencode supervisor: %w", err)
+		}
 		agentRunner.SetOpencodeSupervisor(supervisor)
 		defer func() {
-			// Drain budget is 30s for active-session aborts + ~10s
-			// SIGTERM grace; 60s gives headroom for the abort phase to
-			// settle even when an upstream is slow.
-			drainCtx, drainCancel := context.WithTimeout(context.Background(), opencodeSupervisorDrainTimeout)
-			defer drainCancel()
-			if err := supervisor.Drain(drainCtx); err != nil {
-				appLogger.Warn("opencode supervisor drain 失敗",
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stopCancel()
+			if err := supervisor.Stop(stopCtx); err != nil {
+				appLogger.Warn("opencode supervisor stop 失敗",
 					"phase", "失敗",
 					"error", err,
 				)
