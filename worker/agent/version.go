@@ -29,12 +29,9 @@ func (r *Runner) LogVersions(ctx context.Context, logger *slog.Logger) {
 }
 
 // detectVersion runs `command --version` with a per-agent timeout and
-// returns the trimmed first line. The first line carries the
-// version-bearing string for the CLIs we wire today — claude / codex emit
-// a `<name> <version>` banner, opencode emits a bare semver (e.g.
-// `1.14.41`). Callers that need a parsed version (e.g.
-// CheckOpencodeVersion in opencode_version.go) interpret the returned
-// line per CLI. Caller decides how to surface failures.
+// returns the trimmed first line. The first line is the convention for CLIs
+// that print a banner before the version (claude, codex, opencode all
+// conform). Caller decides how to surface failures.
 func detectVersion(ctx context.Context, command string) (string, error) {
 	versionCtx, cancel := context.WithTimeout(ctx, versionDetectTimeout)
 	defer cancel()

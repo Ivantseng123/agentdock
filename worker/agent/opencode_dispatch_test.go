@@ -53,16 +53,12 @@ func TestDispatchTarget_Matrix(t *testing.T) {
 	}
 }
 
-// TestRunOne_Server_NilSupervisor_ReturnsExplicitError walks the
-// dispatcher and the nil-supervisor guard end-to-end: when opencode+
-// server is configured but the Runner has no Supervisor (e.g. Runner
-// constructed via NewRunner directly, or boot failed to attach one),
-// runOne must call runOneServer, which then surfaces an explicit
-// "supervisor not initialized" error rather than panicking on nil
-// dereference. This proves the dispatcher actually reaches
-// runOneServer and that the Stage 2 implementation's defensive guard
-// fires correctly.
-func TestRunOne_Server_NilSupervisor_ReturnsExplicitError(t *testing.T) {
+// TestRunOne_ServerStub_ReturnsExplicitError walks the dispatcher and the
+// stub end-to-end: when opencode+server is configured, runOne must call
+// runOneServer, which (in Stage 1) returns an error mentioning the
+// not-implemented state. This proves the dispatcher actually reaches the
+// stub rather than silently falling through to spawn.
+func TestRunOne_ServerStub_ReturnsExplicitError(t *testing.T) {
 	r := &Runner{
 		opencodeCfg: config.OpencodeConfig{Mode: config.OpencodeModeServer},
 	}
@@ -75,10 +71,10 @@ func TestRunOne_Server_NilSupervisor_ReturnsExplicitError(t *testing.T) {
 		RunOptions{},
 	)
 	if err == nil {
-		t.Fatal("expected nil-supervisor error, got nil")
+		t.Fatal("expected stub error, got nil")
 	}
-	if !strings.Contains(err.Error(), "supervisor not initialized") {
-		t.Errorf("error %q does not mention 'supervisor not initialized'", err.Error())
+	if !strings.Contains(err.Error(), "server mode not implemented") {
+		t.Errorf("error %q does not mention 'server mode not implemented'", err.Error())
 	}
 }
 
