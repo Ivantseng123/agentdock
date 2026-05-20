@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -387,6 +388,107 @@ func TestClient_SendPrompt_EmptySessionID(t *testing.T) {
 	_, err := c.SendPrompt(context.Background(), "", "/tmp/work", "x")
 	if err == nil {
 		t.Fatal("expected error on empty sessionID")
+	}
+}
+
+// TestClient_SendPrompt_LargeSSELine_DoesNotOverflow guards issue #272:
+// a single `data: ...` SSE line whose JSON payload exceeds the previous
+// 1 MB bufio.Scanner cap aborted the consumer mid-stream with
+// `scan SSE stream: bufio.Scanner: token too long`. Reproduced 100% on
+// 2026-05-15 in ai-tools with kimi-k2.6 ask jobs whose
+// message.part.updated snapshot blew past 1 MB.
+//
+// The POST handler holds its response until the SSE collector signals
+// that the big delta has been consumed. Wait()'s deferred Close cancels
+// the SSE context; without this barrier the cancel would sever a
+// mid-2 MB read and confuse "we couldn't read the line" with "the line
+// is too big to scan". The barrier isolates this test to the line-size
+// concern.
+func TestClient_SendPrompt_LargeSSELine_DoesNotOverflow(t *testing.T) {
+	bigText := strings.Repeat("x", 2*1024*1024)
+	bigEvent := fmt.Sprintf(
+		`{"id":"e2","type":"message.part.updated","properties":{"part":{"type":"text","text":%q}}}`,
+		bigText,
+	)
+	sseDrained := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			writeSSELines(w, r, []string{
+				`{"id":"e1","type":"server.connected","properties":{}}`,
+				bigEvent,
+			})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/message"):
+			select {
+			case <-sseDrained:
+			case <-time.After(5 * time.Second):
+				t.Error("timed out waiting for SSE collector to drain big delta")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"info":{"finish":"stop","tokens":{"input":1,"output":1}},"parts":[{"type":"text","text":"final"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "secret", nil)
+	run, err := c.SendPrompt(context.Background(), "ses_001", "/tmp/work", "huge")
+	if err != nil {
+		t.Fatalf("SendPrompt: %v", err)
+	}
+
+	var (
+		sawCorrectDelta bool
+		biggestBytes    int
+		sseErrs         []error
+		drainOnce       sync.Once
+	)
+	collectDone := make(chan struct{})
+	go func() {
+		defer close(collectDone)
+		for {
+			select {
+			case ev, ok := <-run.Events:
+				if !ok {
+					return
+				}
+				if ev.Type == "message_delta" {
+					if ev.TextBytes > biggestBytes {
+						biggestBytes = ev.TextBytes
+					}
+					if ev.TextBytes == len(bigText) {
+						sawCorrectDelta = true
+						drainOnce.Do(func() { close(sseDrained) })
+					}
+				}
+			case err, ok := <-run.SSEErrors:
+				if !ok {
+					continue
+				}
+				sseErrs = append(sseErrs, err)
+			}
+		}
+	}()
+
+	text, err := run.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if text != "final" {
+		t.Errorf("final text = %q, want %q", text, "final")
+	}
+	<-collectDone
+
+	if !sawCorrectDelta {
+		t.Errorf("expected message_delta with TextBytes=%d; biggest seen=%d; sseErrs=%v", len(bigText), biggestBytes, sseErrs)
+	}
+	for _, e := range sseErrs {
+		if strings.Contains(e.Error(), "token too long") {
+			t.Fatalf("SSE consumer aborted on > 1 MB line: %v", e)
+		}
 	}
 }
 
