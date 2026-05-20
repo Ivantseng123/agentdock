@@ -341,47 +341,53 @@ func (c *Client) subscribeEvents(ctx context.Context, directory string, events c
 		defer resp.Body.Close()
 		defer emitTerminal()
 
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, clientSSEDataLinePrefix) {
-				continue
+		// bufio.Reader instead of Scanner: a single opencode bus event
+		// can exceed 1 MB (kimi-k2.6 message.part.updated snapshots
+		// with full text / base64-bearing tool I/O), and Scanner's
+		// per-token size cap aborted the consumer mid-stream. Reader
+		// grows its buffer on demand and has no token size cap; worker
+		// connects only to localhost `opencode serve`, so the
+		// unbounded-line risk is bounded by what opencode emits (#272).
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if strings.HasPrefix(line, clientSSEDataLinePrefix) {
+				raw := []byte(strings.TrimRight(strings.TrimPrefix(line, clientSSEDataLinePrefix), "\r\n"))
+				ev, ok, decErr := decodeOpencodeBusEvent(raw)
+				if decErr != nil {
+					trySendErr(sseErrCh, fmt.Errorf("decode SSE event: %w", decErr))
+					return
+				}
+				if ok && ev.Type == "result" {
+					cumInputTokens += ev.InputTokens
+					cumOutputTokens += ev.OutputTokens
+					cumCostUSD += ev.CostUSD
+					hasStepFinish = true
+				} else if ok {
+					// Track that a non-empty text part landed via SSE;
+					// Stage 3 Task 3.2-11's Bug A detector AND-gates on
+					// the absence of any *meaningful* text part.
+					// Empty-text deltas (TextBytes == 0) don't disqualify
+					// Bug A — opencode occasionally emits zero-byte text
+					// updates that carry no answer payload (cross-review
+					// pr finding).
+					if ev.Type == "message_delta" && ev.TextBytes > 0 && sawText != nil {
+						sawText.Store(true)
+					}
+					select {
+					case events <- ev:
+					case <-ctx.Done():
+						return
+					}
+				}
 			}
-			raw := []byte(strings.TrimPrefix(line, clientSSEDataLinePrefix))
-			ev, ok, decErr := decodeOpencodeBusEvent(raw)
-			if decErr != nil {
-				trySendErr(sseErrCh, fmt.Errorf("decode SSE event: %w", decErr))
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				trySendErr(sseErrCh, fmt.Errorf("scan SSE stream: %w", readErr))
 				return
 			}
-			if !ok {
-				continue
-			}
-			if ev.Type == "result" {
-				cumInputTokens += ev.InputTokens
-				cumOutputTokens += ev.OutputTokens
-				cumCostUSD += ev.CostUSD
-				hasStepFinish = true
-				continue
-			}
-			// Track that a non-empty text part landed via SSE; Stage 3
-			// Task 3.2-11's Bug A detector AND-gates on the absence of
-			// any *meaningful* text part. Empty-text deltas (TextBytes
-			// == 0) don't disqualify Bug A — opencode occasionally
-			// emits zero-byte text updates that carry no answer
-			// payload (cross-review pr finding).
-			if ev.Type == "message_delta" && ev.TextBytes > 0 && sawText != nil {
-				sawText.Store(true)
-			}
-			select {
-			case events <- ev:
-			case <-ctx.Done():
-				return
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			trySendErr(sseErrCh, fmt.Errorf("scan SSE stream: %w", err))
-			return
 		}
 		// SSE close without ctx cancellation: surface as informational
 		// SSE error. Wait() does NOT abort on these; runOneServer logs
