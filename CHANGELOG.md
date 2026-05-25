@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.0.4](https://github.com/Ivantseng123/agentdock/compare/v4.0.3...v4.0.4) (2026-05-20)
+
+
+### Bug Fixes
+
+* **worker/agent/opencode_http:** unbound SSE line reader ([#272](https://github.com/Ivantseng123/agentdock/issues/272)) ([ab31192](https://github.com/Ivantseng123/agentdock/commit/ab311925c58bd5581858fc882d97b555713e4a21))
+* **worker/agent/opencode_http:** unbound SSE line reader ([#272](https://github.com/Ivantseng123/agentdock/issues/272)) ([11cd2ce](https://github.com/Ivantseng123/agentdock/commit/11cd2ce92dd87a6b5ab1a0dbc3db9dfd8e473059))
+
 ## [4.0.3](https://github.com/Ivantseng123/agentdock/compare/v4.0.2...v4.0.3) (2026-05-15)
 
 
