@@ -2,12 +2,15 @@ package agent
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -15,6 +18,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/shared/tracing"
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
@@ -742,4 +746,84 @@ echo "non-stream output with enough characters padding padding padding padding"
 	if !strings.Contains(output, "non-stream output") {
 		t.Errorf("output: %q", output)
 	}
+}
+
+// TestReadOutput_ForwardsBufferedEventsAfterCancel pins issue #253: when ctx is
+// cancelled, the forwarder goroutine must still forward events the parser
+// produces (a killed agent's stdout is drained to EOF), not discard them.
+//
+// Determinism comes from testing/synctest: synctest.Wait() returns only once
+// every other goroutine in the bubble is durably blocked, so we can cancel ctx
+// while eventCh is empty — forcing the forwarder's select to commit to the
+// ctx.Done() drain branch — and only THEN feed events. Without this ordering the
+// select would race (both cases ready) and the buggy code could forward via the
+// eventCh case, masking the bug.
+func TestReadOutput_ForwardsBufferedEventsAfterCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		pr, pw := io.Pipe()
+
+		var mu sync.Mutex
+		var got []queue.StreamEvent
+		onEvent := func(evt queue.StreamEvent) {
+			mu.Lock()
+			got = append(got, evt)
+			mu.Unlock()
+		}
+
+		// readOutput spawns the forwarder goroutine and runs the parser, which
+		// blocks reading the empty pipe.
+		go readOutput(ctx, pr, config.StreamFormatClaude, onEvent)
+
+		// Forwarder durably blocked on its select; parser durably blocked on the
+		// pipe read.
+		synctest.Wait()
+
+		// Cancel while eventCh is empty: the select sees only ctx.Done() ready,
+		// so the forwarder commits to the drain branch and blocks on `range
+		// eventCh`.
+		cancel()
+		synctest.Wait()
+
+		// Only now do events exist. Buggy code discards them in the drain;
+		// fixed code forwards them.
+		const toolUseLine = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]}}`
+		const resultLine = `{"type":"result","result":"done","total_cost_usd":0.042,"usage":{"input_tokens":8500,"output_tokens":1200}}`
+		if _, err := io.WriteString(pw, toolUseLine+"\n"+resultLine+"\n"); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		pw.Close()
+
+		// Parser hits EOF and returns, readOutput closes eventCh, forwarder
+		// drains and exits.
+		synctest.Wait()
+
+		mu.Lock()
+		defer mu.Unlock()
+		var result *queue.StreamEvent
+		sawToolUse := false
+		for i := range got {
+			switch got[i].Type {
+			case "tool_use":
+				sawToolUse = true
+			case "result":
+				result = &got[i]
+			}
+		}
+		if !sawToolUse {
+			t.Errorf("tool_use event dropped on cancel; got %d events: %+v", len(got), got)
+		}
+		if result == nil {
+			t.Fatalf("result event dropped on cancel; got %d events: %+v", len(got), got)
+		}
+		if result.CostUSD != 0.042 {
+			t.Errorf("CostUSD = %v, want 0.042", result.CostUSD)
+		}
+		if result.InputTokens != 8500 {
+			t.Errorf("InputTokens = %d, want 8500", result.InputTokens)
+		}
+		if result.OutputTokens != 1200 {
+			t.Errorf("OutputTokens = %d, want 1200", result.OutputTokens)
+		}
+	})
 }
