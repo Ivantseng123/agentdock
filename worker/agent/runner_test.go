@@ -786,7 +786,9 @@ func TestReadOutput_ForwardsBufferedEventsAfterCancel(t *testing.T) {
 		synctest.Wait()
 
 		// Only now do events exist. Buggy code discards them in the drain;
-		// fixed code forwards them.
+		// fixed code forwards them. Two events fit the 64-slot eventCh buffer,
+		// so the parser's non-blocking sends (stream.go) never hit `default` and
+		// drop — keep this count well under 64 if extending this test.
 		const toolUseLine = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]}}`
 		const resultLine = `{"type":"result","result":"done","total_cost_usd":0.042,"usage":{"input_tokens":8500,"output_tokens":1200}}`
 		if _, err := io.WriteString(pw, toolUseLine+"\n"+resultLine+"\n"); err != nil {
