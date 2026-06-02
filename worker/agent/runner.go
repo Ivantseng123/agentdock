@@ -164,14 +164,12 @@ func readOutput(ctx context.Context, r io.Reader, format string, onEvent func(qu
 				// (CommandContext kills the process, stdout EOFs, the parser
 				// returns), so this range terminates.
 				//
-				// This now forwards exactly like the eventCh case above. The
-				// select is kept on purpose — NOT collapsed to a single
-				// `for evt := range eventCh` (which would also let ctx be
-				// dropped) — because it is the only handle that makes the
-				// cancellation path deterministically testable: a test cancels
-				// ctx while eventCh is empty to pin the goroutine here, then
-				// asserts later events are still forwarded. Do not "simplify"
-				// this away.
+				// The select is kept on purpose — NOT collapsed to a single
+				// `for evt := range eventCh` (which would also drop ctx) —
+				// because it is the only handle that makes the cancellation
+				// path deterministically testable: a test cancels ctx while
+				// eventCh is empty to pin the goroutine here, then asserts
+				// later events are still forwarded. Do not "simplify" it away.
 				for evt := range eventCh {
 					if onEvent != nil {
 						onEvent(evt)

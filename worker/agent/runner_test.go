@@ -802,21 +802,17 @@ func TestReadOutput_ForwardsBufferedEventsAfterCancel(t *testing.T) {
 
 		mu.Lock()
 		defer mu.Unlock()
-		var result *queue.StreamEvent
-		sawToolUse := false
-		for i := range got {
-			switch got[i].Type {
-			case "tool_use":
-				sawToolUse = true
-			case "result":
-				result = &got[i]
-			}
+		// These two lines parse to exactly two events, in order: a tool_use
+		// then the result. Both must survive the post-cancel drain.
+		if len(got) != 2 {
+			t.Fatalf("want 2 events (tool_use, result), got %d dropped on cancel: %+v", len(got), got)
 		}
-		if !sawToolUse {
-			t.Errorf("tool_use event dropped on cancel; got %d events: %+v", len(got), got)
+		if got[0].Type != "tool_use" {
+			t.Errorf("got[0].Type = %q, want tool_use", got[0].Type)
 		}
-		if result == nil {
-			t.Fatalf("result event dropped on cancel; got %d events: %+v", len(got), got)
+		result := got[1]
+		if result.Type != "result" {
+			t.Fatalf("got[1].Type = %q, want result (result event dropped on cancel): %+v", result.Type, got)
 		}
 		if result.CostUSD != 0.042 {
 			t.Errorf("CostUSD = %v, want 0.042", result.CostUSD)
