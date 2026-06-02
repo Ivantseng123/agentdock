@@ -762,6 +762,11 @@ func TestReadOutput_ForwardsBufferedEventsAfterCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		pr, pw := io.Pipe()
+		// Safety net: an early t.Fatalf must not leave the parser goroutine
+		// parked on an open pipe (synctest would panic on the leak, masking the
+		// real failure). The explicit Close below drives the normal-path EOF;
+		// this deferred Close is idempotent and only matters on error exits.
+		defer pw.Close()
 
 		var mu sync.Mutex
 		var got []queue.StreamEvent
