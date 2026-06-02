@@ -202,7 +202,15 @@ func (r *Runner) runOneSpawn(ctx context.Context, logger *slog.Logger, agent con
 		})
 		defer inactivityTimer.Stop()
 		eventCallback = func(evt queue.StreamEvent) {
-			inactivityTimer.Reset(agent.InactivityTimeout)
+			// Don't re-arm the timer once ctx is cancelled/expired: readOutput
+			// now forwards buffered events through this callback during its
+			// post-cancel drain (#253), and resetting here would schedule a
+			// pointless SIGTERM against the already-dying process — and could
+			// mislabel the failure as "inactivity timeout". The deferred
+			// Stop() finishes teardown.
+			if ctx.Err() == nil {
+				inactivityTimer.Reset(agent.InactivityTimeout)
+			}
 			if opts.OnEvent != nil {
 				opts.OnEvent(evt)
 			}
